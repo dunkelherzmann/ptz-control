@@ -9,6 +9,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUNTIMES="$ROOT/.build/appimage"
 ARCHES="${*:-x86_64 aarch64}"
 mkdir -p "$RUNTIMES" "$ROOT/dist"
+VERSION="$(sh "$ROOT/scripts/version.sh" --header)"
+printf 'PTZ Control %s\n' "$VERSION"
 command -v container >/dev/null || { echo "container not found; brew install container" >&2; exit 1; }
 container system status >/dev/null 2>&1 || container system start --enable-kernel-install
 

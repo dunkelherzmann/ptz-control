@@ -4,7 +4,7 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="1.0.0"
+VERSION="$(sh "$ROOT/scripts/version.sh" --header)"
 APP="$ROOT/dist/PTZ Control.app"
 BUILD="$ROOT/.build"
 

@@ -1025,7 +1025,7 @@ void command(int id) {
         case CMD_HELP: show_help(); return;
         case CMD_ABOUT: {
             // A task dialog, unlike a message box, can hold a link; clicking it opens the browser.
-            const std::wstring version = L"PTZ Control 1.0.0 (core " + W(ptz_core_version()) + L")";
+            const std::wstring version = L"PTZ Control " + W(ptz_core_version());
             TASKDIALOGCONFIG about{};
             about.cbSize = sizeof(about);
             about.hwndParent = g->hwnd;

@@ -3,3 +3,4 @@ dist/
 .swiftpm/
 *.o
 .DS_Store
+core/include/ptz_version.h

@@ -6,7 +6,7 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="1.0.0"
+VERSION="$(sh "$ROOT/scripts/version.sh" --header)"
 CXX="${CXX:-x86_64-w64-mingw32-g++}"
 WINDRES="${WINDRES:-x86_64-w64-mingw32-windres}"
 OBJ="$ROOT/.build/windows"
@@ -28,7 +28,7 @@ if [ ! -f "$ROOT/windows/res/app.ico" ]; then
     swift "$ROOT/scripts/make-icon.swift" "$OBJ/AppIcon.iconset"
     python3 "$ROOT/scripts/make-ico.py" "$OBJ/AppIcon.iconset" "$ROOT/windows/res/app.ico"
 fi
-"$WINDRES" -I"$ROOT/windows/res" "$ROOT/windows/res/app.rc" -O coff -o "$OBJ/app.res.o"
+"$WINDRES" -I"$ROOT/windows/res" -I"$ROOT/core/include" "$ROOT/windows/res/app.rc" -O coff -o "$OBJ/app.res.o"
 
 # shellcheck disable=SC2046
 "$CXX" -o "$ROOT/dist/PTZControl.exe" $(ls "$OBJ"/*.o) \

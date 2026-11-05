@@ -974,8 +974,8 @@ private:
         item(menu_, "About PTZ Control", "", true, [this] {
             // QMessageBox shows rich text and opens its links in the browser.
             QMessageBox::about(this, "About PTZ Control",
-                               "<p><b>PTZ Control 1.0.0</b> (core " + QString::fromUtf8(ptz_core_version()).toHtmlEscaped() +
-                                   ")</p><p>PTZ Coordinates Controller<br>ONVIF · Axis VAPIX · Local or SSH</p>"
+                               "<p><b>PTZ Control " + QString::fromUtf8(ptz_core_version()).toHtmlEscaped() +
+                                   "</b></p><p>PTZ Coordinates Controller<br>ONVIF · Axis VAPIX · Local or SSH</p>"
                                    "<p>By dunkelherzmann<br><a href=\"https://github.com/dunkelherzmann/ptz-control\">"
                                    "https://github.com/dunkelherzmann/ptz-control</a></p>");
         });
