@@ -1023,13 +1023,27 @@ void command(int id) {
         case CMD_PAUSE: toggle_pause(); return;
         case ID_MENU: show_menu(); return;
         case CMD_HELP: show_help(); return;
-        case CMD_ABOUT:
-            MessageBoxW(g->hwnd,
-                        (L"PTZ Control 1.0.0 (core " + W(ptz_core_version()) +
-                         L")\nPTZ Coordinates Controller by Herbert Cisneros\nONVIF \u00b7 Axis VAPIX \u00b7 Local or SSH")
-                            .c_str(),
-                        L"About PTZ Control", MB_OK | MB_ICONINFORMATION);
+        case CMD_ABOUT: {
+            // A task dialog, unlike a message box, can hold a link; clicking it opens the browser.
+            const std::wstring version = L"PTZ Control 1.0.0 (core " + W(ptz_core_version()) + L")";
+            TASKDIALOGCONFIG about{};
+            about.cbSize = sizeof(about);
+            about.hwndParent = g->hwnd;
+            about.dwFlags = TDF_ENABLE_HYPERLINKS | TDF_ALLOW_DIALOG_CANCELLATION;
+            about.dwCommonButtons = TDCBF_OK_BUTTON;
+            about.pszWindowTitle = L"About PTZ Control";
+            about.pszMainIcon = TD_INFORMATION_ICON;
+            about.pszMainInstruction = version.c_str();
+            about.pszContent = L"PTZ Coordinates Controller\nONVIF \u00b7 Axis VAPIX \u00b7 Local or SSH\n\nBy dunkelherzmann\n"
+                               L"<a href=\"https://github.com/dunkelherzmann/ptz-control\">https://github.com/dunkelherzmann/ptz-control</a>";
+            about.pfCallback = [](HWND window, UINT notification, WPARAM, LPARAM lParam, LONG_PTR) -> HRESULT {
+                if (notification == TDN_HYPERLINK_CLICKED)
+                    ShellExecuteW(window, L"open", reinterpret_cast<LPCWSTR>(lParam), nullptr, nullptr, SW_SHOWNORMAL);
+                return S_OK;
+            };
+            TaskDialogIndirect(&about, nullptr, nullptr, nullptr);
             return;
+        }
         case IDOK: {
             // Enter: move from a target field, otherwise connect while idle.
             HWND focus = GetFocus();

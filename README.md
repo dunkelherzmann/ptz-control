@@ -23,6 +23,48 @@ tools/             mock camera (ONVIF + Axis) for development without hardware
 tests/, scripts/   smoke tests and the build scripts
 ```
 
+## Installing
+
+The apps aren't signed by Apple or Microsoft, so there are two ways to run them: build them yourself, or
+use the prebuilt files from [Releases](https://github.com/dunkelherzmann/ptz-control/releases) and allow
+them once.
+
+### Build from source
+
+```bash
+git clone https://github.com/dunkelherzmann/ptz-control.git
+cd ptz-control
+scripts/build-macos.sh      # macOS: needs only the free Command Line Tools (xcode-select --install)
+```
+
+Windows and Linux builds are described below. An app built on your own Mac isn't quarantined, so
+Gatekeeper opens it without any warning.
+
+### Prebuilt apps
+
+**macOS.** Unzip `PTZ-Control-…-macOS.zip` and drag **PTZ Control.app** to your Applications folder.
+Downloaded apps carry macOS's quarantine flag, and because this one isn't notarized, macOS refuses to open
+it at first. Remove the flag once in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/PTZ Control.app"
+```
+
+- `-d com.apple.quarantine` removes only the quarantine flag, and `-r` does it for everything inside the app.
+- `xattr -cr "/Applications/PTZ Control.app"` also works: `-c` clears all extended attributes, the
+  quarantine flag among them.
+- `-c` and `-d` can't be combined (`xattr -cdr` stops with "Cannot specify -d with -c"); use one or the other.
+
+Without Terminal: try to open the app once, then click **Open Anyway** in **System Settings ▸ Privacy &
+Security** (this needs an administrator password). Since macOS 15, Control-click ▸ Open no longer bypasses
+the warning.
+
+**Windows.** SmartScreen warns on first run: choose **More info ▸ Run anyway**.
+
+**Linux.** Make the AppImage executable (`chmod +x PTZ-Control-…AppImage`) and run it.
+
+Only allow copies you downloaded from this repository's Releases page.
+
 ## Build (macOS 14+)
 
 Needs only the Xcode Command Line Tools.
@@ -32,9 +74,8 @@ scripts/build-macos.sh          # → dist/PTZ Control.app (universal arm64 + x8
 scripts/build-macos.sh --zip    # also dist/PTZ-Control-1.0.0-macOS.zip
 ```
 
-The app is ad-hoc signed, so it runs on the Mac that built it. To hand it to
-others without Gatekeeper warnings, sign it with a Developer ID certificate and
-notarize it.
+The app is ad-hoc signed. It runs on the Mac that built it; a copy given to
+someone else needs its quarantine flag removed once (see [Installing](#installing)).
 
 ## Use
 
