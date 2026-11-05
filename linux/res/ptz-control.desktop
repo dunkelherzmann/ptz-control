@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PTZ Control
+GenericName=PTZ Camera Controller
+Comment=Absolute pan/tilt/zoom coordinates for ONVIF and Axis cameras, locally or over SSH
+Exec=ptz-control
+Icon=ptz-control
+Terminal=false
+Categories=Network;Utility;
+Keywords=PTZ;ONVIF;Axis;camera;SSH;
+StartupWMClass=ptz-control

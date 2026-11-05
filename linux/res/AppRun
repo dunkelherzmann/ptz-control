@@ -1,0 +1,22 @@
+#!/bin/sh
+# PTZ Control AppImage entry point.
+HERE="$(dirname "$(readlink -f "$0")")"
+
+# OpenGL loaders and text shaping come from the system: they must match its
+# drivers and fonts. The bundled copies fill in only for any the system lacks.
+have() {
+    for system_dir in "/usr/lib/$(uname -m)-linux-gnu" /usr/lib64 /usr/lib "/lib/$(uname -m)-linux-gnu" /lib64 /lib; do
+        [ -e "$system_dir/$1" ] && return 0
+    done
+    return 1
+}
+for fallback in "$HERE"/usr/lib/fallback/*; do
+    [ -d "$fallback" ] || continue
+    have "$(basename "$fallback")" || LD_LIBRARY_PATH="$fallback${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+done
+export LD_LIBRARY_PATH
+if [ -n "${PTZ_APPRUN_PRINT_LIBRARY_PATH:-}" ]; then
+    printf '%s\n' "${LD_LIBRARY_PATH:-}"
+    exit 0
+fi
+exec "$HERE/usr/bin/ptz-control" "$@"

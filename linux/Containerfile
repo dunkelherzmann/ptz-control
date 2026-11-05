@@ -1,0 +1,10 @@
+# Build environment for the Linux AppImages. Ubuntu 22.04 (glibc 2.35) so the
+# result runs on that and every newer distribution.
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        g++ cmake make file patchelf squashfs-tools ca-certificates \
+        qt6-base-dev qt6-qpa-plugins qt6-wayland libgl-dev libxkbcommon-dev \
+        libcurl4-openssl-dev fonts-jetbrains-mono \
+        python3 xvfb xauth openssh-client \
+    && rm -rf /var/lib/apt/lists/*
