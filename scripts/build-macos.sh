@@ -44,7 +44,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
-    <key>NSHumanReadableCopyright</key><string>PTZ Coordinates Controller by Herbert Cisneros</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>PTZ Control connects to PTZ cameras and SSH hosts on your network to read and set camera coordinates.</string>
 </dict>
