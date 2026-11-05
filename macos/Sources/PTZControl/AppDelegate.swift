@@ -130,12 +130,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if let raw = sender.representedObject as? String, let theme = PhosphorTheme(rawValue: raw) { console.theme = theme }
     }
 
+    static let projectURL = URL(string: "https://github.com/dunkelherzmann/ptz-control")!
+
+    /// PTZ Control ▸ About: the name, the author and a link to the project.
     @objc private func about() {
-        NSApp.orderFrontStandardAboutPanel(options: [
-            .applicationName: "PTZ Control",
-            .credits: NSAttributedString(string: "PTZ Coordinates Controller by Herbert Cisneros\nONVIF · Axis VAPIX · Local or SSH",
-                                         attributes: [.font: NSFont.systemFont(ofSize: 11)]),
-        ])
+        let centered = NSMutableParagraphStyle()
+        centered.alignment = .center
+        let base: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor,
+                                                   .paragraphStyle: centered]
+        let credits = NSMutableAttributedString(string: "PTZ Coordinates Controller\nONVIF · Axis VAPIX · Local or SSH\n\nBy dunkelherzmann\n",
+                                                attributes: base)
+        var link = base
+        link[.link] = Self.projectURL
+        credits.append(NSAttributedString(string: Self.projectURL.absoluteString, attributes: link))
+        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "PTZ Control", .credits: credits])
     }
 
     @objc private func coordinateHelp() {
