@@ -184,15 +184,16 @@ The AppImage launchers come from
 checksum in the build script. `linux/test-appimage.sh` runs an AppImage against
 the mock camera under Xvfb inside a stock distribution container.
 
-## License
+## Open source
 
-Copyright © 2026 Herbert Cisneros. Creative direction and design by Herbert Cisneros; source code developed with AI coding assistance.
+PTZ Control is free and open source under the [MIT License](LICENSE): use it, change it and share it, for personal or commercial work. Just keep the copyright and license notice with any copy. Third-party components keep their own licenses; see [NOTICES](NOTICES).
 
-This project is dual-licensed:
+## Contributing
 
-| Use case | License |
-|---|---|
-| Personal, open-source, or non-commercial — **provided you publish your modifications under the same terms** | [AGPLv3](LICENSE) — free |
-| Commercial use, or any use where you do not want to publish your source | [Commercial license](LICENSE-COMMERCIAL) — contact the author |
+Bug reports, ideas and pull requests are welcome: open an [issue](https://github.com/dunkelherzmann/ptz-control/issues) or a pull request here. Contributions are accepted under the same MIT License.
 
-The short version: **use it freely and share your improvements, or pay to keep them private.**
+## Contact
+
+Contact me through my GitHub profile: [dunkelherzmann](https://github.com/dunkelherzmann).
+
+Copyright © 2026 Herbert Cisneros, developed with AI coding assistance.
