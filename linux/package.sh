@@ -7,7 +7,8 @@ set -eu
 SRC="$1"
 RUNTIME="$2"
 OUT="$3"
-VERSION="1.0.0"
+# scripts/build-linux.sh writes the version header before the container starts (there's no git in here).
+VERSION="$(sed -n 's/^#define PTZ_VERSION "\(.*\)"$/\1/p' "$SRC/core/include/ptz_version.h")"
 ARCH="$(uname -m)"
 TRIPLE="$(gcc -dumpmachine)"
 QT_PLUGINS="/usr/lib/$TRIPLE/qt6/plugins"

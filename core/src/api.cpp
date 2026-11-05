@@ -198,4 +198,11 @@ extern "C" int ptz_parse_number(const char *text, double *value) {
     return 1;
 }
 
-extern "C" const char *ptz_core_version(void) { return "1.0.0"; }
+// The app's version, written by scripts/version.sh before each build.
+#if __has_include("ptz_version.h")
+#include "ptz_version.h"
+#else
+#define PTZ_VERSION "0.0.0"
+#endif
+
+extern "C" const char *ptz_core_version(void) { return PTZ_VERSION; }

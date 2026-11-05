@@ -25,7 +25,7 @@ int main(int argc, char **argv) {
 
     QApplication app(argc, argv);
     QApplication::setApplicationName("PTZ Control");
-    QApplication::setApplicationVersion("1.0.0");
+    QApplication::setApplicationVersion(QString::fromUtf8(ptz_core_version()));
     QApplication::setOrganizationName("PTZControl");
     QGuiApplication::setDesktopFileName("ptz-control");
     QApplication::setStyle(QStyleFactory::create("Fusion"));

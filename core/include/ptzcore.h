@@ -103,6 +103,7 @@ int ptz_is_askpass_invocation(void);
 
 /* Parse a decimal number independent of the user's locale. Returns 1 on success. */
 int ptz_parse_number(const char *text, double *value);
+/* The app's version, e.g. "1.0.12": VERSION's major.minor plus commits since it changed. */
 const char *ptz_core_version(void);
 
 #ifdef __cplusplus

@@ -1,11 +1,12 @@
 #include <winver.h>
+#include "ptz_version.h"
 
 1 ICON "app.ico"
 1 24 "app.manifest"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 1,0,0,0
-PRODUCTVERSION 1,0,0,0
+FILEVERSION PTZ_VERSION_MAJOR,PTZ_VERSION_MINOR,PTZ_VERSION_PATCH,0
+PRODUCTVERSION PTZ_VERSION_MAJOR,PTZ_VERSION_MINOR,PTZ_VERSION_PATCH,0
 FILEOS VOS_NT_WINDOWS32
 FILETYPE VFT_APP
 BEGIN
@@ -15,12 +16,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Herbert Cisneros"
             VALUE "FileDescription", "PTZ Control"
-            VALUE "FileVersion", "1.0.0"
+            VALUE "FileVersion", PTZ_VERSION
             VALUE "InternalName", "PTZControl"
             VALUE "LegalCopyright", "PTZ Coordinates Controller by Herbert Cisneros"
             VALUE "OriginalFilename", "PTZControl.exe"
             VALUE "ProductName", "PTZ Control"
-            VALUE "ProductVersion", "1.0.0"
+            VALUE "ProductVersion", PTZ_VERSION
         END
     END
     BLOCK "VarFileInfo"

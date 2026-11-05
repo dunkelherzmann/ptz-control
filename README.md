@@ -184,6 +184,10 @@ The AppImage launchers come from
 checksum in the build script. `linux/test-appimage.sh` runs an AppImage against
 the mock camera under Xvfb inside a stock distribution container.
 
+## Versioning
+
+Versions are `major.minor.patch`. [`VERSION`](VERSION) holds the major and minor number, and the patch number is the count of commits since `VERSION` last changed, so it rises with every push to `main`. Editing `VERSION` (to `1.1`, say) starts the next series at `1.1.0`. `scripts/version.sh` prints the current version, and the builds use it.
+
 ## Open source
 
 PTZ Control is free and open source under the [MIT License](LICENSE): use it, change it and share it, for personal or commercial work. Just keep the copyright and license notice with any copy. Third-party components keep their own licenses; see [NOTICES](NOTICES).
