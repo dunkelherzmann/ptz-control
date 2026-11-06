@@ -1,7 +1,6 @@
 # PTZ Control
 
-PTZ Coordinates Controller by Herbert Cisneros: a native app to read and set
-absolute pan/tilt/zoom on ONVIF (Bosch, Milesight, …) and Axis VAPIX cameras,
+A native app to read and set absolute pan/tilt/zoom on ONVIF (Bosch, Milesight, …) and Axis VAPIX cameras,
 either directly or through an SSH host.
 
 Built like [TMOG](https://tmog.org/): one shared C++20 core, one native UI per
