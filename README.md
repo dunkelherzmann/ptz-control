@@ -191,6 +191,10 @@ Versions are `major.minor.patch`. [`VERSION`](VERSION) holds the major and minor
 
 PTZ Control is free and open source under the [MIT License](LICENSE): use it, change it and share it, for personal or commercial work. Just keep the copyright and license notice with any copy. Third-party components keep their own licenses; see [NOTICES](NOTICES).
 
+## Support
+
+PTZ Control is a testing app, shared publicly so others can benefit from it. It is provided as is: no support is promised or given.
+
 ## Contributing
 
 Bug reports, ideas and pull requests are welcome: open an [issue](https://github.com/dunkelherzmann/ptz-control/issues) or a pull request here. Contributions are accepted under the same MIT License.
