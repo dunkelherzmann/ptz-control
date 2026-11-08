@@ -307,17 +307,26 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
     private func saveTickedLogins(_ s: ConnectionSettings, cameraPassword: String, sshPassword: String) {
         var wanted: [(LoginVault.Login, LoginVault.Store)] = []
         if connection.saveCamera.state == .on {
-            wanted.append((.init(user: s.cameraUser, password: cameraPassword), .camera))
+            wanted.append((.init(name: connection.chosenLoginName(.camera) ?? s.cameraUser, user: s.cameraUser,
+                                 password: cameraPassword), .camera))
         }
         if s.route == .ssh, connection.saveSSH.state == .on {
-            wanted.append((.init(user: s.sshUser, password: sshPassword), .ssh))
+            wanted.append((.init(name: connection.chosenLoginName(.ssh) ?? s.sshUser, user: s.sshUser,
+                                 password: sshPassword), .ssh))
         }
         guard !wanted.isEmpty else { return }
         guard VaultPrompts.ensureWritable() else {
             eventLog.append("Logins not saved.")
             return
         }
-        for (login, store) in wanted {
+        for (suggested, store) in wanted {
+            var login = suggested
+            if let name = ProcessInfo.processInfo.environment["PTZ_SNAPSHOT_LOGIN_NAME"] {
+                login.name = name  // test hook: the name a user would type
+            } else {
+                guard let name = VaultPrompts.askName(for: store, user: login.user, suggested: login.name) else { continue }
+                login.name = name
+            }
             do {
                 try LoginVault.shared.save(login, in: store)
                 eventLog.append("Saved \(store == .ssh ? "SSH" : "camera") login \(login.label).")

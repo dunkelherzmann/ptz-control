@@ -320,6 +320,12 @@ final class ConnectionPanel: NSView, Themed, NSTextFieldDelegate {
         }
     }
 
+    /// The name of the saved login the section's fields still hold, if any.
+    func chosenLoginName(_ store: LoginVault.Store) -> String? {
+        let popup = store == .ssh ? sshLogin : cameraLogin
+        return popup.selectedTag() >= 0 ? popup.titleOfSelectedItem : nil
+    }
+
     /// Chooses a saved login as if picked from the pop-up (used by the snapshot test hook).
     func chooseSavedLogin(_ store: LoginVault.Store, index: Int) {
         let popup = store == .ssh ? sshLogin : cameraLogin

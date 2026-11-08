@@ -40,11 +40,12 @@ moves() { grep -c '^mock: onvif AbsoluteMove' "$WORK/mock.log" || true; }
 # Run 1: typed login, Save login ticked; connect, move, return to the start.
 settings admin
 rm -f "$SHOT"
-run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PATH="$SHOT" --env=PTZ_SNAPSHOT_RETURN=1 --env=PTZ_SNAPSHOT_SAVE_LOGIN=1
+run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PATH="$SHOT" --env=PTZ_SNAPSHOT_RETURN=1 --env=PTZ_SNAPSHOT_SAVE_LOGIN=1 \
+    --env=PTZ_SNAPSHOT_LOGIN_NAME=cam1
 REQUESTS="$(grep -c '"POST ' "$WORK/mock.log" || true)"
 check "run 1 connected and moved ($REQUESTS camera requests)" "$([ "$(moves)" -ge 1 ] && echo 0 || echo 1)"
 check "run 1 saved the camera login" \
-    "$(printf 'camera\tadmin\tsecret\n' | grep -qxF -f - "$VAULT" && echo 0 || echo 1)"
+    "$(printf 'camera\tcam1\tadmin\tsecret\n' | grep -qxF -f - "$VAULT" && echo 0 || echo 1)"
 check "the vault file is private (0600)" "$([ "$(stat -c %a "$VAULT")" = 600 ] && echo 0 || echo 1)"
 check "window picture saved" "$([ -s "$SHOT" ] && echo 0 || echo 1)"
 BEFORE="$(moves)"

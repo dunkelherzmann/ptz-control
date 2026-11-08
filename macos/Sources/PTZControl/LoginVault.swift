@@ -7,11 +7,12 @@ import PTZCore
 @MainActor final class LoginVault {
     enum Store: Int { case ssh = 0, camera = 1 }
 
-    /// A saved login: a username and its password.
+    /// A saved login: a name that tells it apart, a username and its password.
     struct Login: Equatable {
+        var name = ""
         var user = ""
         var password = ""
-        var label: String { user }
+        var label: String { name }
     }
 
     enum State { case unavailable, new, plain, locked, unlocked }
@@ -57,7 +58,8 @@ import PTZCore
         return (0..<ptz_vault_count(handle, s)).compactMap { index in
             var l = ptz_login()
             guard ptz_vault_login(handle, s, index, &l) != 0 else { return nil }
-            return Login(user: String(cString: l.user), password: String(cString: l.password))
+            return Login(name: String(cString: l.name), user: String(cString: l.user),
+                         password: String(cString: l.password))
         }
     }
 
@@ -77,17 +79,19 @@ import PTZCore
         changed()
     }
 
-    /// Saves a login (replacing the one at `index`, or one with the same username) and
+    /// Saves a login (replacing the one at `index`, or one with the same name) and
     /// returns its index in the sorted list.
     @discardableResult
     func save(_ login: Login, in store: Store, replacing index: Int? = nil) throws -> Int {
         var result = -1
         try call { error, size in
-            login.user.withCString { user in
-                login.password.withCString { password in
-                    var l = ptz_login(user: user, password: password)
-                    result = ptz_vault_save(handle, ptz_store(rawValue: UInt32(store.rawValue)), index ?? -1, &l,
-                                            error, size)
+            login.name.withCString { name in
+                login.user.withCString { user in
+                    login.password.withCString { password in
+                        var l = ptz_login(name: name, user: user, password: password)
+                        result = ptz_vault_save(handle, ptz_store(rawValue: UInt32(store.rawValue)), index ?? -1, &l,
+                                                error, size)
+                    }
                 }
             }
             return result >= 0
@@ -244,6 +248,31 @@ import PTZCore
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Store as Plain Text")
         return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    /// Save login: asks what to call the login, suggesting `suggested`. Saving under an
+    /// existing name updates that login.
+    static func askName(for store: LoginVault.Store, user: String, suggested: String) -> String? {
+        let kind = store == .ssh ? "SSH" : "camera"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = suggested
+        field.placeholderString = store == .ssh ? "e.g. jump host" : "e.g. cam1"
+        field.setAccessibilityLabel("Login name")
+        var note = "Name the \(kind) login for \(user), to find it in the Login menu. A saved login with the same name is updated."
+        while true {
+            let alert = NSAlert()
+            alert.messageText = "Save \(store == .ssh ? "SSH" : "Camera") Login"
+            alert.informativeText = note
+            alert.addButton(withTitle: "Save")
+            alert.addButton(withTitle: "Don't Save")
+            alert.accessoryView = field
+            alert.window.initialFirstResponder = field
+            NSApp.activate()
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+            let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty { return name }
+            note = "Enter a name, or Don't Save."
+        }
     }
 
     static func showError(_ title: String, _ message: String) {
