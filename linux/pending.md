@@ -16,8 +16,8 @@ No open bugs in `bugs.md`.
 
 ## To build
 
-- [ ] **Saved logins.** The Login menus, Save login, the first-save choice, unlocking and Manage Logins, over the
-  core's login vault, with the vault file in the app's own data folder. (§17 P1–P8)
+- [x] **Saved logins.** The Login menus, Save login, the first-save choice, unlocking and Manage Logins, over the
+  core's login vault, with the vault file in the app's own data folder. (§17 P1–P8; #10)
 - [x] **Title bar reads "PTZ Control"** (#8), without "— PTZ Coordinates Controller by Herbert Cisneros". (§2 K1, §14)
 - [ ] **Remember the window's size and position.** (§2 K2)
 - [ ] **Advanced behind a disclosure, closed at first.** (§3 F5)
@@ -32,6 +32,10 @@ No open bugs in `bugs.md`.
   Axis, the SSH route through a throwaway `sshd`, and a check of the values the app shows. (§16 T4–T5)
 
 ## Not checked automatically
+
+- [ ] Saved-login dialogs and Manage Logins actions (§17 P3, P6, P7): unlocking, the first-save choice, the
+  Administrator Password, New, Edit, Delete and Lock. `test-linux.sh` covers saving from the window, filling the
+  fields from a saved login and the Manage Logins list (P4, P5).
 
 - [ ] Whether `test-core.sh` and `test-ssh.sh` (§16 T2–T3) run on the Linux machine: they need clang and libcurl's
   headers, and were written on the Mac.

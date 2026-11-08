@@ -7,13 +7,11 @@ import PTZCore
 @MainActor final class LoginVault {
     enum Store: Int { case ssh = 0, camera = 1 }
 
+    /// A saved login: a username and its password.
     struct Login: Equatable {
-        var host = ""
-        var port = 22
         var user = ""
         var password = ""
-        var keyFile = ""
-        var label: String { "\(user)@\(host):\(port)" }
+        var label: String { user }
     }
 
     enum State { case unavailable, new, plain, locked, unlocked }
@@ -59,8 +57,7 @@ import PTZCore
         return (0..<ptz_vault_count(handle, s)).compactMap { index in
             var l = ptz_login()
             guard ptz_vault_login(handle, s, index, &l) != 0 else { return nil }
-            return Login(host: String(cString: l.host), port: Int(l.port), user: String(cString: l.user),
-                         password: String(cString: l.password), keyFile: String(cString: l.key_file))
+            return Login(user: String(cString: l.user), password: String(cString: l.password))
         }
     }
 
@@ -80,22 +77,17 @@ import PTZCore
         changed()
     }
 
-    /// Saves a login (replacing the one at `index`, or one with the same host, port and
-    /// username) and returns its index in the sorted list.
+    /// Saves a login (replacing the one at `index`, or one with the same username) and
+    /// returns its index in the sorted list.
     @discardableResult
     func save(_ login: Login, in store: Store, replacing index: Int? = nil) throws -> Int {
         var result = -1
         try call { error, size in
-            login.host.withCString { host in
-                login.user.withCString { user in
-                    login.password.withCString { password in
-                        login.keyFile.withCString { key in
-                            var l = ptz_login(host: host, port: Int32(login.port), user: user, password: password,
-                                              key_file: key)
-                            result = ptz_vault_save(handle, ptz_store(rawValue: UInt32(store.rawValue)),
-                                                    index ?? -1, &l, error, size)
-                        }
-                    }
+            login.user.withCString { user in
+                login.password.withCString { password in
+                    var l = ptz_login(user: user, password: password)
+                    result = ptz_vault_save(handle, ptz_store(rawValue: UInt32(store.rawValue)), index ?? -1, &l,
+                                            error, size)
                 }
             }
             return result >= 0

@@ -15,7 +15,7 @@ find_package(CURL REQUIRED)
 file(GLOB CORE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/../core/src/*.cpp)
 add_executable(ptz-control
     ${CORE_SOURCES}
-    src/main.cpp src/support.cpp src/instruments.cpp src/console.cpp)
+    src/main.cpp src/support.cpp src/instruments.cpp src/console.cpp src/vault.cpp)
 target_include_directories(ptz-control PRIVATE ../core/include src)
 target_compile_options(ptz-control PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(ptz-control PRIVATE Qt6::Widgets CURL::libcurl)

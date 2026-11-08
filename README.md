@@ -98,10 +98,11 @@ Readings are shown in the camera's own digits; a value the camera did not
 report is shown as `—` or a hatched meter, never as zero.
 
 Non-secret connection settings are remembered. Passwords stay in memory only,
-unless you tick **Save login**: SSH logins and camera logins are then saved in
-two separate lists, encrypted with an Administrator Password you choose (or,
-by explicit choice, as plain text). Pick a saved login from the **Login** menu
-above the SSH or camera fields, and edit them in Camera ▸ Manage Logins (⇧⌘L).
+unless you tick **Save login**: the username and password are then saved, in
+two separate lists for SSH and cameras, encrypted with an Administrator
+Password you choose (or, by explicit choice, as plain text). Pick a saved login
+from the **Login** menu above the SSH or camera fields, and edit them in
+Camera ▸ Manage Logins (⇧⌘L; Ctrl+Shift+L in the ☰ menu on Linux).
 A forgotten Administrator Password can't be recovered. The macOS Keychain
 isn't used. `PTZ_USER` and `PTZ_PASSWORD` are honoured as defaults when set.
 
@@ -170,7 +171,7 @@ Then:
 ```bash
 scripts/build-linux.sh             # → dist/PTZ-Control-1.0.0-x86_64.flatpak
 scripts/build-linux.sh --install   # also installs it for this user
-scripts/test-linux.sh              # drives the installed app against the mock camera, off screen
+scripts/test-linux.sh              # drives the installed app against the mock camera, off screen; saved logins
 ```
 
 The script builds for the machine's own CPU: on an ARM64 Linux machine it makes

@@ -112,12 +112,10 @@ typedef enum {
     PTZ_VAULT_UNLOCKED = 3, /* encrypted, open for this session */
 } ptz_vault_state;
 
+/* A saved login is a username and its password; hosts and ports aren't saved. */
 typedef struct {
-    const char *host;      /* SSH host, or camera address */
-    int port;              /* SSH port, or camera HTTP port */
     const char *user;
     const char *password;  /* may be empty */
-    const char *key_file;  /* SSH logins only; empty for none */
 } ptz_login;
 
 typedef struct ptz_vault ptz_vault;
@@ -133,12 +131,12 @@ void ptz_vault_lock(ptz_vault *vault);
 /* Creates or changes the Administrator Password and re-encrypts every login, or
  * with NULL or "" removes it and keeps the logins as plain text. Not while locked. */
 int ptz_vault_set_admin_password(ptz_vault *vault, const char *admin_password, char *error, size_t error_size);
-/* Logins are sorted by host, username and port; none are listed while locked. */
+/* Logins are sorted by username; none are listed while locked. */
 size_t ptz_vault_count(const ptz_vault *vault, ptz_store store);
 /* The strings stay valid until the vault next changes, locks or is freed. */
 int ptz_vault_login(const ptz_vault *vault, ptz_store store, size_t index, ptz_login *login);
 /* Replaces the login at `index`, or with index -1 adds one. A login with the same
- * host (ignoring case), port and username is replaced. Writes the file and
+ * username is replaced. Writes the file and
  * returns the login's new index, or -1 with `error` filled. */
 long ptz_vault_save(ptz_vault *vault, ptz_store store, long index, const ptz_login *login, char *error,
                     size_t error_size);
