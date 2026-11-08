@@ -130,7 +130,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Zip   # also
 ```
 
 The result is a single statically linked `PTZControl.exe` (about 0.9 MB) that
-imports only Windows system DLLs. Copy it anywhere and run it: there is no
+imports only Windows system DLLs. Each build is also copied to the desktop as
+`PTZ Control.exe`, replacing the older copy. Copy it anywhere and run it: there is no
 installer, it runs as the signed-in user (`asInvoker`), and settings live
 under `HKCU\Software\PTZControl`. Shortcuts use Ctrl in place of ⌘; the ☰
 button holds the menu.

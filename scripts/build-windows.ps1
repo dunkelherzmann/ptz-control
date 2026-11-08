@@ -1,6 +1,7 @@
 # Builds dist\PTZControl.exe (Windows 10/11 x64) on Windows with the Visual Studio C++ Build Tools
 # (MSVC). Fully static (/MT): one portable .exe that imports only Windows system DLLs, no installer,
 # no administrator rights.
+# Every build is also copied to the desktop as "PTZ Control.exe", replacing the older copy.
 # Usage: powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 [-Zip]
 param([switch]$Zip)
 $ErrorActionPreference = 'Stop'
@@ -66,6 +67,19 @@ Invoke-Tool link.exe ($objects + @($res, '/nologo', "/OUT:$exe", '/SUBSYSTEM:WIN
     'winhttp.lib', 'ws2_32.lib', 'bcrypt.lib', 'gdiplus.lib', 'comctl32.lib', 'dwmapi.lib', 'uxtheme.lib',
     'shell32.lib', 'advapi32.lib', 'gdi32.lib', 'user32.lib', 'ole32.lib'))
 Write-Output 'Built dist\PTZControl.exe'
+
+# A copy on the desktop, so the newest build is always easy to find. It replaces the older copy; if that one
+# is open, the copy is skipped with a warning (close PTZ Control and build again).
+$desktop = [Environment]::GetFolderPath('Desktop')
+if ($desktop) {
+    $copy = Join-Path $desktop 'PTZ Control.exe'
+    try {
+        Copy-Item -Force $exe $copy
+        Write-Output "Copied to $copy"
+    } catch {
+        Write-Warning "Couldn't replace $copy (is PTZ Control open?): $($_.Exception.Message)"
+    }
+}
 
 if ($Zip) {
     $archive = Join-Path $Dist "PTZ-Control-$Version-Windows-x64.zip"
