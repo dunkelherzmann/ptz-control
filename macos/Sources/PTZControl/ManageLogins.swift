@@ -123,7 +123,9 @@ import AppKit
         let selected = table.selectedRow
         logins = vault.logins(store)
         table.reloadData()
-        if selected >= 0, selected < logins.count { table.selectRowIndexes([selected], byExtendingSelection: false) }
+        if selected >= 0, selected < logins.count, table.selectedRow != selected {
+            table.selectRowIndexes([selected], byExtendingSelection: false)
+        }
         let state = vault.state
         adminButton.title = state == .unlocked || state == .locked ? "Change Administrator Password…" : "Create Administrator Password…"
         lockButton.title = state == .locked ? "Unlock…" : "Lock"
@@ -136,7 +138,11 @@ import AppKit
         case .new: "No logins saved yet."
         case .unavailable: vault.openError ?? "Saved logins are unavailable."
         }
-        let readable = vault.isReadable || state == .new
+        updateButtons()
+    }
+
+    private func updateButtons() {
+        let readable = vault.isReadable || vault.state == .new
         newButton.isEnabled = readable
         editButton.isEnabled = readable && table.selectedRow >= 0
         deleteButton.isEnabled = readable && table.selectedRow >= 0
@@ -155,7 +161,8 @@ import AppKit
         return cell
     }
 
-    func tableViewSelectionDidChange(_ notification: Notification) { reload() }
+    // Only the buttons depend on the selection; reloading here would select again and loop.
+    func tableViewSelectionDidChange(_ notification: Notification) { updateButtons() }
 
     // MARK: Actions
 
@@ -219,6 +226,8 @@ import AppKit
     func snapshot(store: LoginVault.Store, to path: String) {
         storeControl.selectedSegment = store.rawValue
         reload()
+        // Select the first login as a click does: selecting must not loop through the selection delegate.
+        if !logins.isEmpty { table.selectRowIndexes([0], byExtendingSelection: false) }
         guard let window, let view = window.contentView else { return }
         // The window draws its own background on screen; the picture needs it painted in.
         view.wantsLayer = true
