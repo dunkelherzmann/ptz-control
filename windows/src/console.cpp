@@ -394,7 +394,7 @@ void fill_logins(HWND box, LoginStore store) {
         add(L"Unlock Saved Logins\u2026", kUnlock);
     } else {
         int i = 0;
-        for (const SavedLogin &l : vault_logins(store)) add(l.user, i++);
+        for (const SavedLogin &l : vault_logins(store)) add(l.name, i++);
     }
     add(L"Manage Logins\u2026", kManage);
     LRESULT found = previous.empty() ? CB_ERR : SendMessageW(box, CB_FINDSTRINGEXACT, 0, reinterpret_cast<LPARAM>(previous.c_str()));
@@ -441,6 +441,16 @@ void choose_saved_login(LoginStore store, int index) {  // test hook
         }
 }
 
+// The name of the saved login a section's fields still hold, or `fallback`.
+std::wstring chosen_login_name(HWND box, const std::wstring &fallback) {
+    int item = static_cast<int>(SendMessageW(box, CB_GETCURSEL, 0, 0));
+    if (item < 0 || static_cast<int>(SendMessageW(box, CB_GETITEMDATA, item, 0)) < 0) return fallback;
+    std::wstring text(static_cast<size_t>(SendMessageW(box, CB_GETLBTEXTLEN, item, 0)) + 1, L'\0');
+    SendMessageW(box, CB_GETLBTEXT, item, reinterpret_cast<LPARAM>(text.data()));
+    text.resize(wcslen(text.c_str()));
+    return text;
+}
+
 void save_ticked_logins(std::vector<std::pair<SavedLogin, LoginStore>> &saved) {
     g->save_ssh_on = g->save_cam_on = false;
     InvalidateRect(g->save_ssh, nullptr, FALSE);
@@ -451,7 +461,12 @@ void save_ticked_logins(std::vector<std::pair<SavedLogin, LoginStore>> &saved) {
         } else {
             for (auto &[login, store] : saved) {
                 std::wstring error, kind = store == LoginStore::Ssh ? L"SSH" : L"camera";
-                if (vault_save(login, store, -1, &error)) log_line(L"Saved " + kind + L" login " + login.user + L".");
+                // PTZ_SNAPSHOT_LOGIN_NAME is the test hook's answer: the name a user would type.
+                const wchar_t *test_name = _wgetenv(L"PTZ_SNAPSHOT_LOGIN_NAME");
+                std::wstring name = test_name ? test_name : vault_ask_name(g->hwnd, store, login.user, login.name);
+                if (name.empty()) continue;
+                login.name = name;
+                if (vault_save(login, store, -1, &error)) log_line(L"Saved " + kind + L" login " + login.name + L".");
                 else log_line(L"Couldn't save the " + kind + L" login: " + error, true);
             }
         }
@@ -483,8 +498,10 @@ void connect() {
     update_controls();
     // What Save login keeps once the connection has proved it.
     std::vector<std::pair<SavedLogin, LoginStore>> saved;
-    if (g->save_cam_on) saved.push_back({{s.camera_user, camera_password}, LoginStore::Camera});
-    if (s.route == 1 && g->save_ssh_on) saved.push_back({{s.ssh_user, ssh_password}, LoginStore::Ssh});
+    if (g->save_cam_on)
+        saved.push_back({{chosen_login_name(g->cam_login, s.camera_user), s.camera_user, camera_password}, LoginStore::Camera});
+    if (s.route == 1 && g->save_ssh_on)
+        saved.push_back({{chosen_login_name(g->ssh_login, s.ssh_user), s.ssh_user, ssh_password}, LoginStore::Ssh});
     link_connect(g->link, s, camera_password, s.route ? ssh_password : L"", [saved](LinkResult result, CameraInfo info) mutable {
         if (result.ok) {
             g->info = info;

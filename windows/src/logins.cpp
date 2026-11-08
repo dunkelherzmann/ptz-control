@@ -319,10 +319,11 @@ bool choose_storage(HWND owner) {
 std::optional<SavedLogin> login_form(HWND owner, const SavedLogin &login, LoginStore store, const std::wstring &title) {
     bool ssh = store == LoginStore::Ssh;
     std::wstring note = ssh ? L"The password may stay blank for keys or ssh-agent." : L"";
-    std::wstring user = login.user, password = login.password;
+    std::wstring name = login.name, user = login.user, password = login.password;
     while (true) {
         Form form{title, note,
-                  {{L"Username", user, ssh ? L"username" : L"admin", false},
+                  {{L"Name", name, ssh ? L"e.g. jump host" : L"e.g. cam1", false},
+                   {L"Username", user, ssh ? L"username" : L"admin", false},
                    {L"Password", password, ssh ? L"blank for keys / agent" : L"camera password", true}},
                   true, {L"Save", L"Cancel"}, 0, 1};
         zero(password);
@@ -333,14 +334,15 @@ std::optional<SavedLogin> login_form(HWND owner, const SavedLogin &login, LoginS
             for (auto &v : values) zero(v);
             return std::nullopt;
         }
-        user = trim(values[0]);
-        password = values[1];
-        zero(values[1]);
-        if (user.empty()) {
-            note = L"A username is required.";
+        name = trim(values[0]);
+        user = trim(values[1]);
+        password = values[2];
+        zero(values[2]);
+        if (name.empty() || user.empty()) {
+            note = L"A name and a username are required.";
             continue;
         }
-        SavedLogin result{user, password};
+        SavedLogin result{name, user, password};
         zero(password);
         return result;
     }
@@ -374,10 +376,13 @@ void manage_reload(Manage &m) {
         LVITEMW item{};
         item.mask = LVIF_TEXT;
         item.iItem = i;
-        item.pszText = const_cast<wchar_t *>(m.logins[i].user.c_str());
+        item.pszText = const_cast<wchar_t *>(m.logins[i].name.c_str());
         SendMessageW(m.list, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
-        std::wstring hidden = m.logins[i].password.empty() ? L"—" : L"••••••";
         item.iSubItem = 1;
+        item.pszText = const_cast<wchar_t *>(m.logins[i].user.c_str());
+        SendMessageW(m.list, LVM_SETITEMTEXTW, i, reinterpret_cast<LPARAM>(&item));
+        std::wstring hidden = m.logins[i].password.empty() ? L"—" : L"••••••";
+        item.iSubItem = 2;
         item.pszText = hidden.data();
         SendMessageW(m.list, LVM_SETITEMTEXTW, i, reinterpret_cast<LPARAM>(&item));
     }
@@ -454,7 +459,7 @@ void manage_command(Manage &m, int id) {
                 (state != VaultState::Plain && state != VaultState::Unlocked))
                 return;
             if (ask(m.hwnd, L"Delete login",
-                    L"Delete the login " + m.logins[row].user + L"? This removes it from the saved " +
+                    L"Delete the login " + m.logins[row].name + L"? This removes it from the saved " +
                         (ssh ? L"SSH" : L"camera") + L" logins.",
                     {L"Delete", L"Cancel"}, 1, 1) != 0)
                 return;
@@ -546,12 +551,14 @@ Manage *manage_create(HWND owner, LoginStore store) {
     SendMessageW(m->list, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     LVCOLUMNW column{};
     column.mask = LVCF_TEXT | LVCF_WIDTH;
-    column.cx = S(320);
-    column.pszText = const_cast<wchar_t *>(L"Username");
+    column.cx = S(210);
+    column.pszText = const_cast<wchar_t *>(L"Name");
     SendMessageW(m->list, LVM_INSERTCOLUMNW, 0, reinterpret_cast<LPARAM>(&column));
-    column.cx = width - 2 * pad - S(330);
-    column.pszText = const_cast<wchar_t *>(L"Password");
+    column.pszText = const_cast<wchar_t *>(L"Username");
     SendMessageW(m->list, LVM_INSERTCOLUMNW, 1, reinterpret_cast<LPARAM>(&column));
+    column.cx = width - 2 * pad - S(430);
+    column.pszText = const_cast<wchar_t *>(L"Password");
+    SendMessageW(m->list, LVM_INSERTCOLUMNW, 2, reinterpret_cast<LPARAM>(&column));
     int by = height - pad - S(28);
     m->lock = button(L"Lock", ML_LOCK, pad, by, S(84), WS_GROUP);
     m->admin = button(L"Create Administrator Password…", ML_ADMIN, pad + S(92), by, S(230));
@@ -621,16 +628,16 @@ std::vector<SavedLogin> vault_logins(LoginStore store) {
     size_t count = ptz_vault_count(vault().handle, to_store(store));
     for (size_t i = 0; i < count; ++i) {
         ptz_login l{};
-        if (ptz_vault_login(vault().handle, to_store(store), i, &l)) out.push_back({W(l.user), W(l.password)});
+        if (ptz_vault_login(vault().handle, to_store(store), i, &l)) out.push_back({W(l.name), W(l.user), W(l.password)});
     }
     return out;
 }
 
 bool vault_save(const SavedLogin &login, LoginStore store, int replacing, std::wstring *error, int *index) {
-    std::string user = U(login.user), password = U(login.password);
+    std::string name = U(login.name), user = U(login.user), password = U(login.password);
     long result = -1;
     bool ok = call(error, [&](char *buffer, size_t size) {
-        ptz_login l{user.c_str(), password.c_str()};
+        ptz_login l{name.c_str(), user.c_str(), password.c_str()};
         result = ptz_vault_save(vault().handle, to_store(store), replacing, &l, buffer, size);
         return result >= 0;
     });
@@ -656,6 +663,22 @@ void vault_lock() {
 }
 
 void vault_subscribe(std::function<void()> fn) { vault().listeners.push_back(std::move(fn)); }
+
+std::wstring vault_ask_name(HWND owner, LoginStore store, const std::wstring &user, const std::wstring &suggested) {
+    bool ssh = store == LoginStore::Ssh;
+    std::wstring note = std::wstring(L"Name the ") + (ssh ? L"SSH" : L"camera") + L" login for " + user +
+                        L", to find it in the Login menu. A saved login with the same name is updated.";
+    std::wstring name = suggested;
+    while (true) {
+        Form form{ssh ? L"Save SSH Login" : L"Save Camera Login", note,
+                  {{L"", name, ssh ? L"e.g. jump host" : L"e.g. cam1", false}}, false, {L"Save", L"Don't Save"}, 0, 1};
+        std::vector<std::wstring> values;
+        if (run_form(owner, form, values) != 0) return L"";
+        name = trim(values[0]);
+        if (!name.empty()) return name;
+        note = L"Enter a name, or Don't Save.";
+    }
+}
 
 bool vault_unlock_dialog(HWND owner) {
     std::wstring note = L"Enter the Administrator Password to use your saved SSH and camera logins.";
