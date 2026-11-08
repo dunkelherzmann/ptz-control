@@ -234,17 +234,20 @@ struct ptz_vault {
             return;
         }
         auto parts = split(mode, ' ');
+        const ptz::Error damaged("The saved logins file is damaged");
+        if (parts.size() != 5 || parts[0] != "argon2id") throw damaged;
+        auto whole = [&](const std::string &text, double low, double high) -> uint32_t {
+            double value = ptz::parse_number(text).value_or(-1);
+            if (value < low || value > high || value != static_cast<uint32_t>(value)) throw damaged;
+            return static_cast<uint32_t>(value);
+        };
+        blocks = whole(parts[1], 8, 1 << 22);
+        passes = whole(parts[2], 1, 64);
         std::vector<uint8_t> salt_bytes, nonce_bytes;
-        auto blocks_value = parts.size() == 5 ? ptz::parse_number(parts[1]) : std::nullopt;
-        auto passes_value = parts.size() == 5 ? ptz::parse_number(parts[2]) : std::nullopt;
         while (!body.empty() && (body.back() == '\n' || body.back() == '\r')) body.pop_back();
-        if (parts.size() != 5 || parts[0] != "argon2id" || !blocks_value || !passes_value || *blocks_value < 8 ||
-            *blocks_value > (1 << 22) || *passes_value < 1 || *passes_value > 64 || !unhex(parts[3], salt_bytes) ||
-            salt_bytes.size() != kSalt || !unhex(parts[4], nonce_bytes) || nonce_bytes.size() != kNonce ||
-            !unhex(body, sealed) || sealed.size() < kMac)
-            throw ptz::Error("The saved logins file is damaged");
-        blocks = static_cast<uint32_t>(*blocks_value);
-        passes = static_cast<uint32_t>(*passes_value);
+        if (!unhex(parts[3], salt_bytes) || salt_bytes.size() != kSalt || !unhex(parts[4], nonce_bytes) ||
+            nonce_bytes.size() != kNonce || !unhex(body, sealed) || sealed.size() < kMac)
+            throw damaged;
         std::memcpy(salt, salt_bytes.data(), kSalt);
         header = magic + "\n" + mode + "\n";
         state = PTZ_VAULT_LOCKED;
