@@ -15,20 +15,28 @@ function Check($what, $ok) {
 }
 
 # ---- 1. core vault test ------------------------------------------------------------------
-$vcvars = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * `
-    -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\Auxiliary\Build\vcvars64.bat' | Select-Object -First 1
+# The x64 compiler environment, found the way build-windows.ps1 finds it.
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+cmd /c "`"$(Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat')`" >nul && set" | ForEach-Object {
+    if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($Matches[1])" -Value $Matches[2] }
+}
 $obj = Join-Path $Work 'obj'
 New-Item -ItemType Directory -Force -Path $obj | Out-Null
-$core = @('vault.cpp', 'monocypher.cpp', 'util.cpp') | ForEach-Object { "`"$Root\core\src\$_`"" }
-$cmd = "`"$vcvars`" >nul && cd /d `"$obj`" && cl /nologo /std:c++20 /EHsc /O1 /utf-8 /I`"$Root\core\include`" /c $($core -join ' ') >nul " +
-       "&& cl /nologo /utf-8 /I`"$Root\core\include`" /c `"$Root\tests\vault-smoke.c`" >nul " +
-       "&& link /nologo vault.obj monocypher.obj util.obj vault-smoke.obj bcrypt.lib ws2_32.lib /OUT:vault-smoke.exe >nul"
-cmd /c $cmd
+$flags = @('/nologo', '/O1', '/MT', '/utf-8', '/D_CRT_SECURE_NO_WARNINGS', "/I$Root\core\include", "/Fo$obj\")
+foreach ($src in @("$Root\core\src\vault.cpp", "$Root\core\src\monocypher.cpp", "$Root\core\src\util.cpp")) {
+    & cl.exe ($flags + @('/std:c++20', '/EHsc', '/c', $src)) | Out-Null
+}
+& cl.exe ($flags + @('/c', "$Root\tests\vault-smoke.c")) | Out-Null
+& link.exe /nologo "$obj\vault.obj" "$obj\monocypher.obj" "$obj\util.obj" "$obj\vault-smoke.obj" bcrypt.lib ws2_32.lib `
+    "/OUT:$obj\vault-smoke.exe" | Out-Null
+Check 'core vault test built' (Test-Path "$obj\vault-smoke.exe")
 $vaultDir = Join-Path $Work 'vault'
 New-Item -ItemType Directory -Force -Path $vaultDir | Out-Null
-$result = & "$obj\vault-smoke.exe" $vaultDir 2>&1
-Write-Output $result
-Check 'core vault test' ($LASTEXITCODE -eq 0)
+if (Test-Path "$obj\vault-smoke.exe") {
+    & "$obj\vault-smoke.exe" $vaultDir
+    Check 'core vault test' ($LASTEXITCODE -eq 0)
+}
 
 # ---- 2. the app -----------------------------------------------------------------------------
 $exe = Join-Path $Root 'dist\PTZControl.exe'
