@@ -63,10 +63,10 @@ int main(int argc, char **argv) {
     ptz_login ssh2 = {"op", "new"};
     CHECK(ptz_vault_save(v, PTZ_STORE_SSH, -1, &ssh2, error, sizeof error) == 0);
     CHECK(ptz_vault_count(v, PTZ_STORE_SSH) == 1);
-    ptz_login cam3 = {"aaa", "cam-three"};
-    CHECK(ptz_vault_save(v, PTZ_STORE_CAMERA, 1, &cam3, error, sizeof error) == 0); /* viewer -> aaa */
+    ptz_login cam3 = {"quinn", "cam-three"};
+    CHECK(ptz_vault_save(v, PTZ_STORE_CAMERA, 1, &cam3, error, sizeof error) == 1); /* viewer -> quinn, sorted after admin */
     CHECK(ptz_vault_count(v, PTZ_STORE_CAMERA) == 2);
-    CHECK(ptz_vault_login(v, PTZ_STORE_CAMERA, 1, &got) && strcmp(got.user, "admin") == 0);
+    CHECK(ptz_vault_login(v, PTZ_STORE_CAMERA, 0, &got) && strcmp(got.user, "admin") == 0);
     ptz_login bad = {"  ", "x"};
     CHECK(ptz_vault_save(v, PTZ_STORE_SSH, -1, &bad, error, sizeof error) == -1);
 
@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
     CHECK(ptz_vault_get_state(v) == PTZ_VAULT_UNLOCKED);
     const char *text = slurp(path);
     CHECK(strncmp(text, "PTZ Control logins 1\nargon2id ", 30) == 0);
-    CHECK(!strstr(text, "cam-three") && !strstr(text, "aaa") && !strstr(text, "admin"));
+    CHECK(!strstr(text, "cam-three") && !strstr(text, "quinn") && !strstr(text, "admin"));
     ptz_vault_free(v);
 
     v = ptz_vault_open(path, error, sizeof error);
