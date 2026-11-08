@@ -1299,7 +1299,7 @@ HWND create_console(HINSTANCE instance, int show) {
     RegisterClassExW(&wc);
 
     UINT dpi = GetDpiForSystem();
-    HWND hwnd = CreateWindowExW(WS_EX_CONTROLPARENT, L"PTZConsole", L"PTZ Control \u2014 PTZ Coordinates Controller by Herbert Cisneros",
+    HWND hwnd = CreateWindowExW(WS_EX_CONTROLPARENT, L"PTZConsole", L"PTZ Control",
                                 WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
                                 MulDiv(1180, static_cast<int>(dpi), 96), MulDiv(820, static_cast<int>(dpi), 96), nullptr,
                                 nullptr, instance, nullptr);

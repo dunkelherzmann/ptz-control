@@ -38,7 +38,7 @@ hold the menu under a ☰ button in the window instead of a menu bar.
 
 ## 2. Window and layout
 
-- **K1 One window**, "PTZ Control", subtitle "PTZ Coordinates Controller by Herbert Cisneros". Default size
+- **K1 One window**, titled "PTZ Control", with no subtitle. Default size
   1180 × 780, smallest 980 × 680. It can't be tabbed.
 - **K2 Remembered frame.** The window's size and position are restored at the next launch; the first launch centers it.
 - **K3 Layout.** On the left, the **Secure link configuration** panel (300 pt wide). On the right, from the top: the
@@ -209,8 +209,7 @@ What differs from the Mac version today. The `pending.md` in each folder says wh
 
 **Windows**
 
-- Smallest size 1020 × 780; per-monitor DPI aware. Title "PTZ Control — PTZ Coordinates Controller by Herbert
-  Cisneros".
+- Smallest size 1020 × 780; per-monitor DPI aware.
 - Fonts: Cascadia Mono, or Consolas where it's missing; Segoe UI for labels. Buttons and panels are drawn by the app.
 - System follows the Windows app light/dark setting, also while running, and darkens the title bar.
 - Settings live under `HKCU\Software\PTZControl`.
@@ -224,7 +223,7 @@ What differs from the Mac version today. The `pending.md` in each folder says wh
 
 **Linux**
 
-- Smallest size 1000 × 740. Title "PTZ Control — PTZ Coordinates Controller by Herbert Cisneros". Qt's Fusion style.
+- Smallest size 1000 × 740. Qt's Fusion style.
 - Fonts: the bundled JetBrains Mono, or the system's `monospace`.
 - System takes the desktop's light or dark setting once, at launch (from the desktop portal, `GTK_THEME`, GNOME's
   settings or KDE's colors).
