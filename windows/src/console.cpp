@@ -1404,6 +1404,13 @@ void snapshot_step(int step) {
             SetTimer(g->hwnd, kSnapCapture, 2800, nullptr);
             return;
         case kSnapCapture: {
+            // What each Login menu shows, for the test log (a combo box draws its text only on screen).
+            for (HWND box : {g->ssh_login, g->cam_login}) {
+                wchar_t shown[128] = L"";
+                GetWindowTextW(box, shown, 128);
+                log_line(std::wstring(box == g->ssh_login ? L"Test: SSH Login menu shows \u201c" : L"Test: camera Login menu shows \u201c") +
+                         shown + L"\u201d");
+            }
             save_png(g->hwnd, _wgetenv(L"PTZ_SNAPSHOT_PATH"));
             if (const wchar_t *logins = _wgetenv(L"PTZ_SNAPSHOT_LOGINS_PATH")) {
                 HWND window = manage_logins_for_snapshot(g->hwnd, LoginStore::Camera);
