@@ -135,7 +135,7 @@ MeterState &meter_state(HWND meter);
 
 void instruments_set_theme(const Theme &theme, UINT dpi);
 
-// ---- saved logins (spec §17; vault.cpp) ----------------------------------------
+// ---- saved logins (spec §17; logins.cpp) ----------------------------------------
 enum class LoginStore { Ssh = 0, Camera = 1 };
 enum class VaultState { Unavailable, New, Plain, Locked, Unlocked };
 
