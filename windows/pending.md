@@ -20,13 +20,13 @@ No open bugs in `bugs.md`.
 
 ## To build
 
-- [ ] **Saved logins.** The Login menus, Save login, the first-save choice, unlocking and Manage Logins, over the
-  core's login vault, with the vault file in the app's own data folder. (§17 P1–P8)
+- [x] **Saved logins.** The Login menus, Save login, the first-save choice, unlocking and Manage Logins, over the
+  core's login vault, with the vault file in the app's own data folder. (§17 P1–P8; #11)
 - [x] **Copy each build to the desktop.** (#7) `scripts\build-windows.ps1` copies the new `PTZControl.exe` to the desktop as
   `PTZ Control.exe`, replacing the older one. (enhancements.md)
 - [x] **Title bar reads "PTZ Control"** (#8), without "— PTZ Coordinates Controller by Herbert Cisneros". (§2 K1, §14)
-- [ ] **A test copy that can be driven.** The snapshot hook (`PTZ_SNAPSHOT_PATH`) the Mac and Linux apps have, so a
-  test can connect, move and save a picture of the window against the mock camera. (§16 T4)
+- [x] **A test copy that can be driven.** The snapshot hook (`PTZ_SNAPSHOT_PATH`) the Mac and Linux apps have, so a
+  test can connect, move and save a picture of the window against the mock camera. (§16 T4, T7; #11)
 - [ ] **Core tests on Windows.** `test-core.sh` and `test-ssh.sh` run only where clang and libcurl are; the WinHTTP
   client and the Windows SSH tunnel have no automatic test. A PowerShell runner for `tests/core-smoke.c` and
   `tests/ssh-smoke.c` with MSVC, against the mock camera and Windows' own `sshd`. (§1 C5, §5, §16 T2–T3)
@@ -44,6 +44,10 @@ No open bugs in `bugs.md`.
   plane and meters have no accessible name or value. (§3, §7)
 
 ## Not checked automatically
+
+- [ ] Saved-login dialogs and Manage Logins actions (§17 P3, P6, P7), and how the Login menus look in light and dark
+  on a real desktop. `test-windows.ps1` covers saving, filling the fields from a saved login and the Manage Logins
+  list (P4, P5).
 
 Nothing tests the Windows app or its core build. Before a release, try by hand everything in spec sections 2–13, on
 Windows 11 and on Windows 10 (for the OpenSSH 8.1 limits in §14).
