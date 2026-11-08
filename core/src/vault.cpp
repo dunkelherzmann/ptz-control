@@ -8,8 +8,8 @@
 //   plain                                   or  argon2id <blocks> <passes> <salt> <nonce>
 //   <payload lines>                         or  <hex of mac + ciphertext>
 //
-// Payload lines are "ssh" or "camera", then host, port, user, password and key file,
-// separated by tabs, with \\, \t, \n and \r escaped.
+// Payload lines are "ssh" or "camera", then the username and the password, separated by
+// tabs, with \\, \t, \n and \r escaped.
 #include "ptzcore.h"
 #include "internal.hpp"
 
@@ -45,8 +45,7 @@ constexpr uint32_t kPasses = 3;
 constexpr size_t kKey = 32, kSalt = 16, kNonce = 24, kMac = 16;
 
 struct Login {
-    std::string host, user, password, key_file;
-    int port = 0;
+    std::string user, password;
     ~Login() { crypto_wipe(password.data(), password.size()); }
     Login() = default;
     Login(const Login &) = default;
@@ -141,9 +140,7 @@ std::vector<std::string> split(const std::string &line, char separator) {
     return parts;
 }
 
-bool same_key(const Login &a, const Login &b) {
-    return ptz::lower(a.host) == ptz::lower(b.host) && a.port == b.port && a.user == b.user;
-}
+bool same_key(const Login &a, const Login &b) { return a.user == b.user; }
 
 void copy_error(char *out, size_t size, const std::string &text) {
     if (!out || !size) return;
@@ -175,9 +172,8 @@ struct ptz_vault {
         std::string out;
         for (int s = 0; s < 2; ++s)
             for (const Login &l : stores[s])
-                out += std::string(s == PTZ_STORE_SSH ? "ssh" : "camera") + '\t' + escape(l.host) + '\t' +
-                       std::to_string(l.port) + '\t' + escape(l.user) + '\t' + escape(l.password) + '\t' +
-                       escape(l.key_file) + '\n';
+                out += std::string(s == PTZ_STORE_SSH ? "ssh" : "camera") + '\t' + escape(l.user) + '\t' +
+                       escape(l.password) + '\n';
         return out;
     }
 
@@ -187,17 +183,11 @@ struct ptz_vault {
         for (std::string line; std::getline(in, line);) {
             if (line.empty()) continue;
             auto parts = split(line, '\t');
-            if (parts.size() != 6 || (parts[0] != "ssh" && parts[0] != "camera"))
+            if (parts.size() != 3 || (parts[0] != "ssh" && parts[0] != "camera") || parts[1].empty())
                 throw ptz::Error("The saved logins file is damaged");
             Login l;
-            l.host = unescape(parts[1]);
-            l.user = unescape(parts[3]);
-            l.password = unescape(parts[4]);
-            l.key_file = unescape(parts[5]);
-            auto port = ptz::parse_number(parts[2]);
-            if (!port || *port < 1 || *port > 65535 || *port != static_cast<int>(*port))
-                throw ptz::Error("The saved logins file is damaged");
-            l.port = static_cast<int>(*port);
+            l.user = unescape(parts[1]);
+            l.password = unescape(parts[2]);
             parsed[parts[0] == "ssh" ? 0 : 1].push_back(l);
             wipe(line);
         }
@@ -425,7 +415,7 @@ size_t ptz_vault_count(const ptz_vault *vault, ptz_store store) {
 int ptz_vault_login(const ptz_vault *vault, ptz_store store, size_t index, ptz_login *out) {
     if (!out || index >= ptz_vault_count(vault, store)) return 0;
     const Login &l = vault->stores[store][index];
-    *out = {l.host.c_str(), l.port, l.user.c_str(), l.password.c_str(), l.key_file.c_str()};
+    *out = {l.user.c_str(), l.password.c_str()};
     return 1;
 }
 
@@ -438,13 +428,10 @@ long ptz_vault_save(ptz_vault *vault, ptz_store store, long index, const ptz_log
         return -1;
     }
     Login l;
-    l.host = ptz::trim(login->host ? login->host : "");
     l.user = ptz::trim(login->user ? login->user : "");
     l.password = login->password ? login->password : "";
-    l.key_file = store == PTZ_STORE_SSH && login->key_file ? ptz::trim(login->key_file) : "";
-    l.port = login->port;
-    if (l.host.empty() || l.user.empty() || l.port < 1 || l.port > 65535) {
-        copy_error(error, error_size, "A login needs a host, a port between 1 and 65535 and a username");
+    if (l.user.empty()) {
+        copy_error(error, error_size, "A login needs a username");
         return -1;
     }
     auto &list = vault->stores[store];
@@ -454,10 +441,8 @@ long ptz_vault_save(ptz_vault *vault, ptz_store store, long index, const ptz_log
     list.erase(std::remove_if(list.begin(), list.end(), [&](const Login &o) { return same_key(o, l); }), list.end());
     list.push_back(l);
     std::stable_sort(list.begin(), list.end(), [](const Login &a, const Login &b) {
-        std::string ha = ptz::lower(a.host), hb = ptz::lower(b.host);
-        if (ha != hb) return ha < hb;
-        if (a.user != b.user) return a.user < b.user;
-        return a.port < b.port;
+        std::string la = ptz::lower(a.user), lb = ptz::lower(b.user);
+        return la != lb ? la < lb : a.user < b.user;
     });
     try {
         vault->write();

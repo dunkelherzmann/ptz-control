@@ -104,26 +104,19 @@ PasswordRow password_row(const QString &value, const QString &placeholder) {
     return {field, show};
 }
 
-// The New and Edit form: host or address, port, username, password and, for SSH, the key file.
+// The New and Edit form: username and password, with Show password.
 class LoginForm : public QDialog {
 public:
-    LoginForm(QWidget *parent, const SavedLogin &login, LoginStore store, const QString &title) : QDialog(parent), store_(store) {
+    LoginForm(QWidget *parent, const SavedLogin &login, LoginStore store, const QString &title) : QDialog(parent) {
         setWindowTitle(title);
-        setMinimumWidth(420);
+        setMinimumWidth(400);
         bool ssh = store == LoginStore::Ssh;
-        auto edit = [](const QString &value, const QString &placeholder, const QString &name) {
-            auto *e = new QLineEdit(value);
-            e->setPlaceholderText(placeholder);
-            e->setFont(mono_font(13));
-            e->setAccessibleName(name);
-            return e;
-        };
-        host_ = edit(login.host, ssh ? "jump.example.com" : "192.168.1.100", ssh ? "Host" : "Address");
-        port_ = edit(QString::number(login.port), "", "Port");
-        user_ = edit(login.user, ssh ? "username" : "admin", "Username");
+        user_ = new QLineEdit(login.user);
+        user_->setPlaceholderText(ssh ? "username" : "admin");
+        user_->setFont(mono_font(13));
+        user_->setAccessibleName("Username");
         PasswordRow pw = password_row(login.password, ssh ? "blank for keys / agent" : "camera password");
         password_ = pw.field;
-        key_ = edit(login.key_file, "optional, e.g. ~/.ssh/id_ed25519", "Key file");
         note_ = new QLabel(ssh ? "The password may stay blank for keys or ssh-agent." : "");
         note_->setObjectName("secondary");
         note_->setWordWrap(true);
@@ -131,20 +124,15 @@ public:
         auto *grid = new QGridLayout;
         grid->setHorizontalSpacing(8);
         grid->setVerticalSpacing(6);
-        int row = 0;
-        auto add = [&](const QString &name, QWidget *w) {
+        auto add = [&](int row, const QString &name, QWidget *w) {
             auto *l = new QLabel(name);
             l->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
             grid->addWidget(l, row, 0);
-            grid->addWidget(w, row++, 1);
+            grid->addWidget(w, row, 1);
         };
-        add(ssh ? "Host" : "Address", host_);
-        add("Port", port_);
-        add("Username", user_);
-        add("Password", password_);
-        grid->addWidget(pw.show, row++, 1);
-        if (ssh) add("Key file", key_);
-        else key_->hide();
+        add(0, "Username", user_);
+        add(1, "Password", password_);
+        grid->addWidget(pw.show, 2, 1);
 
         auto *buttons = new QDialogButtonBox;
         QPushButton *save = buttons->addButton("Save", QDialogButtonBox::AcceptRole);
@@ -156,7 +144,7 @@ public:
         layout->addLayout(grid);
         layout->addWidget(note_);
         layout->addWidget(buttons);
-        host_->setFocus();
+        user_->setFocus();
     }
 
     ~LoginForm() override {
@@ -169,27 +157,16 @@ public:
 
 private:
     void try_accept() {
-        SavedLogin l;
-        l.host = host_->text().trimmed();
-        l.user = user_->text().trimmed();
-        l.password = password_->text();
-        l.key_file = store_ == LoginStore::Ssh ? key_->text().trimmed() : QString();
-        bool ok = false;
-        l.port = port_->text().trimmed().toInt(&ok);
-        if (!ok || l.port < 1 || l.port > 65535) {
-            note_->setText("The port must be an integer between 1 and 65535.");
+        QString name = user_->text().trimmed();
+        if (name.isEmpty()) {
+            note_->setText("A username is required.");
             return;
         }
-        if (l.host.isEmpty() || l.user.isEmpty()) {
-            note_->setText(QString(store_ == LoginStore::Ssh ? "Host" : "Address") + " and username are required.");
-            return;
-        }
-        result = l;
+        result = {name, password_->text()};
         accept();
     }
 
-    LoginStore store_;
-    QLineEdit *host_, *port_, *user_, *password_, *key_;
+    QLineEdit *user_, *password_;
     QLabel *note_;
 };
 
@@ -205,9 +182,9 @@ public:
 
         ssh_tab_ = new QPushButton("SSH Logins");
         camera_tab_ = new QPushButton("Camera Logins");
-        ssh_tab_->setToolTip("Saved SSH host logins");
-        camera_tab_->setToolTip("Saved camera logins. The two lists are kept apart, so any SSH host can be used with "
-                                "any camera login.");
+        ssh_tab_->setToolTip("Saved SSH usernames and passwords");
+        camera_tab_->setToolTip("Saved camera usernames and passwords. The two lists are kept apart, so any SSH login "
+                                "can be used with any camera login.");
         for (QPushButton *b : {ssh_tab_, camera_tab_}) {
             b->setObjectName("segment");
             b->setCheckable(true);
@@ -229,8 +206,8 @@ public:
         lock_->setToolTip("Lock or unlock the saved logins with the Administrator Password.");
         done_->setToolTip("Close Manage Logins (Esc).");
 
-        table_ = new QTableWidget(0, 5);
-        table_->setHorizontalHeaderLabels({"Host or address", "Port", "Username", "Password", "Key file"});
+        table_ = new QTableWidget(0, 2);
+        table_->setHorizontalHeaderLabels({"Username", "Password"});
         table_->setSelectionBehavior(QAbstractItemView::SelectRows);
         table_->setSelectionMode(QAbstractItemView::SingleSelection);
         table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -238,10 +215,7 @@ public:
         table_->horizontalHeader()->setStretchLastSection(true);
         table_->setAlternatingRowColors(true);
         table_->setAccessibleName("Saved logins");
-        table_->setColumnWidth(0, 210);
-        table_->setColumnWidth(1, 60);
-        table_->setColumnWidth(2, 140);
-        table_->setColumnWidth(3, 90);
+        table_->setColumnWidth(0, 320);
         table_->installEventFilter(this);
 
         status_ = new QLabel;
@@ -311,17 +285,13 @@ private:
     void reload() {
         int keep = selected();
         logins_ = vault_logins(store());
-        table_->setColumnHidden(4, store() == LoginStore::Camera);
         table_->setRowCount(static_cast<int>(logins_.size()));
         for (int r = 0; r < static_cast<int>(logins_.size()); ++r) {
             const SavedLogin &l = logins_[r];
-            const QString cells[] = {l.host, QString::number(l.port), l.user,
-                                     l.password.isEmpty() ? "—" : "••••••", l.key_file.isEmpty() ? "—" : l.key_file};
-            for (int c = 0; c < 5; ++c) {
-                auto *item = new QTableWidgetItem(cells[c]);
-                if (c != 3) item->setFont(mono_font(12));
-                table_->setItem(r, c, item);
-            }
+            auto *user = new QTableWidgetItem(l.user);
+            user->setFont(mono_font(12));
+            table_->setItem(r, 0, user);
+            table_->setItem(r, 1, new QTableWidgetItem(l.password.isEmpty() ? "—" : "••••••"));
         }
         if (keep >= 0 && keep < table_->rowCount()) table_->selectRow(keep);
         VaultState state = vault_state();
@@ -348,9 +318,7 @@ private:
 
     void new_login() {
         if (!vault_ensure_writable(this)) return;
-        SavedLogin blank;
-        blank.port = store() == LoginStore::Ssh ? 22 : 80;
-        LoginForm form(this, blank, store(), store() == LoginStore::Ssh ? "New SSH Login" : "New Camera Login");
+        LoginForm form(this, SavedLogin{}, store(), store() == LoginStore::Ssh ? "New SSH Login" : "New Camera Login");
         if (form.exec() == QDialog::Accepted) save(form.result, -1);
     }
 
@@ -377,7 +345,7 @@ private:
         if (row < 0 || row >= static_cast<int>(logins_.size()) ||
             (state != VaultState::Plain && state != VaultState::Unlocked))
             return;
-        QMessageBox box(QMessageBox::Warning, "Delete login", "Delete the login " + logins_[row].label() + "?",
+        QMessageBox box(QMessageBox::Warning, "Delete login", "Delete the login " + logins_[row].user + "?",
                         QMessageBox::NoButton, this);
         box.setInformativeText(QString("This removes it from the saved ") +
                                (store() == LoginStore::Ssh ? "SSH" : "camera") + " logins.");
@@ -400,8 +368,6 @@ QPointer<ManageLogins> g_manage;
 
 }  // namespace
 
-QString SavedLogin::label() const { return user + "@" + host + ":" + QString::number(port); }
-
 VaultState vault_state() {
     if (!vault().handle) return VaultState::Unavailable;
     switch (ptz_vault_get_state(vault().handle)) {
@@ -421,18 +387,16 @@ std::vector<SavedLogin> vault_logins(LoginStore store) {
     for (size_t i = 0; i < count; ++i) {
         ptz_login l{};
         if (!ptz_vault_login(vault().handle, to_store(store), i, &l)) continue;
-        out.push_back({QString::fromUtf8(l.host), l.port, QString::fromUtf8(l.user), QString::fromUtf8(l.password),
-                       QString::fromUtf8(l.key_file)});
+        out.push_back({QString::fromUtf8(l.user), QString::fromUtf8(l.password)});
     }
     return out;
 }
 
 bool vault_save(const SavedLogin &login, LoginStore store, int replacing, QString *error, int *index) {
-    QByteArray host = login.host.toUtf8(), user = login.user.toUtf8(), password = login.password.toUtf8(),
-               key = login.key_file.toUtf8();
+    QByteArray user = login.user.toUtf8(), password = login.password.toUtf8();
     long result = -1;
     bool ok = call(error, [&](char *buffer, size_t size) {
-        ptz_login l{host.constData(), login.port, user.constData(), password.constData(), key.constData()};
+        ptz_login l{user.constData(), password.constData()};
         result = ptz_vault_save(vault().handle, to_store(store), replacing, &l, buffer, size);
         return result >= 0;
     });

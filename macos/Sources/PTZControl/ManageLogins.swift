@@ -53,13 +53,13 @@ import AppKit
         storeControl.selectedSegment = 0
         storeControl.target = self
         storeControl.action = #selector(storeChanged)
-        storeControl.toolTip = "SSH Logins: saved SSH hosts. Camera Logins: saved camera accounts. The two are kept apart, so any SSH host can be used with any camera login."
-        storeControl.setToolTip("Saved SSH host logins", forSegment: 0)
-        storeControl.setToolTip("Saved camera logins", forSegment: 1)
+        storeControl.toolTip = "SSH Logins and Camera Logins: saved usernames and passwords, kept apart, so any SSH login can be used with any camera login."
+        storeControl.setToolTip("Saved SSH usernames and passwords", forSegment: 0)
+        storeControl.setToolTip("Saved camera usernames and passwords", forSegment: 1)
 
-        for (title, width) in [("Host", 200.0), ("Port", 60.0), ("Username", 130.0), ("Password", 90.0), ("Key file", 160.0)] {
+        for (title, width) in [("Username", 300.0), ("Password", 200.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(title))
-            column.title = title == "Host" ? "Host or address" : title
+            column.title = title
             column.width = width
             column.minWidth = 50
             table.addTableColumn(column)
@@ -122,7 +122,6 @@ import AppKit
     private func reload() {
         let selected = table.selectedRow
         logins = vault.logins(store)
-        table.tableColumns.last?.isHidden = store == .camera
         table.reloadData()
         if selected >= 0, selected < logins.count { table.selectRowIndexes([selected], byExtendingSelection: false) }
         let state = vault.state
@@ -149,13 +148,7 @@ import AppKit
 
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
         let l = logins[row]
-        let text: String = switch column?.identifier.rawValue {
-        case "Host": l.host
-        case "Port": String(l.port)
-        case "Username": l.user
-        case "Password": l.password.isEmpty ? "—" : "••••••"
-        default: l.keyFile.isEmpty ? "—" : l.keyFile
-        }
+        let text = column?.identifier.rawValue == "Username" ? l.user : (l.password.isEmpty ? "—" : "••••••")
         let cell = NSTextField(labelWithString: text)
         cell.font = column?.identifier.rawValue == "Password" ? .systemFont(ofSize: 12) : Fonts.mono(12)
         cell.lineBreakMode = .byTruncatingTail
@@ -173,9 +166,7 @@ import AppKit
 
     @objc private func newLogin() {
         guard VaultPrompts.ensureWritable() else { return }
-        var blank = LoginVault.Login()
-        blank.port = store == .ssh ? 22 : 80
-        if let login = LoginForm.run(blank, store: store, title: store == .ssh ? "New SSH Login" : "New Camera Login") {
+        if let login = LoginForm.run(LoginVault.Login(), store: store, title: store == .ssh ? "New SSH Login" : "New Camera Login") {
             save(login, replacing: nil)
         }
     }
@@ -265,39 +256,26 @@ final class LoginTable: NSTableView {
     }
 }
 
-/// The New and Edit form: host or address, port, username, password (with Show password)
-/// and, for SSH logins, the key file.
+/// The New and Edit form: username and password, with Show password.
 @MainActor final class LoginFormView: NSGridView {
-    let host = NSTextField()
-    let port = NSTextField()
     let user = NSTextField()
     let secureField = NSSecureTextField()
     let plainField = NSTextField()
     let show = NSButton(checkboxWithTitle: "Show password", target: nil, action: nil)
-    let key = NSTextField()
     private let toggle: ShowPasswordToggle
-    let store: LoginVault.Store
 
     init(_ login: LoginVault.Login, store: LoginVault.Store) {
-        self.store = store
         toggle = ShowPasswordToggle(hidden: secureField, shown: plainField)
         super.init(frame: .zero)
-        host.stringValue = login.host
-        port.stringValue = String(login.port)
         user.stringValue = login.user
-        secureField.stringValue = login.password
-        plainField.stringValue = login.password
-        key.stringValue = login.keyFile
-        host.placeholderString = store == .ssh ? "jump.example.com" : "192.168.1.100"
+        password = login.password
         user.placeholderString = store == .ssh ? "username" : "admin"
         secureField.placeholderString = store == .ssh ? "blank for keys / agent" : "camera password"
         plainField.placeholderString = secureField.placeholderString
-        key.placeholderString = "optional, e.g. ~/.ssh/id_ed25519"
         show.toolTip = "Show password — Shows the saved password as text while this form is open."
         show.target = toggle
         show.action = #selector(ShowPasswordToggle.flip(_:))
-        for (field, label) in [(host, store == .ssh ? "Host" : "Address"), (port, "Port"), (user, "Username"),
-                               (secureField, "Password"), (plainField, "Password"), (key, "Key file")] {
+        for (field, label) in [(user, "Username"), (secureField, "Password"), (plainField, "Password")] {
             field.font = Fonts.mono(12)
             field.usesSingleLineMode = true
             field.setAccessibilityLabel(label)
@@ -305,26 +283,15 @@ final class LoginTable: NSTableView {
             field.widthAnchor.constraint(equalToConstant: 250).isActive = true
         }
         plainField.isHidden = true
-        let password = NSStackView(views: [secureField, plainField])
-
-        func label(_ text: String) -> NSTextField {
-            let l = NSTextField(labelWithString: text)
-            l.alignment = .right
-            return l
-        }
-        addRow(with: [label(store == .ssh ? "Host" : "Address"), host])
-        addRow(with: [label("Port"), port])
+        func label(_ text: String) -> NSTextField { NSTextField(labelWithString: text) }
         addRow(with: [label("Username"), user])
-        addRow(with: [label("Password"), password])
+        addRow(with: [label("Password"), NSStackView(views: [secureField, plainField])])
         addRow(with: [NSGridCell.emptyContentView, show])
-        if store == .ssh { addRow(with: [label("Key file"), key]) }
         rowSpacing = 8
         columnSpacing = 8
         column(at: 0).xPlacement = .trailing
-        host.nextKeyView = port
-        port.nextKeyView = user
         user.nextKeyView = secureField
-        secureField.nextKeyView = store == .ssh ? key : host
+        secureField.nextKeyView = user
         frame = NSRect(origin: .zero, size: fittingSize)
     }
 
@@ -337,19 +304,9 @@ final class LoginTable: NSTableView {
 
     /// The login as entered, or the reason it can't be saved.
     func login() -> Result<LoginVault.Login, LinkError> {
-        var result = LoginVault.Login()
-        result.host = host.stringValue.trimmingCharacters(in: .whitespaces)
-        result.user = user.stringValue.trimmingCharacters(in: .whitespaces)
-        result.password = password
-        result.keyFile = store == .ssh ? key.stringValue.trimmingCharacters(in: .whitespaces) : ""
-        guard let p = Int(port.stringValue.trimmingCharacters(in: .whitespaces)), (1...65535).contains(p) else {
-            return .failure(LinkError(message: "The port must be an integer between 1 and 65535."))
-        }
-        result.port = p
-        if result.host.isEmpty || result.user.isEmpty {
-            return .failure(LinkError(message: "\(store == .ssh ? "Host" : "Address") and username are required."))
-        }
-        return .success(result)
+        let name = user.stringValue.trimmingCharacters(in: .whitespaces)
+        if name.isEmpty { return .failure(LinkError(message: "A username is required.")) }
+        return .success(LoginVault.Login(user: name, password: password))
     }
 }
 
@@ -365,7 +322,7 @@ final class LoginTable: NSTableView {
             alert.addButton(withTitle: "Save")
             alert.addButton(withTitle: "Cancel")
             alert.accessoryView = form
-            alert.window.initialFirstResponder = form.host
+            alert.window.initialFirstResponder = form.user
             NSApp.activate()
             guard alert.runModal() == .alertFirstButtonReturn else { return nil }
             switch form.login() {

@@ -44,7 +44,7 @@ run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PATH="$SHOT" --env=PTZ_SNAPSHOT
 REQUESTS="$(grep -c '"POST ' "$WORK/mock.log" || true)"
 check "run 1 connected and moved ($REQUESTS camera requests)" "$([ "$(moves)" -ge 1 ] && echo 0 || echo 1)"
 check "run 1 saved the camera login" \
-    "$(printf 'camera\t127.0.0.1\t%s\tadmin\tsecret\t\n' "$PORT" | grep -qxF -f - "$VAULT" && echo 0 || echo 1)"
+    "$(printf 'camera\tadmin\tsecret\n' | grep -qxF -f - "$VAULT" && echo 0 || echo 1)"
 check "the vault file is private (0600)" "$([ "$(stat -c %a "$VAULT")" = 600 ] && echo 0 || echo 1)"
 check "window picture saved" "$([ -s "$SHOT" ] && echo 0 || echo 1)"
 BEFORE="$(moves)"

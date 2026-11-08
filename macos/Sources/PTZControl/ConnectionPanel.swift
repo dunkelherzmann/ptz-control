@@ -73,21 +73,19 @@ final class ConnectionPanel: NSView, Themed, NSTextFieldDelegate {
             field.contentType = nil
             field.isAutomaticTextCompletionEnabled = false
         }
-        for field in [sshHost, sshUser, sshPassword, sshPort, sshKey, cameraHost, cameraPort, cameraUser, cameraPassword] {
-            field.delegate = self
-        }
+        for field in [sshUser, sshPassword, cameraUser, cameraPassword] { field.delegate = self }
         for popup in [sshLogin, cameraLogin] {
             popup.autoenablesItems = false
             popup.target = self
             popup.action = #selector(loginChosen(_:))
             popup.font = .systemFont(ofSize: 12)
         }
-        sshLogin.toolTip = "SSH login — Fill the SSH fields from a saved SSH login, or open Manage Logins (⇧⌘L)."
-        cameraLogin.toolTip = "Camera login — Fill the camera fields from a saved camera login, or open Manage Logins (⇧⌘L)."
+        sshLogin.toolTip = "SSH login — Fill the SSH username and password from a saved SSH login, or open Manage Logins (⇧⌘L)."
+        cameraLogin.toolTip = "Camera login — Fill the camera username and password from a saved camera login, or open Manage Logins (⇧⌘L)."
         sshLogin.setAccessibilityLabel("Saved SSH login")
         cameraLogin.setAccessibilityLabel("Saved camera login")
-        saveSSH.toolTip = "Save login — Once connected, save this SSH host, username, password and key file to the saved SSH logins."
-        saveCamera.toolTip = "Save login — Once connected, save this camera address, username and password to the saved camera logins."
+        saveSSH.toolTip = "Save login — Once connected, save this SSH username and password to the saved SSH logins."
+        saveCamera.toolTip = "Save login — Once connected, save this camera username and password to the saved camera logins."
         saveSSH.setAccessibilityLabel("Save this SSH login")
         saveCamera.setAccessibilityLabel("Save this camera login")
         for box in [saveSSH, saveCamera] { box.font = .systemFont(ofSize: 12) }
@@ -313,14 +311,9 @@ final class ConnectionPanel: NSView, Themed, NSTextFieldDelegate {
             guard tag < logins.count else { return }
             let login = logins[tag]
             if store == .ssh {
-                sshHost.stringValue = login.host
-                sshPort.stringValue = String(login.port)
                 sshUser.stringValue = login.user
                 sshPassword.stringValue = login.password
-                sshKey.stringValue = login.keyFile
             } else {
-                cameraHost.stringValue = login.host
-                cameraPort.stringValue = String(login.port)
                 cameraUser.stringValue = login.user
                 cameraPassword.stringValue = login.password
             }
@@ -334,10 +327,10 @@ final class ConnectionPanel: NSView, Themed, NSTextFieldDelegate {
         loginChosen(popup)
     }
 
-    /// Typing in a login's fields means it's no longer the saved one.
+    /// Typing a username or password means it's no longer the saved login.
     func controlTextDidChange(_ obj: Notification) {
         guard let field = obj.object as? NSTextField else { return }
-        if [sshHost, sshUser, sshPassword, sshPort, sshKey].contains(where: { $0 === field }) {
+        if field === sshUser || field === sshPassword {
             sshLogin.selectItem(at: 0)
         } else {
             cameraLogin.selectItem(at: 0)

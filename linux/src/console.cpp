@@ -310,15 +310,15 @@ private:
         cam_login_ = new QComboBox;
         save_ssh_ = new QCheckBox("Save login");
         save_cam_ = new QCheckBox("Save login");
-        ssh_login_->setToolTip("SSH login — Fill the SSH fields from a saved SSH login, or open Manage Logins (Ctrl+Shift+L).");
-        cam_login_->setToolTip("Camera login — Fill the camera fields from a saved camera login, or open Manage Logins "
-                               "(Ctrl+Shift+L).");
+        ssh_login_->setToolTip("SSH login — Fill the SSH username and password from a saved SSH login, or open Manage "
+                               "Logins (Ctrl+Shift+L).");
+        cam_login_->setToolTip("Camera login — Fill the camera username and password from a saved camera login, or open "
+                               "Manage Logins (Ctrl+Shift+L).");
         ssh_login_->setAccessibleName("Saved SSH login");
         cam_login_->setAccessibleName("Saved camera login");
-        save_ssh_->setToolTip("Save login — Once connected, save this SSH host, username, password and key file to the "
-                              "saved SSH logins.");
-        save_cam_->setToolTip("Save login — Once connected, save this camera address, username and password to the saved "
-                              "camera logins.");
+        save_ssh_->setToolTip("Save login — Once connected, save this SSH username and password to the saved SSH logins.");
+        save_cam_->setToolTip("Save login — Once connected, save this camera username and password to the saved camera "
+                              "logins.");
         save_ssh_->setAccessibleName("Save this SSH login");
         save_cam_->setAccessibleName("Save this camera login");
         section("SSH HOST", true);
@@ -457,9 +457,9 @@ private:
             connect(f, &QLineEdit::returnPressed, this, [this] {
                 if (state_ == State::Idle) connect_camera();
             });
-        for (QLineEdit *f : {ssh_host_, ssh_user_, ssh_password_, ssh_port_, ssh_key_})
+        for (QLineEdit *f : {ssh_user_, ssh_password_})
             connect(f, &QLineEdit::textEdited, this, [this] { ssh_login_->setCurrentIndex(0); });
-        for (QLineEdit *f : {cam_host_, cam_port_, cam_user_, cam_password_})
+        for (QLineEdit *f : {cam_user_, cam_password_})
             connect(f, &QLineEdit::textEdited, this, [this] { cam_login_->setCurrentIndex(0); });
         for (QComboBox *box : {ssh_login_, cam_login_})
             connect(box, &QComboBox::activated, this, [this, box](int index) { login_chosen(box, index); });
@@ -709,7 +709,7 @@ private:
             box->addItem("Unlock Saved Logins…", kUnlock);
         } else {
             int i = 0;
-            for (const SavedLogin &l : vault_logins(store)) box->addItem(l.label(), i++);
+            for (const SavedLogin &l : vault_logins(store)) box->addItem(l.user, i++);
         }
         box->insertSeparator(box->count());
         box->addItem("Manage Logins…", kManage);
@@ -735,14 +735,9 @@ private:
         if (tag >= static_cast<int>(logins.size())) return;
         const SavedLogin &l = logins[tag];
         if (store == LoginStore::Ssh) {
-            ssh_host_->setText(l.host);
-            ssh_port_->setText(QString::number(l.port));
             ssh_user_->setText(l.user);
             ssh_password_->setText(l.password);
-            ssh_key_->setText(l.key_file);
         } else {
-            cam_host_->setText(l.host);
-            cam_port_->setText(QString::number(l.port));
             cam_user_->setText(l.user);
             cam_password_->setText(l.password);
         }
@@ -765,7 +760,7 @@ private:
         } else {
             for (auto &[login, store] : saved) {
                 QString error, kind = store == LoginStore::Ssh ? "SSH" : "camera";
-                if (vault_save(login, store, -1, &error)) log_line("Saved " + kind + " login " + login.label() + ".");
+                if (vault_save(login, store, -1, &error)) log_line("Saved " + kind + " login " + login.user + ".");
                 else log_line("Couldn't save the " + kind + " login: " + error, true);
             }
         }
@@ -838,9 +833,9 @@ private:
         // What Save login keeps once the connection has proved it.
         std::vector<std::pair<SavedLogin, LoginStore>> saved;
         if (save_cam_->isChecked())
-            saved.push_back({{s.camera_host, s.camera_port, s.camera_user, camera_password, {}}, LoginStore::Camera});
+            saved.push_back({{s.camera_user, camera_password}, LoginStore::Camera});
         if (s.route == 1 && save_ssh_->isChecked())
-            saved.push_back({{s.ssh_host, s.ssh_port, s.ssh_user, ssh_password, ssh_key_->text().trimmed()}, LoginStore::Ssh});
+            saved.push_back({{s.ssh_user, ssh_password}, LoginStore::Ssh});
         link_connect(link_, s, camera_password, s.route ? ssh_password : QString(), [this, saved](LinkResult result, CameraInfo info) {
             if (result.ok) {
                 info_ = info;

@@ -45,7 +45,7 @@ rm -f "$OUT/macos.png"
 PTZ_VAULT_PATH="$VAULT" PTZ_PASSWORD=secret PTZ_SNAPSHOT_PATH="$OUT/macos.png" PTZ_SNAPSHOT_SAVE_LOGIN=1 \
     "$BIN" >"$WORK/app1.log" 2>&1 || true
 check "run 1 connected and moved" "$([ "$(moves)" -ge 1 ] && echo 0 || echo 1)"
-check "run 1 saved the camera login" "$(printf 'camera\t127.0.0.1\t%s\tadmin\tsecret\t\n' "$PORT" | grep -qxF -f - "$VAULT" && echo 0 || echo 1)"
+check "run 1 saved the camera login" "$(printf 'camera\tadmin\tsecret\n' | grep -qxF -f - "$VAULT" && echo 0 || echo 1)"
 check "the vault file is private (0600)" "$([ "$(stat -f %Lp "$VAULT")" = 600 ] && echo 0 || echo 1)"
 check "window picture saved" "$([ -s "$OUT/macos.png" ] && echo 0 || echo 1)"
 BEFORE="$(moves)"

@@ -307,11 +307,10 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
     private func saveTickedLogins(_ s: ConnectionSettings, cameraPassword: String, sshPassword: String) {
         var wanted: [(LoginVault.Login, LoginVault.Store)] = []
         if connection.saveCamera.state == .on {
-            wanted.append((.init(host: s.cameraHost, port: s.cameraPort, user: s.cameraUser, password: cameraPassword), .camera))
+            wanted.append((.init(user: s.cameraUser, password: cameraPassword), .camera))
         }
         if s.route == .ssh, connection.saveSSH.state == .on {
-            wanted.append((.init(host: s.sshHost, port: s.sshPort, user: s.sshUser, password: sshPassword,
-                                 keyFile: s.sshIdentity), .ssh))
+            wanted.append((.init(user: s.sshUser, password: sshPassword), .ssh))
         }
         guard !wanted.isEmpty else { return }
         guard VaultPrompts.ensureWritable() else {

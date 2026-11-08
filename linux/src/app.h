@@ -107,11 +107,8 @@ void link_disconnect(CameraLink *link, std::function<void()> done);
 enum class LoginStore { Ssh = 0, Camera = 1 };
 enum class VaultState { Unavailable, New, Plain, Locked, Unlocked };
 
-struct SavedLogin {
-    QString host;
-    int port = 22;
-    QString user, password, key_file;
-    QString label() const;  // user@host:port
+struct SavedLogin {  // a username and its password
+    QString user, password;
 };
 
 class QPixmap;
