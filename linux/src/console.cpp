@@ -5,6 +5,8 @@
 
 #include <QApplication>
 #include <QButtonGroup>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QDesktopServices>
@@ -18,6 +20,7 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollBar>
@@ -153,6 +156,7 @@ public:
         apply_theme();
         update_controls();
         log_line("PTZ Control ready · core " + QString::fromUtf8(ptz_core_version()));
+        if (vault_state() == VaultState::Unavailable) log_line("Saved logins are unavailable: " + vault_open_error(), true);
         auto *timer = new QTimer(this);
         connect(timer, &QTimer::timeout, this, [this] { tick(); });
         timer->start(250);
@@ -292,17 +296,46 @@ private:
                 ssh_widgets_.push_back(e);
             }
         };
+        auto widget_row = [&](const QString &name, QWidget *w, bool ssh) {
+            QLabel *l = label(name);
+            l->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            grid->addWidget(l, row, 0);
+            grid->addWidget(w, row++, 1);
+            if (ssh) {
+                ssh_widgets_.push_back(l);
+                ssh_widgets_.push_back(w);
+            }
+        };
+        ssh_login_ = new QComboBox;
+        cam_login_ = new QComboBox;
+        save_ssh_ = new QCheckBox("Save login");
+        save_cam_ = new QCheckBox("Save login");
+        ssh_login_->setToolTip("SSH login — Fill the SSH fields from a saved SSH login, or open Manage Logins (Ctrl+Shift+L).");
+        cam_login_->setToolTip("Camera login — Fill the camera fields from a saved camera login, or open Manage Logins "
+                               "(Ctrl+Shift+L).");
+        ssh_login_->setAccessibleName("Saved SSH login");
+        cam_login_->setAccessibleName("Saved camera login");
+        save_ssh_->setToolTip("Save login — Once connected, save this SSH host, username, password and key file to the "
+                              "saved SSH logins.");
+        save_cam_->setToolTip("Save login — Once connected, save this camera address, username and password to the saved "
+                              "camera logins.");
+        save_ssh_->setAccessibleName("Save this SSH login");
+        save_cam_->setAccessibleName("Save this camera login");
         section("SSH HOST", true);
+        widget_row("Login", ssh_login_, true);
         field_row("Host", ssh_host_, true);
         field_row("Username", ssh_user_, true);
         field_row("Password", ssh_password_, true);
         field_row("Port", ssh_port_, true);
         field_row("Key file", ssh_key_, true);
+        widget_row("", save_ssh_, true);
         section("CAMERA", false);
+        widget_row("Login", cam_login_, false);
         field_row("Address", cam_host_, false);
         field_row("HTTP port", cam_port_, false);
         field_row("Username", cam_user_, false);
         field_row("Password", cam_password_, false);
+        widget_row("", save_cam_, false);
         section("ADVANCED", false);
         field_row("HTTPS port", https_port_, false);
         field_row("Profile", profile_, false);
@@ -424,6 +457,14 @@ private:
             connect(f, &QLineEdit::returnPressed, this, [this] {
                 if (state_ == State::Idle) connect_camera();
             });
+        for (QLineEdit *f : {ssh_host_, ssh_user_, ssh_password_, ssh_port_, ssh_key_})
+            connect(f, &QLineEdit::textEdited, this, [this] { ssh_login_->setCurrentIndex(0); });
+        for (QLineEdit *f : {cam_host_, cam_port_, cam_user_, cam_password_})
+            connect(f, &QLineEdit::textEdited, this, [this] { cam_login_->setCurrentIndex(0); });
+        for (QComboBox *box : {ssh_login_, cam_login_})
+            connect(box, &QComboBox::activated, this, [this, box](int index) { login_chosen(box, index); });
+        reload_logins();
+        vault_subscribe(this, [this] { reload_logins(); });
         for (QLineEdit *f : {target_pan_, target_tilt_, target_zoom_}) {
             connect(f, &QLineEdit::textChanged, this, [this] { update_target_markers(); });
             connect(f, &QLineEdit::returnPressed, this, [this] { send_move(); });
@@ -456,6 +497,7 @@ private:
         };
         key(QKeySequence("Ctrl+K"), [this] { if (state_ == State::Idle || state_ == State::Connecting) toggle_connection(); });
         key(QKeySequence("Ctrl+Shift+K"), [this] { disconnect(); });
+        key(QKeySequence("Ctrl+Shift+L"), [this] { show_manage_logins(this); });
         key(QKeySequence("Ctrl+Return"), [this] { send_move(); });
         key(QKeySequence("Ctrl+Enter"), [this] { send_move(); });
         key(QKeySequence("Ctrl+B"), [this] { return_to_start(); });
@@ -542,6 +584,7 @@ private:
     void update_controls() {
         bool connected = state_ == State::Connected, idle = state_ == State::Idle;
         for (QLineEdit *f : fields_) f->setEnabled(idle);
+        for (QWidget *w : std::initializer_list<QWidget *>{ssh_login_, cam_login_, save_ssh_, save_cam_}) w->setEnabled(idle);
         for (QPushButton *b : {route_local_, route_ssh_, vendor_onvif_, vendor_axis_}) b->setEnabled(idle);
         route_local_->setChecked(route_ == 0);
         route_ssh_->setChecked(route_ == 1);
@@ -646,6 +689,89 @@ private:
         update_controls();
     }
 
+    // ---- saved logins -----------------------------------------------------------------
+
+    enum { kTyped = -1, kManage = -2, kUnlock = -3 };
+
+    void reload_logins() {
+        fill_logins(ssh_login_, LoginStore::Ssh);
+        fill_logins(cam_login_, LoginStore::Camera);
+    }
+
+    void fill_logins(QComboBox *box, LoginStore store) {
+        QString previous = box->currentData().toInt() >= 0 ? box->currentText() : QString();
+        box->clear();
+        box->addItem("Type a login", kTyped);
+        VaultState state = vault_state();
+        if (state == VaultState::Unavailable) {
+            box->addItem("Saved logins unavailable", kTyped);
+        } else if (state == VaultState::Locked) {
+            box->addItem("Unlock Saved Logins…", kUnlock);
+        } else {
+            int i = 0;
+            for (const SavedLogin &l : vault_logins(store)) box->addItem(l.label(), i++);
+        }
+        box->insertSeparator(box->count());
+        box->addItem("Manage Logins…", kManage);
+        int found = previous.isEmpty() ? -1 : box->findText(previous);
+        box->setCurrentIndex(found > 0 ? found : 0);
+    }
+
+    void login_chosen(QComboBox *box, int index) {
+        LoginStore store = box == ssh_login_ ? LoginStore::Ssh : LoginStore::Camera;
+        int tag = box->itemData(index).toInt();
+        if (tag == kManage) {
+            box->setCurrentIndex(0);
+            show_manage_logins(this);
+            return;
+        }
+        if (tag == kUnlock) {
+            box->setCurrentIndex(0);
+            if (vault_unlock_dialog(this)) box->showPopup();
+            return;
+        }
+        if (tag < 0) return;
+        std::vector<SavedLogin> logins = vault_logins(store);
+        if (tag >= static_cast<int>(logins.size())) return;
+        const SavedLogin &l = logins[tag];
+        if (store == LoginStore::Ssh) {
+            ssh_host_->setText(l.host);
+            ssh_port_->setText(QString::number(l.port));
+            ssh_user_->setText(l.user);
+            ssh_password_->setText(l.password);
+            ssh_key_->setText(l.key_file);
+        } else {
+            cam_host_->setText(l.host);
+            cam_port_->setText(QString::number(l.port));
+            cam_user_->setText(l.user);
+            cam_password_->setText(l.password);
+        }
+    }
+
+    void choose_saved_login(LoginStore store, int index) {  // test hook
+        QComboBox *box = store == LoginStore::Ssh ? ssh_login_ : cam_login_;
+        int item = box->findData(index);
+        if (item < 0) return;
+        box->setCurrentIndex(item);
+        login_chosen(box, item);
+    }
+
+    void save_ticked_logins(std::vector<std::pair<SavedLogin, LoginStore>> saved) {
+        save_cam_->setChecked(false);
+        save_ssh_->setChecked(false);
+        if (saved.empty()) return;
+        if (!vault_ensure_writable(this)) {
+            log_line("Logins not saved.");
+        } else {
+            for (auto &[login, store] : saved) {
+                QString error, kind = store == LoginStore::Ssh ? "SSH" : "camera";
+                if (vault_save(login, store, -1, &error)) log_line("Saved " + kind + " login " + login.label() + ".");
+                else log_line("Couldn't save the " + kind + " login: " + error, true);
+            }
+        }
+        for (auto &[login, store] : saved) login.password.fill(QChar(0));
+    }
+
     // ---- connection -------------------------------------------------------------------
 
     std::optional<Settings> read_settings(QString &error) {
@@ -709,7 +835,13 @@ private:
         log_line("Connecting: " + (s.route ? "SSH via " + s.ssh_user + "@" + s.ssh_host : QString("local")) + " → " +
                  s.camera_host + ":" + QString::number(s.camera_port) + " · " + (s.vendor ? "Axis VAPIX" : "ONVIF"));
         update_controls();
-        link_connect(link_, s, camera_password, s.route ? ssh_password : QString(), [this](LinkResult result, CameraInfo info) {
+        // What Save login keeps once the connection has proved it.
+        std::vector<std::pair<SavedLogin, LoginStore>> saved;
+        if (save_cam_->isChecked())
+            saved.push_back({{s.camera_host, s.camera_port, s.camera_user, camera_password, {}}, LoginStore::Camera});
+        if (s.route == 1 && save_ssh_->isChecked())
+            saved.push_back({{s.ssh_host, s.ssh_port, s.ssh_user, ssh_password, ssh_key_->text().trimmed()}, LoginStore::Ssh});
+        link_connect(link_, s, camera_password, s.route ? ssh_password : QString(), [this, saved](LinkResult result, CameraInfo info) {
             if (result.ok) {
                 info_ = info;
                 state_ = State::Connected;
@@ -725,6 +857,7 @@ private:
                     log_line(QString("  ") + name + " range: " +
                              (range.available ? format_value(range.min) + " … " + format_value(range.max) : "not advertised"));
                 refresh();
+                save_ticked_logins(saved);
             } else {
                 state_ = State::Idle;
                 show_message(result.error, true);
@@ -936,7 +1069,7 @@ private:
             "Stop (Ctrl+.) sends a PTZ stop. Disconnecting never sends a stop.\n"
             "Web Interface (Ctrl+L) opens the camera's own page in your browser: HTTP first, HTTPS fallback. "
             "No credentials are sent.\n\n"
-            "Shortcuts: Ctrl+K connect, Ctrl+Shift+K disconnect, Ctrl+Enter move, Ctrl+R refresh, "
+            "Shortcuts: Ctrl+K connect, Ctrl+Shift+K disconnect, Ctrl+Enter move, Ctrl+R refresh, Ctrl+Shift+L saved logins, "
             "Ctrl+Alt+1…5 phosphor, Ctrl+Q quit.");
     }
 
@@ -962,6 +1095,9 @@ private:
         item(camera, paused_ ? "Resume Auto-Refresh" : "Pause Auto-Refresh", "Ctrl+P", connected, [this] { toggle_pause(); });
         camera->addSeparator();
         item(camera, "Open Camera Web Interface", "Ctrl+L", connected, [this] { open_web(); });
+        camera->addSeparator();
+        item(camera, "Manage Logins…", "Ctrl+Shift+L", vault_state() != VaultState::Unavailable,
+             [this] { show_manage_logins(this); });
         QMenu *phosphor = menu_->addMenu("Phosphor");
         for (int i = 0; i < 5; ++i) {
             QAction *a = item(phosphor, phosphor_title(static_cast<Phosphor>(i)), QString("Ctrl+Alt+%1").arg(i + 1), true,
@@ -1051,6 +1187,17 @@ private:
             QMenu::item:disabled { color: %15; }
             QMenu::separator { height: 1px; background: %6; margin: 4px 6px; }
             QDialog, QMessageBox, QInputDialog { background: %20; }
+            QComboBox { background: %4; color: %5; border: 1px solid %6; border-radius: 3px; padding: 2px 5px; }
+            QComboBox:hover, QComboBox:focus { border-color: %9; }
+            QComboBox:disabled { color: %10; border-color: %11; }
+            QComboBox QAbstractItemView { background: %20; color: %2; selection-background-color: %7;
+                                          selection-color: %8; border: 1px solid %6; }
+            QCheckBox { color: %2; }
+            QCheckBox:disabled { color: %15; }
+            QTableWidget { background: %4; alternate-background-color: %20; color: %5; gridline-color: %6;
+                           border: 1px solid %6; selection-background-color: %7; selection-color: %8; }
+            QHeaderView::section { background: %20; color: %3; border: none; border-right: 1px solid %6;
+                                   border-bottom: 1px solid %6; padding: 4px 6px; }
         )")
                                 .arg(css(t.background), css(t.text), css(t.secondary), css(t.field), css(t.field_text),
                                      css(t.border), css(t.accent), css(t.accent_text), css(t.primary))
@@ -1069,10 +1216,14 @@ private:
 
     // ---- UI test hook (PTZ_SNAPSHOT_PATH) ---------------------------------------------
 
+    // PTZ_SNAPSHOT_SAVE_LOGIN ticks the camera's Save login box; PTZ_SNAPSHOT_USE_LOGIN fills the camera fields
+    // from the first saved camera login; PTZ_SNAPSHOT_LOGINS_PATH also saves pictures of Manage Logins and its form.
     void run_snapshot_script() {
         if (QByteArray name = qgetenv("PTZ_THEME"); !name.isEmpty())
             for (int i = 0; i < 5; ++i)
                 if (phosphor_title(static_cast<Phosphor>(i)).toLower().startsWith(QString::fromUtf8(name).toLower())) set_theme(i);
+        if (qEnvironmentVariableIsSet("PTZ_SNAPSHOT_SAVE_LOGIN")) save_cam_->setChecked(true);
+        if (qEnvironmentVariableIsSet("PTZ_SNAPSHOT_USE_LOGIN")) choose_saved_login(LoginStore::Camera, 0);
         connect_camera();
         QTimer::singleShot(3000, this, [this] {
             target_pan_->setText("0.55");
@@ -1088,6 +1239,12 @@ private:
         });
         QTimer::singleShot(7000, this, [this] {
             grab().save(qEnvironmentVariable("PTZ_SNAPSHOT_PATH"));
+            if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_LOGINS_PATH"); !path.isEmpty()) {
+                manage_logins_snapshot(this, LoginStore::Camera).save(path);
+                QString form = path;
+                form.replace(".png", "-form.png");
+                login_form_snapshot(this, LoginStore::Camera).save(form);
+            }
             close();
         });
     }
@@ -1107,6 +1264,8 @@ private:
     int route_ = 0, vendor_ = 0;
     std::deque<std::pair<QString, bool>> log_lines_;
 
+    QComboBox *ssh_login_, *cam_login_;
+    QCheckBox *save_ssh_, *save_cam_;
     QPushButton *route_local_, *route_ssh_, *vendor_onvif_, *vendor_axis_, *connect_, *move_, *start_, *stop_, *web_;
     QLineEdit *ssh_host_, *ssh_user_, *ssh_password_, *ssh_port_, *ssh_key_, *cam_host_, *cam_port_, *cam_user_,
         *cam_password_, *https_port_, *profile_, *timeout_, *target_pan_, *target_tilt_, *target_zoom_;

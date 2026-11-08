@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <optional>
+#include <vector>
 
 #include "ptzcore.h"
 
@@ -101,6 +102,34 @@ void link_move(CameraLink *link, std::optional<double> pan, std::optional<double
 void link_stop(CameraLink *link, std::function<void(LinkResult)> done);
 void link_web_url(CameraLink *link, std::function<void(LinkResult, QString url, QString notice)> done);
 void link_disconnect(CameraLink *link, std::function<void()> done);
+
+// ---- saved logins (spec §17; vault.cpp) ----------------------------------------
+enum class LoginStore { Ssh = 0, Camera = 1 };
+enum class VaultState { Unavailable, New, Plain, Locked, Unlocked };
+
+struct SavedLogin {
+    QString host;
+    int port = 22;
+    QString user, password, key_file;
+    QString label() const;  // user@host:port
+};
+
+class QPixmap;
+class QWidget;
+VaultState vault_state();
+QString vault_open_error();
+std::vector<SavedLogin> vault_logins(LoginStore store);
+bool vault_save(const SavedLogin &login, LoginStore store, int replacing, QString *error, int *index = nullptr);
+bool vault_remove(int index, LoginStore store, QString *error);
+void vault_lock();
+void vault_subscribe(QObject *owner, std::function<void()> fn);  // called after every change while owner lives
+bool vault_unlock_dialog(QWidget *parent);
+bool vault_change_admin_dialog(QWidget *parent);
+bool vault_ensure_readable(QWidget *parent);
+bool vault_ensure_writable(QWidget *parent);  // asks how to keep logins the first time
+void show_manage_logins(QWidget *parent);
+QPixmap manage_logins_snapshot(QWidget *parent, LoginStore store);  // test hook
+QPixmap login_form_snapshot(QWidget *parent, LoginStore store);     // test hook
 
 // ---- console window ----------------------------------------------------------
 class QWidget;
