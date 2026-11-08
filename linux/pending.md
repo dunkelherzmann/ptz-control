@@ -16,7 +16,7 @@ No open bugs in `bugs.md`.
 
 ## To build
 
-- [ ] **Title bar reads "PTZ Control"**, without "— PTZ Coordinates Controller by Herbert Cisneros". (§2 K1, §14)
+- [x] **Title bar reads "PTZ Control"** (#8), without "— PTZ Coordinates Controller by Herbert Cisneros". (§2 K1, §14)
 - [ ] **Remember the window's size and position.** (§2 K2)
 - [ ] **Advanced behind a disclosure, closed at first.** (§3 F5)
 - [ ] **Return in a connection field moves to the next field**, and connects only from the camera password or the

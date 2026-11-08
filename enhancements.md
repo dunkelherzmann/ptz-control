@@ -16,10 +16,10 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [ ] Linux
   - [ ] Windows
 - [x] **Keep a specification and a plan per version:** `SPECIFICATION.md` describes every feature with its id, platforms, shortcut and hover text, and the builds per platform; `pending.md` (macOS), `windows/pending.md` and `linux/pending.md` list what each version still lacks or gets wrong, in build order. *Requested 2026-11-08.* Done in #5.
-- [ ] **The title bar reads "PTZ Control",** on every platform: no "PTZ Coordinates Controller by Herbert Cisneros" subtitle or suffix. *Requested 2026-11-08.* Mac, Linux and Windows.
-  - [ ] Mac
-  - [ ] Linux
-  - [ ] Windows
+- [x] **The title bar reads "PTZ Control",** on every platform: no "PTZ Coordinates Controller by Herbert Cisneros" subtitle or suffix. *Requested 2026-11-08.* Mac, Linux and Windows. Done in #8.
+  - [x] Mac
+  - [x] Linux
+  - [x] Windows
 - [x] **Windows: a portable `.exe` on the desktop.** PTZ Control for Windows stays a single static `PTZControl.exe` with no installer, runtime or anything added to the system, and every new Windows build is copied to the Windows PC's desktop as `PTZ Control.exe` so it's easy to find. *Requested 2026-11-08 · Windows.*
   - [x] Single static portable `.exe` (already the case)
   - [x] Copied to the desktop by `scripts\build-windows.ps1` on every build (PR #7)
