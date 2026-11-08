@@ -1,5 +1,5 @@
 # PTZ Control for Linux: Qt 6 Widgets host over the shared C++ core.
-# scripts/build-linux.sh runs this inside the build container and packages AppImages.
+# linux/install.sh builds it inside the Flatpak build (linux/org.ptzcontrol.app.yml).
 cmake_minimum_required(VERSION 3.16)
 project(PTZControl LANGUAGES CXX)
 
@@ -19,5 +19,3 @@ add_executable(ptz-control
 target_include_directories(ptz-control PRIVATE ../core/include src)
 target_compile_options(ptz-control PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(ptz-control PRIVATE Qt6::Widgets CURL::libcurl)
-# Bundled libraries live in <AppDir>/usr/lib next to usr/bin.
-set_target_properties(ptz-control PROPERTIES INSTALL_RPATH "$ORIGIN/../lib" BUILD_WITH_INSTALL_RPATH ON)

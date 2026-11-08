@@ -8,6 +8,7 @@
 #include <QPalette>
 #include <QProcess>
 #include <QSettings>
+#include <QStyleHints>
 
 #include <condition_variable>
 #include <cstdio>
@@ -37,7 +38,7 @@ bool parse_value(const QString &text, double &value) {
 }
 
 QFont mono_font(double pixels, bool bold) {
-    // JetBrains Mono ships inside the AppImage; "monospace" is the fontconfig fallback.
+    // JetBrains Mono ships inside the Flatpak; "monospace" is the fontconfig fallback.
     static const QString family = [] {
         return QFontDatabase::families().contains("JetBrains Mono") ? QString("JetBrains Mono") : QString("monospace");
     }();
@@ -86,8 +87,14 @@ static std::optional<QColor> kde_color(const QString &key) {
     return QColor(rgb[0].toInt(), rgb[1].toInt(), rgb[2].toInt());
 }
 
-// The AppImage carries no GTK/KDE platform theme plugin, so ask the desktop directly.
+// The desktop's light or dark preference: Qt reads it from the desktop portal (the Flatpak's way in);
+// otherwise ask the desktop directly.
 static bool desktop_prefers_dark() {
+    switch (QGuiApplication::styleHints()->colorScheme()) {
+        case Qt::ColorScheme::Dark: return true;
+        case Qt::ColorScheme::Light: return false;
+        default: break;
+    }
     QByteArray gtk = qgetenv("GTK_THEME").toLower();
     if (!gtk.isEmpty()) return gtk.contains("dark");
     QProcess gsettings;
@@ -344,7 +351,7 @@ LinkResult failure(ptz_session *session, const char *error) {
 void link_connect(CameraLink *link, const Settings &s, const QString &camera_password, const QString &ssh_password,
                   std::function<void(LinkResult, CameraInfo)> done) {
     link->cancel_ = 0;
-    // ssh runs this same executable as SSH_ASKPASS (inside an AppImage: its mounted copy).
+    // ssh runs this same executable as SSH_ASKPASS (inside the Flatpak: /app/bin/ptz-control).
     std::string askpass = QCoreApplication::applicationFilePath().toStdString();
     std::string cam_pw = camera_password.toStdString(), ssh_pw = ssh_password.toStdString();
     link->run([=]() mutable -> std::function<void()> {

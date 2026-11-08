@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.ptzcontrol.app</id>
+  <name>PTZ Control</name>
+  <summary>Absolute pan, tilt and zoom for ONVIF and Axis cameras</summary>
+  <developer id="io.github.dunkelherzmann">
+    <name>dunkelherzmann</name>
+  </developer>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <url type="homepage">https://github.com/dunkelherzmann/ptz-control</url>
+  <url type="bugtracker">https://github.com/dunkelherzmann/ptz-control/issues</url>
+  <description>
+    <p>Reads and sets absolute pan, tilt and zoom coordinates on ONVIF (Bosch, Milesight, …) and Axis VAPIX
+    cameras, either directly or through an SSH host.</p>
+  </description>
+  <launchable type="desktop-id">org.ptzcontrol.app.desktop</launchable>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>ptz-control</binary>
+  </provides>
+  <releases>
+    <release version="1.0.0" date="2026-11-08"/>
+  </releases>
+</component>

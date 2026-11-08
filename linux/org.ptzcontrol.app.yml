@@ -1,0 +1,52 @@
+# PTZ Control for Linux as a Flatpak. Build it on Linux with scripts/build-linux.sh, which runs
+#   flatpak run org.flatpak.Builder --user --force-clean <build-dir> linux/org.ptzcontrol.app.yml
+# after writing the version header (scripts/version.sh --header).
+id: org.ptzcontrol.app
+runtime: org.kde.Platform
+runtime-version: '6.11'
+sdk: org.kde.Sdk
+command: ptz-control
+finish-args:
+  - --share=ipc
+  - --share=network
+  # X11 (XWayland on Wayland desktops) first, as the app asks Qt for; native Wayland when no X server exists.
+  - --socket=x11
+  - --socket=wayland
+  - --device=dri
+  # SSH route: the runtime's ssh reads the user's keys, config and known_hosts, and can use their ssh-agent.
+  - --filesystem=~/.ssh
+  - --socket=ssh-auth
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - '*.a'
+modules:
+  # JetBrains Mono (SIL Open Font License 1.1), the app's monospace face.
+  - name: jetbrains-mono
+    buildsystem: simple
+    build-commands:
+      - install -Dm644 fonts/ttf/JetBrainsMono-Regular.ttf /app/share/ptz-control/fonts/JetBrainsMono-Regular.ttf
+      - install -Dm644 fonts/ttf/JetBrainsMono-Bold.ttf /app/share/ptz-control/fonts/JetBrainsMono-Bold.ttf
+      - install -Dm644 OFL.txt /app/share/licenses/org.ptzcontrol.app/JetBrainsMono-OFL.txt
+    sources:
+      - type: archive
+        url: https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip
+        sha256: 6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf
+        strip-components: 0
+
+  - name: ptz-control
+    buildsystem: simple
+    build-commands:
+      - sh linux/install.sh /app
+    sources:
+      # The whole repository: the Linux host builds the shared core.
+      - type: dir
+        path: ..
+        skip:
+          - .build
+          - .flatpak-builder
+          - .git
+          - .swiftpm
+          - dist
+          - macos
+          - legacy
