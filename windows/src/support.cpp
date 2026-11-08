@@ -1,4 +1,5 @@
 // Text helpers, themes, registry settings and the camera-link worker.
+#include <cstdlib>
 #include "app.h"
 
 #include <condition_variable>
@@ -135,7 +136,14 @@ Theme make_theme(Phosphor p) {
 
 // ---- settings ----------------------------------------------------------------
 
-static const wchar_t *kKey = L"Software\\PTZControl";
+// PTZ_SETTINGS_KEY (under HKCU) gives a test copy its own settings.
+static const wchar_t *settings_key() {
+    static const std::wstring key = [] {
+        const wchar_t *v = _wgetenv(L"PTZ_SETTINGS_KEY");
+        return std::wstring(v && *v ? v : L"Software\\PTZControl");
+    }();
+    return key.c_str();
+}
 
 static std::wstring reg_string(HKEY key, const wchar_t *name, const std::wstring &fallback) {
     wchar_t buffer[1024];
@@ -154,7 +162,7 @@ Settings Settings::load() {
     Settings s;
     if (const char *user = std::getenv("PTZ_USER")) s.camera_user = W(user);
     HKEY key;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, kKey, 0, KEY_READ, &key) != ERROR_SUCCESS) return s;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, settings_key(), 0, KEY_READ, &key) != ERROR_SUCCESS) return s;
     s.route = reg_int(key, L"Route", s.route) ? 1 : 0;
     s.vendor = reg_int(key, L"Vendor", s.vendor) ? 1 : 0;
     s.camera_host = reg_string(key, L"CameraHost", s.camera_host);
@@ -176,7 +184,7 @@ Settings Settings::load() {
 
 void Settings::save() const {
     HKEY key;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, kKey, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) != ERROR_SUCCESS)
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, settings_key(), 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) != ERROR_SUCCESS)
         return;
     auto put_string = [&](const wchar_t *name, const std::wstring &v) {
         RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE *>(v.c_str()),
