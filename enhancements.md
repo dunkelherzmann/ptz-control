@@ -27,7 +27,7 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [x] Mac (#10)
   - [x] Linux (#10)
   - [x] Windows (#11)
-- [x] **Saved logins have a Name,** so one username can be saved with different passwords (for example `cam1` and `cam2`, both `admin`). Lists show Name, Username and Password; the Name tells logins apart. *Requested 2026-11-08.* Mac, Linux and Windows. Done in #15.
+- [x] **Saved logins have a Name,** so one username can be saved with different passwords (for example `cam1` and `cam2`, both `admin`). Lists show Name, Username and Password; the Name tells logins apart. *Requested 2026-11-08.* Mac, Linux and Windows. Done in #15; released in [1.0.60](https://github.com/dunkelherzmann/ptz-control/releases/tag/v1.0.60).
   - [x] Mac (#15)
   - [x] Linux (#15)
   - [x] Windows (#15)
