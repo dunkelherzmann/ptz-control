@@ -1187,8 +1187,11 @@ private:
             QComboBox:disabled { color: %10; border-color: %11; }
             QComboBox QAbstractItemView { background: %20; color: %2; selection-background-color: %7;
                                           selection-color: %8; border: 1px solid %6; }
-            QCheckBox { color: %2; }
+            QCheckBox { color: %2; spacing: 6px; }
             QCheckBox:disabled { color: %15; }
+            QCheckBox::indicator { width: 12px; height: 12px; border: 1px solid %9; border-radius: 3px; background: %4; }
+            QCheckBox::indicator:checked { background: %7; border-color: %7; }
+            QCheckBox::indicator:disabled { border-color: %11; }
             QTableWidget { background: %4; alternate-background-color: %20; color: %5; gridline-color: %6;
                            border: 1px solid %6; selection-background-color: %7; selection-color: %8; }
             QHeaderView::section { background: %20; color: %3; border: none; border-right: 1px solid %6;
