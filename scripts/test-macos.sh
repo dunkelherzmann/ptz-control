@@ -39,13 +39,14 @@ VAULT="$WORK/logins.vault"
 printf 'PTZ Control logins 1\nplain\n' >"$VAULT"
 chmod 600 "$VAULT"
 
-# Run 1: typed login, Save login ticked.
+# Run 1: typed login, Save login ticked, saved as "cam1".
 defaults write "$TEST_ID" ConnectionSettings -data "$(settings admin)"
 rm -f "$OUT/macos.png"
 PTZ_VAULT_PATH="$VAULT" PTZ_PASSWORD=secret PTZ_SNAPSHOT_PATH="$OUT/macos.png" PTZ_SNAPSHOT_SAVE_LOGIN=1 \
+    PTZ_SNAPSHOT_LOGIN_NAME=cam1 \
     "$BIN" >"$WORK/app1.log" 2>&1 || true
 check "run 1 connected and moved" "$([ "$(moves)" -ge 1 ] && echo 0 || echo 1)"
-check "run 1 saved the camera login" "$(printf 'camera\tadmin\tsecret\n' | grep -qxF -f - "$VAULT" && echo 0 || echo 1)"
+check "run 1 saved the camera login" "$(printf 'camera\tcam1\tadmin\tsecret\n' | grep -qxF -f - "$VAULT" && echo 0 || echo 1)"
 check "the vault file is private (0600)" "$([ "$(stat -f %Lp "$VAULT")" = 600 ] && echo 0 || echo 1)"
 check "window picture saved" "$([ -s "$OUT/macos.png" ] && echo 0 || echo 1)"
 BEFORE="$(moves)"

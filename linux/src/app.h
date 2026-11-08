@@ -107,9 +107,11 @@ void link_disconnect(CameraLink *link, std::function<void()> done);
 enum class LoginStore { Ssh = 0, Camera = 1 };
 enum class VaultState { Unavailable, New, Plain, Locked, Unlocked };
 
-struct SavedLogin {  // a username and its password
-    QString user, password;
+struct SavedLogin {  // a name that tells it apart, a username and its password
+    QString name, user, password;
 };
+// Save login: asks what to call the login, suggesting `suggested`; empty when not saved.
+QString vault_ask_name(QWidget *parent, LoginStore store, const QString &user, const QString &suggested);
 
 class QPixmap;
 class QWidget;

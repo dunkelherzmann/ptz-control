@@ -709,7 +709,7 @@ private:
             box->addItem("Unlock Saved Logins…", kUnlock);
         } else {
             int i = 0;
-            for (const SavedLogin &l : vault_logins(store)) box->addItem(l.user, i++);
+            for (const SavedLogin &l : vault_logins(store)) box->addItem(l.name, i++);
         }
         box->insertSeparator(box->count());
         box->addItem("Manage Logins…", kManage);
@@ -751,6 +751,11 @@ private:
         login_chosen(box, item);
     }
 
+    // The name of the saved login a section's fields still hold, or `fallback`.
+    QString chosen_login_name(QComboBox *box, const QString &fallback) {
+        return box->currentData().toInt() >= 0 ? box->currentText() : fallback;
+    }
+
     void save_ticked_logins(std::vector<std::pair<SavedLogin, LoginStore>> saved) {
         save_cam_->setChecked(false);
         save_ssh_->setChecked(false);
@@ -760,7 +765,11 @@ private:
         } else {
             for (auto &[login, store] : saved) {
                 QString error, kind = store == LoginStore::Ssh ? "SSH" : "camera";
-                if (vault_save(login, store, -1, &error)) log_line("Saved " + kind + " login " + login.user + ".");
+                QString name = qEnvironmentVariable("PTZ_SNAPSHOT_LOGIN_NAME");  // test hook: the name a user would type
+                if (name.isEmpty()) name = vault_ask_name(this, store, login.user, login.name);
+                if (name.isEmpty()) continue;
+                login.name = name;
+                if (vault_save(login, store, -1, &error)) log_line("Saved " + kind + " login " + login.name + ".");
                 else log_line("Couldn't save the " + kind + " login: " + error, true);
             }
         }
@@ -833,9 +842,9 @@ private:
         // What Save login keeps once the connection has proved it.
         std::vector<std::pair<SavedLogin, LoginStore>> saved;
         if (save_cam_->isChecked())
-            saved.push_back({{s.camera_user, camera_password}, LoginStore::Camera});
+            saved.push_back({{chosen_login_name(cam_login_, s.camera_user), s.camera_user, camera_password}, LoginStore::Camera});
         if (s.route == 1 && save_ssh_->isChecked())
-            saved.push_back({{s.ssh_user, ssh_password}, LoginStore::Ssh});
+            saved.push_back({{chosen_login_name(ssh_login_, s.ssh_user), s.ssh_user, ssh_password}, LoginStore::Ssh});
         link_connect(link_, s, camera_password, s.route ? ssh_password : QString(), [this, saved](LinkResult result, CameraInfo info) {
             if (result.ok) {
                 info_ = info;

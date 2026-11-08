@@ -111,6 +111,10 @@ public:
         setWindowTitle(title);
         setMinimumWidth(400);
         bool ssh = store == LoginStore::Ssh;
+        name_ = new QLineEdit(login.name);
+        name_->setPlaceholderText(ssh ? "e.g. jump host" : "e.g. cam1");
+        name_->setFont(mono_font(13));
+        name_->setAccessibleName("Name");
         user_ = new QLineEdit(login.user);
         user_->setPlaceholderText(ssh ? "username" : "admin");
         user_->setFont(mono_font(13));
@@ -130,9 +134,10 @@ public:
             grid->addWidget(l, row, 0);
             grid->addWidget(w, row, 1);
         };
-        add(0, "Username", user_);
-        add(1, "Password", password_);
-        grid->addWidget(pw.show, 2, 1);
+        add(0, "Name", name_);
+        add(1, "Username", user_);
+        add(2, "Password", password_);
+        grid->addWidget(pw.show, 3, 1);
 
         auto *buttons = new QDialogButtonBox;
         QPushButton *save = buttons->addButton("Save", QDialogButtonBox::AcceptRole);
@@ -144,7 +149,7 @@ public:
         layout->addLayout(grid);
         layout->addWidget(note_);
         layout->addWidget(buttons);
-        user_->setFocus();
+        name_->setFocus();
     }
 
     ~LoginForm() override {
@@ -157,16 +162,16 @@ public:
 
 private:
     void try_accept() {
-        QString name = user_->text().trimmed();
-        if (name.isEmpty()) {
-            note_->setText("A username is required.");
+        QString name = name_->text().trimmed(), user = user_->text().trimmed();
+        if (name.isEmpty() || user.isEmpty()) {
+            note_->setText("A name and a username are required.");
             return;
         }
-        result = {name, password_->text()};
+        result = {name, user, password_->text()};
         accept();
     }
 
-    QLineEdit *user_, *password_;
+    QLineEdit *name_, *user_, *password_;
     QLabel *note_;
 };
 
@@ -206,8 +211,8 @@ public:
         lock_->setToolTip("Lock or unlock the saved logins with the Administrator Password.");
         done_->setToolTip("Close Manage Logins (Esc).");
 
-        table_ = new QTableWidget(0, 2);
-        table_->setHorizontalHeaderLabels({"Username", "Password"});
+        table_ = new QTableWidget(0, 3);
+        table_->setHorizontalHeaderLabels({"Name", "Username", "Password"});
         table_->setSelectionBehavior(QAbstractItemView::SelectRows);
         table_->setSelectionMode(QAbstractItemView::SingleSelection);
         table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -215,7 +220,8 @@ public:
         table_->horizontalHeader()->setStretchLastSection(true);
         table_->setAlternatingRowColors(true);
         table_->setAccessibleName("Saved logins");
-        table_->setColumnWidth(0, 320);
+        table_->setColumnWidth(0, 220);
+        table_->setColumnWidth(1, 220);
         table_->installEventFilter(this);
 
         status_ = new QLabel;
@@ -288,10 +294,12 @@ private:
         table_->setRowCount(static_cast<int>(logins_.size()));
         for (int r = 0; r < static_cast<int>(logins_.size()); ++r) {
             const SavedLogin &l = logins_[r];
-            auto *user = new QTableWidgetItem(l.user);
+            auto *name = new QTableWidgetItem(l.name), *user = new QTableWidgetItem(l.user);
+            name->setFont(mono_font(12));
             user->setFont(mono_font(12));
-            table_->setItem(r, 0, user);
-            table_->setItem(r, 1, new QTableWidgetItem(l.password.isEmpty() ? "—" : "••••••"));
+            table_->setItem(r, 0, name);
+            table_->setItem(r, 1, user);
+            table_->setItem(r, 2, new QTableWidgetItem(l.password.isEmpty() ? "—" : "••••••"));
         }
         if (keep >= 0 && keep < table_->rowCount()) table_->selectRow(keep);
         VaultState state = vault_state();
@@ -345,7 +353,7 @@ private:
         if (row < 0 || row >= static_cast<int>(logins_.size()) ||
             (state != VaultState::Plain && state != VaultState::Unlocked))
             return;
-        QMessageBox box(QMessageBox::Warning, "Delete login", "Delete the login " + logins_[row].user + "?",
+        QMessageBox box(QMessageBox::Warning, "Delete login", "Delete the login " + logins_[row].name + "?",
                         QMessageBox::NoButton, this);
         box.setInformativeText(QString("This removes it from the saved ") +
                                (store() == LoginStore::Ssh ? "SSH" : "camera") + " logins.");
@@ -387,16 +395,16 @@ std::vector<SavedLogin> vault_logins(LoginStore store) {
     for (size_t i = 0; i < count; ++i) {
         ptz_login l{};
         if (!ptz_vault_login(vault().handle, to_store(store), i, &l)) continue;
-        out.push_back({QString::fromUtf8(l.user), QString::fromUtf8(l.password)});
+        out.push_back({QString::fromUtf8(l.name), QString::fromUtf8(l.user), QString::fromUtf8(l.password)});
     }
     return out;
 }
 
 bool vault_save(const SavedLogin &login, LoginStore store, int replacing, QString *error, int *index) {
-    QByteArray user = login.user.toUtf8(), password = login.password.toUtf8();
+    QByteArray name = login.name.toUtf8(), user = login.user.toUtf8(), password = login.password.toUtf8();
     long result = -1;
     bool ok = call(error, [&](char *buffer, size_t size) {
-        ptz_login l{user.constData(), password.constData()};
+        ptz_login l{name.constData(), user.constData(), password.constData()};
         result = ptz_vault_save(vault().handle, to_store(store), replacing, &l, buffer, size);
         return result >= 0;
     });
@@ -422,6 +430,37 @@ void vault_lock() {
 }
 
 void vault_subscribe(QObject *owner, std::function<void()> fn) { vault().listeners.push_back({owner, std::move(fn)}); }
+
+QString vault_ask_name(QWidget *parent, LoginStore store, const QString &user, const QString &suggested) {
+    bool ssh = store == LoginStore::Ssh;
+    QString note = QString("Name the ") + (ssh ? "SSH" : "camera") + " login for " + user +
+                   ", to find it in the Login menu. A saved login with the same name is updated.";
+    QString name = suggested;
+    while (true) {
+        QDialog dialog(parent);
+        dialog.setWindowTitle(ssh ? "Save SSH Login" : "Save Camera Login");
+        auto *text = new QLabel(note);
+        text->setWordWrap(true);
+        auto *field = new QLineEdit(name);
+        field->setPlaceholderText(ssh ? "e.g. jump host" : "e.g. cam1");
+        field->setAccessibleName("Login name");
+        auto *buttons = new QDialogButtonBox;
+        buttons->addButton("Save", QDialogButtonBox::AcceptRole)->setDefault(true);
+        buttons->addButton("Don't Save", QDialogButtonBox::RejectRole);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        auto *layout = new QVBoxLayout(&dialog);
+        layout->addWidget(text);
+        layout->addWidget(field);
+        layout->addWidget(buttons);
+        dialog.setMinimumWidth(420);
+        field->selectAll();
+        if (dialog.exec() != QDialog::Accepted) return {};
+        name = field->text().trimmed();
+        if (!name.isEmpty()) return name;
+        note = "Enter a name, or Don't Save.";
+    }
+}
 
 bool vault_unlock_dialog(QWidget *parent) {
     QString note = "Enter the Administrator Password to use your saved SSH and camera logins.";

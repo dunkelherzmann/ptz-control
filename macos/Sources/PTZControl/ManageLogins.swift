@@ -57,7 +57,7 @@ import AppKit
         storeControl.setToolTip("Saved SSH usernames and passwords", forSegment: 0)
         storeControl.setToolTip("Saved camera usernames and passwords", forSegment: 1)
 
-        for (title, width) in [("Username", 300.0), ("Password", 200.0)] {
+        for (title, width) in [("Name", 200.0), ("Username", 200.0), ("Password", 140.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(title))
             column.title = title
             column.width = width
@@ -154,7 +154,11 @@ import AppKit
 
     func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
         let l = logins[row]
-        let text = column?.identifier.rawValue == "Username" ? l.user : (l.password.isEmpty ? "—" : "••••••")
+        let text = switch column?.identifier.rawValue {
+        case "Name": l.name
+        case "Username": l.user
+        default: l.password.isEmpty ? "—" : "••••••"
+        }
         let cell = NSTextField(labelWithString: text)
         cell.font = column?.identifier.rawValue == "Password" ? .systemFont(ofSize: 12) : Fonts.mono(12)
         cell.lineBreakMode = .byTruncatingTail
@@ -265,8 +269,9 @@ final class LoginTable: NSTableView {
     }
 }
 
-/// The New and Edit form: username and password, with Show password.
+/// The New and Edit form: name, username and password, with Show password.
 @MainActor final class LoginFormView: NSGridView {
+    let name = NSTextField()
     let user = NSTextField()
     let secureField = NSSecureTextField()
     let plainField = NSTextField()
@@ -276,15 +281,17 @@ final class LoginTable: NSTableView {
     init(_ login: LoginVault.Login, store: LoginVault.Store) {
         toggle = ShowPasswordToggle(hidden: secureField, shown: plainField)
         super.init(frame: .zero)
+        name.stringValue = login.name
         user.stringValue = login.user
         password = login.password
+        name.placeholderString = store == .ssh ? "e.g. jump host" : "e.g. cam1"
         user.placeholderString = store == .ssh ? "username" : "admin"
         secureField.placeholderString = store == .ssh ? "blank for keys / agent" : "camera password"
         plainField.placeholderString = secureField.placeholderString
         show.toolTip = "Show password — Shows the saved password as text while this form is open."
         show.target = toggle
         show.action = #selector(ShowPasswordToggle.flip(_:))
-        for (field, label) in [(user, "Username"), (secureField, "Password"), (plainField, "Password")] {
+        for (field, label) in [(name, "Name"), (user, "Username"), (secureField, "Password"), (plainField, "Password")] {
             field.font = Fonts.mono(12)
             field.usesSingleLineMode = true
             field.setAccessibilityLabel(label)
@@ -293,14 +300,16 @@ final class LoginTable: NSTableView {
         }
         plainField.isHidden = true
         func label(_ text: String) -> NSTextField { NSTextField(labelWithString: text) }
+        addRow(with: [label("Name"), name])
         addRow(with: [label("Username"), user])
         addRow(with: [label("Password"), NSStackView(views: [secureField, plainField])])
         addRow(with: [NSGridCell.emptyContentView, show])
         rowSpacing = 8
         columnSpacing = 8
         column(at: 0).xPlacement = .trailing
+        name.nextKeyView = user
         user.nextKeyView = secureField
-        secureField.nextKeyView = user
+        secureField.nextKeyView = name
         frame = NSRect(origin: .zero, size: fittingSize)
     }
 
@@ -313,9 +322,10 @@ final class LoginTable: NSTableView {
 
     /// The login as entered, or the reason it can't be saved.
     func login() -> Result<LoginVault.Login, LinkError> {
-        let name = user.stringValue.trimmingCharacters(in: .whitespaces)
-        if name.isEmpty { return .failure(LinkError(message: "A username is required.")) }
-        return .success(LoginVault.Login(user: name, password: password))
+        let title = name.stringValue.trimmingCharacters(in: .whitespaces)
+        let account = user.stringValue.trimmingCharacters(in: .whitespaces)
+        if title.isEmpty || account.isEmpty { return .failure(LinkError(message: "A name and a username are required.")) }
+        return .success(LoginVault.Login(name: title, user: account, password: password))
     }
 }
 
@@ -331,7 +341,7 @@ final class LoginTable: NSTableView {
             alert.addButton(withTitle: "Save")
             alert.addButton(withTitle: "Cancel")
             alert.accessoryView = form
-            alert.window.initialFirstResponder = form.user
+            alert.window.initialFirstResponder = form.name
             NSApp.activate()
             guard alert.runModal() == .alertFirstButtonReturn else { return nil }
             switch form.login() {

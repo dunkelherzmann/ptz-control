@@ -139,9 +139,11 @@ void instruments_set_theme(const Theme &theme, UINT dpi);
 enum class LoginStore { Ssh = 0, Camera = 1 };
 enum class VaultState { Unavailable, New, Plain, Locked, Unlocked };
 
-struct SavedLogin {  // a username and its password
-    std::wstring user, password;
+struct SavedLogin {  // a name that tells it apart, a username and its password
+    std::wstring name, user, password;
 };
+// Save login: asks what to call the login, suggesting `suggested`; empty when not saved.
+std::wstring vault_ask_name(HWND owner, LoginStore store, const std::wstring &user, const std::wstring &suggested);
 
 VaultState vault_state();
 std::wstring vault_open_error();

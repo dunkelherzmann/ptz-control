@@ -291,27 +291,30 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
 
 ## 17. Saved logins
 
-- **P1 Two stores of usernames and passwords.** Saved SSH logins and saved camera logins are each just a username and
-  its password; hosts, addresses, ports and key files aren't saved (they stay in the remembered settings, F7). The two
-  lists are kept apart: any SSH login can be used with any camera login, and the Local route needs no SSH login. A
-  login with the same username replaces the older one. Lists are sorted by username.
+- **P1 Two stores of named logins.** Saved SSH logins and saved camera logins are each a **name**, a username and its
+  password, so one username can be saved with different passwords (for example `cam1` and `cam2`, both `admin`).
+  Hosts, addresses, ports and key files aren't saved (they stay in the remembered settings, F7). The two lists are kept
+  apart: any SSH login can be used with any camera login, and the Local route needs no SSH login. Names are unique
+  within a list, ignoring case; a login with the same name replaces the older one. Lists are sorted by name. A file
+  saved before names existed opens with each login named after its username.
 - **P2 One file, one Administrator Password.** The core keeps both lists in one file, `logins.vault` (on the Mac in
   `~/Library/Application Support/PTZControl/`, mode 0600), in the same format on every platform; it's replaced
   atomically on each change. With an Administrator Password the whole file is encrypted with XChaCha20-Poly1305
   (Monocypher) under a key derived from the password with Argon2id (64 MiB, 3 passes, random 16-byte salt), so the
-  usernames are hidden too. The Administrator Password itself is never stored and can't be recovered. Without one,
+  names and usernames are hidden too. The Administrator Password itself is never stored and can't be recovered. Without one,
   logins are plain text, only by explicit choice. The macOS Keychain isn't used.
 - **P3 Locked at launch.** An encrypted vault is unlocked once per session, when first needed: Unlock Saved Logins…
   in a Login menu, or opening Manage Logins. "Unlock Saved Logins" asks for the Administrator Password, with Unlock and
   Cancel; a wrong one says so and asks again.
 - **P4 Login menus.** A **Login** pop-up heads the SSH host fields and the Camera fields: "Type a login", the saved
-  usernames, and Manage Logins… (while locked, Unlock Saved Logins… in place of the list). Choosing a login fills that
+  logins by name, and Manage Logins… (while locked, Unlock Saved Logins… in place of the list). Choosing a login fills that
   section's Username and Password; typing in either returns the menu to "Type a login". Hover: "SSH login — Fill the
   SSH username and password from a saved SSH login, or open Manage Logins (⇧⌘L)." and "Camera login — Fill the camera
   username and password from a saved camera login, or open Manage Logins (⇧⌘L)."
-- **P5 Save login.** A checkbox under each section's password, off at first. Once the connection succeeds, the
-  ticked logins' usernames and passwords are saved, the event buffer says "Saved camera login admin." (or SSH), and
-  the boxes clear. A failed connection saves nothing. Hover: "Save login — Once connected, save this camera username
+- **P5 Save login.** A checkbox under each section's password, off at first. Once the connection succeeds, "Save Camera
+  Login" (or SSH) asks for the login's name, suggesting the name of the login chosen in the Login menu or else the
+  username, with Save and Don't Save; saving under an existing name updates that login. The event buffer says "Saved
+  camera login cam1." (or SSH), and the boxes clear. A failed connection saves nothing. Hover: "Save login — Once connected, save this camera username
   and password to the saved camera logins." (and the same for SSH).
 - **P6 First save.** While nothing has ever been saved, saving asks "Protect Saved Logins": it explains that an
   Administrator Password encrypts saved logins, is asked once per launch and can't be recovered, and that plain text
@@ -319,9 +322,9 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
   Now** and **Store as Plain Text…**, which asks again with Cancel as the default. Nothing is saved until one is
   chosen.
 - **P7 Manage Logins** (Camera ▸ Manage Logins…, ⇧⌘L, or the Login menus) is a window with **SSH Logins** and
-  **Camera Logins**, each a list of usernames with a hidden password.
-  - **New…**, **Edit…** (or double-click) open a form with Username, Password and **Show password**; a username is
-    required.
+  **Camera Logins**, each a list with the columns Name, Username and Password (hidden).
+  - **New…**, **Edit…** (or double-click) open a form with Name, Username, Password and **Show password**; a name and
+    a username are required.
   - **Delete** (or ⌫) removes the selected login after a confirmation whose default is Cancel.
   - **Lock** locks the saved logins again; **Unlock…** asks for the Administrator Password.
   - **Create Administrator Password…** (or **Change Administrator Password…** once one is set) asks for the new one

@@ -36,15 +36,15 @@ int main(int argc, char **argv) {
 
     ptz_vault *v = ptz_vault_open(path, error, sizeof error);
     CHECK(v && ptz_vault_get_state(v) == PTZ_VAULT_NEW);
-    ptz_login ssh = {"op", "ssh\tsecret\nline"};
+    ptz_login ssh = {"jump", "op", "ssh\tsecret\nline"};
     CHECK(ptz_vault_save(v, PTZ_STORE_SSH, -1, &ssh, error, sizeof error) == -1); /* no choice made yet */
 
     /* Plain text by choice. */
     CHECK(ptz_vault_set_admin_password(v, NULL, error, sizeof error));
     CHECK(ptz_vault_get_state(v) == PTZ_VAULT_PLAIN);
     CHECK(ptz_vault_save(v, PTZ_STORE_SSH, -1, &ssh, error, sizeof error) == 0);
-    ptz_login cam1 = {"admin", "cam-one"};
-    ptz_login cam2 = {"viewer", "cam-two"};
+    ptz_login cam1 = {"admin", "admin", "cam-one"};
+    ptz_login cam2 = {"viewer", "viewer", "cam-two"};
     CHECK(ptz_vault_save(v, PTZ_STORE_CAMERA, -1, &cam2, error, sizeof error) == 0);
     CHECK(ptz_vault_save(v, PTZ_STORE_CAMERA, -1, &cam1, error, sizeof error) == 0); /* sorted: admin first */
     CHECK(ptz_vault_count(v, PTZ_STORE_SSH) == 1 && ptz_vault_count(v, PTZ_STORE_CAMERA) == 2);
@@ -64,14 +64,14 @@ int main(int argc, char **argv) {
           strcmp(got.password, "ssh\tsecret\nline") == 0);
 
     /* The same username replaces; editing an index renames it and replaces a clash. */
-    ptz_login ssh2 = {"op", "new"};
+    ptz_login ssh2 = {"Jump", "op", "new"}; /* the same name, other case */
     CHECK(ptz_vault_save(v, PTZ_STORE_SSH, -1, &ssh2, error, sizeof error) == 0);
     CHECK(ptz_vault_count(v, PTZ_STORE_SSH) == 1);
-    ptz_login cam3 = {"quinn", "cam-three"};
+    ptz_login cam3 = {"quinn", "quinn", "cam-three"};
     CHECK(ptz_vault_save(v, PTZ_STORE_CAMERA, 1, &cam3, error, sizeof error) == 1); /* viewer -> quinn, sorted after admin */
     CHECK(ptz_vault_count(v, PTZ_STORE_CAMERA) == 2);
     CHECK(ptz_vault_login(v, PTZ_STORE_CAMERA, 0, &got) && strcmp(got.user, "admin") == 0);
-    ptz_login bad = {"  ", "x"};
+    ptz_login bad = {"x", "  ", "x"};
     CHECK(ptz_vault_save(v, PTZ_STORE_SSH, -1, &bad, error, sizeof error) == -1);
 
     /* Encrypt: nothing readable on disk, locked on the next open. */
@@ -124,6 +124,27 @@ int main(int argc, char **argv) {
     fclose(f);
     CHECK(ptz_vault_open(path, error, sizeof error) == NULL && error[0]);
     CHECK(strcmp(slurp(path), "something else\n") == 0);
+    remove(path);
+
+    /* One username, two names; and a file written before names existed. */
+    v = ptz_vault_open(path, error, sizeof error);
+    CHECK(ptz_vault_set_admin_password(v, NULL, error, sizeof error));
+    ptz_login named1 = {"cam1", "admin", "password"}, named2 = {"cam2", "admin", "password2"};
+    CHECK(ptz_vault_save(v, PTZ_STORE_CAMERA, -1, &named2, error, sizeof error) == 0);
+    CHECK(ptz_vault_save(v, PTZ_STORE_CAMERA, -1, &named1, error, sizeof error) == 0);
+    CHECK(ptz_vault_count(v, PTZ_STORE_CAMERA) == 2);
+    CHECK(ptz_vault_login(v, PTZ_STORE_CAMERA, 1, &got) && strcmp(got.name, "cam2") == 0 &&
+          strcmp(got.user, "admin") == 0 && strcmp(got.password, "password2") == 0);
+    ptz_login unnamed = {"", "admin", "x"};
+    CHECK(ptz_vault_save(v, PTZ_STORE_CAMERA, -1, &unnamed, error, sizeof error) == -1);
+    ptz_vault_free(v);
+    f = fopen(path, "wb");
+    fputs("PTZ Control logins 1\nplain\ncamera\tadmin\told\n", f);
+    fclose(f);
+    v = ptz_vault_open(path, error, sizeof error);
+    CHECK(v && ptz_vault_login(v, PTZ_STORE_CAMERA, 0, &got) && strcmp(got.name, "admin") == 0 &&
+          strcmp(got.user, "admin") == 0 && strcmp(got.password, "old") == 0);
+    ptz_vault_free(v);
     remove(path);
 
     if (failures) {

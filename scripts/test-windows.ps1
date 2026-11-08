@@ -86,9 +86,9 @@ try {
     Settings 'admin'
     $shot = Join-Path $Out 'windows.png'
     Remove-Item $shot -ErrorAction SilentlyContinue
-    RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PATH = $shot; PTZ_SNAPSHOT_SAVE_LOGIN = '1' }
+    RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PATH = $shot; PTZ_SNAPSHOT_SAVE_LOGIN = '1'; PTZ_SNAPSHOT_LOGIN_NAME = 'cam1' }
     Check 'run 1 connected and moved' ((Moves) -ge 1)
-    Check 'run 1 saved the camera login' ((Get-Content $vault) -contains "camera`tadmin`tsecret")
+    Check 'run 1 saved the camera login' ((Get-Content $vault) -contains "camera`tcam1`tadmin`tsecret")
     Check 'window picture drawn' (Drawn $shot)
     $before = Moves
 
