@@ -1,9 +1,9 @@
 import AppKit
 import PTZCore
 
-/// Sidebar form: route, vendor, SSH host and camera credentials. Passwords
-/// are held in the fields only and never written to disk.
-final class ConnectionPanel: NSView, Themed {
+/// Sidebar form: route, vendor, SSH host and camera credentials. Passwords are
+/// held in the fields, and written only to the login vault when Save login is ticked.
+final class ConnectionPanel: NSView, Themed, NSTextFieldDelegate {
     let routeControl = NSSegmentedControl(labels: ["Local", "SSH Host"], trackingMode: .selectOne, target: nil, action: nil)
     let vendorControl = NSSegmentedControl(labels: ["Bosch/Milesight", "Axis"], trackingMode: .selectOne, target: nil, action: nil)
     let sshHost = NSTextField()
@@ -18,6 +18,10 @@ final class ConnectionPanel: NSView, Themed {
     let httpsPort = NSTextField()
     let profile = NSTextField()
     let timeout = NSTextField()
+    let sshLogin = NSPopUpButton(frame: .zero, pullsDown: false)
+    let cameraLogin = NSPopUpButton(frame: .zero, pullsDown: false)
+    let saveSSH = NSButton(checkboxWithTitle: "Save login", target: nil, action: nil)
+    let saveCamera = NSButton(checkboxWithTitle: "Save login", target: nil, action: nil)
     let connectButton = NSButton(title: "Connect", target: nil, action: nil)
     let message = NSTextField(wrappingLabelWithString: "")
 
@@ -30,6 +34,7 @@ final class ConnectionPanel: NSView, Themed {
     private var messageIsError = false
 
     var onConnect: (() -> Void)?
+    var onManageLogins: (() -> Void)?
 
     init() {
         super.init(frame: .zero)
@@ -68,6 +73,24 @@ final class ConnectionPanel: NSView, Themed {
             field.contentType = nil
             field.isAutomaticTextCompletionEnabled = false
         }
+        for field in [sshHost, sshUser, sshPassword, sshPort, sshKey, cameraHost, cameraPort, cameraUser, cameraPassword] {
+            field.delegate = self
+        }
+        for popup in [sshLogin, cameraLogin] {
+            popup.autoenablesItems = false
+            popup.target = self
+            popup.action = #selector(loginChosen(_:))
+            popup.font = .systemFont(ofSize: 12)
+        }
+        sshLogin.toolTip = "SSH login — Fill the SSH fields from a saved SSH login, or open Manage Logins (⇧⌘L)."
+        cameraLogin.toolTip = "Camera login — Fill the camera fields from a saved camera login, or open Manage Logins (⇧⌘L)."
+        sshLogin.setAccessibilityLabel("Saved SSH login")
+        cameraLogin.setAccessibilityLabel("Saved camera login")
+        saveSSH.toolTip = "Save login — Once connected, save this SSH host, username, password and key file to the saved SSH logins."
+        saveCamera.toolTip = "Save login — Once connected, save this camera address, username and password to the saved camera logins."
+        saveSSH.setAccessibilityLabel("Save this SSH login")
+        saveCamera.setAccessibilityLabel("Save this camera login")
+        for box in [saveSSH, saveCamera] { box.font = .systemFont(ofSize: 12) }
 
         let stack = NSStackView()
         stack.orientation = .vertical
@@ -102,20 +125,22 @@ final class ConnectionPanel: NSView, Themed {
         let routeCaption = caption("Route")
         let vendorCaption = caption("Camera vendor")
         let sshCaption = caption("SSH host")
-        sshRows = [sshCaption, row("Host", sshHost), row("Username", sshUser), row("Password", sshPassword), row("Port", sshPort), row("Key file", sshKey)]
+        sshRows = [sshCaption, row("Login", sshLogin), row("Host", sshHost), row("Username", sshUser),
+                   row("Password", sshPassword), row("Port", sshPort), row("Key file", sshKey), row("", saveSSH)]
         let advancedRow = NSStackView(views: [advancedToggle, caption("Advanced")])
         advancedRow.spacing = 2
         advancedRows = [row("HTTPS port", httpsPort), row("Profile", profile), row("Timeout (s)", timeout)]
 
         let views: [NSView] = [routeCaption, routeControl, spacer(4), vendorCaption, vendorControl, vendorNote, spacer(4)]
-            + sshRows + [spacer(4), caption("Camera"), row("Address", cameraHost), row("HTTP port", cameraPort),
-                         row("Username", cameraUser), row("Password", cameraPassword), spacer(2), advancedRow]
+            + sshRows + [spacer(4), caption("Camera"), row("Login", cameraLogin), row("Address", cameraHost),
+                         row("HTTP port", cameraPort), row("Username", cameraUser), row("Password", cameraPassword),
+                         row("", saveCamera), spacer(2), advancedRow]
             + advancedRows + [spacer(8), connectButton, message]
         for view in views { stack.addArrangedSubview(view) }
         for view in [routeControl, vendorControl, connectButton, message, vendorNote] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
-        for view in sshRows + advancedRows + [cameraHost, cameraPort, cameraUser, cameraPassword].map({ $0.superview! }) {
+        for view in sshRows + advancedRows + [cameraLogin, cameraHost, cameraPort, cameraUser, cameraPassword, saveCamera].map({ $0.superview! }) {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
         vendorNote.font = .systemFont(ofSize: 11)
@@ -130,6 +155,10 @@ final class ConnectionPanel: NSView, Themed {
             stack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
         ])
         advancedRows.forEach { $0.isHidden = true }
+        reloadLogins()
+        NotificationCenter.default.addObserver(forName: LoginVault.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reloadLogins() }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -194,8 +223,9 @@ final class ConnectionPanel: NSView, Themed {
     }
 
     func setEditable(_ editable: Bool) {
-        for control in [routeControl, vendorControl, sshHost, sshUser, sshPassword, sshPort, sshKey, cameraHost, cameraPort,
-                        cameraUser, cameraPassword, httpsPort, profile, timeout] as [NSControl] {
+        for control in [routeControl, vendorControl, sshLogin, sshHost, sshUser, sshPassword, sshPort, sshKey, saveSSH,
+                        cameraLogin, cameraHost, cameraPort, cameraUser, cameraPassword, saveCamera, httpsPort, profile,
+                        timeout] as [NSControl] {
             control.isEnabled = editable
         }
     }
@@ -229,6 +259,90 @@ final class ConnectionPanel: NSView, Themed {
     }
 
     @objc private func connect() { onConnect?() }
+
+    // MARK: Saved logins
+
+    private enum LoginItem: Int { case typed = -1, manage = -2, unlock = -3 }
+
+    /// Lists the saved logins in both pop-ups, keeping the chosen login where it still exists.
+    func reloadLogins() {
+        fill(sshLogin, .ssh)
+        fill(cameraLogin, .camera)
+    }
+
+    private func fill(_ popup: NSPopUpButton, _ store: LoginVault.Store) {
+        let previous = popup.selectedTag() >= 0 ? popup.titleOfSelectedItem : nil
+        let vault = LoginVault.shared
+        popup.removeAllItems()
+        popup.addItem(withTitle: "Type a login")
+        popup.lastItem?.tag = LoginItem.typed.rawValue
+        switch vault.state {
+        case .unavailable:
+            popup.addItem(withTitle: "Saved logins unavailable")
+            popup.lastItem?.isEnabled = false
+            popup.lastItem?.toolTip = vault.openError
+        case .locked:
+            popup.addItem(withTitle: "Unlock Saved Logins…")
+            popup.lastItem?.tag = LoginItem.unlock.rawValue
+        default:
+            for (index, login) in vault.logins(store).enumerated() {
+                popup.addItem(withTitle: login.label)
+                popup.lastItem?.tag = index
+            }
+        }
+        popup.menu?.addItem(.separator())
+        popup.addItem(withTitle: "Manage Logins…")
+        popup.lastItem?.tag = LoginItem.manage.rawValue
+        popup.lastItem?.isEnabled = vault.state != .unavailable
+        if let previous, popup.indexOfItem(withTitle: previous) >= 0 { popup.selectItem(withTitle: previous) } else { popup.selectItem(at: 0) }
+    }
+
+    @objc private func loginChosen(_ popup: NSPopUpButton) {
+        let store: LoginVault.Store = popup === sshLogin ? .ssh : .camera
+        let tag = popup.selectedTag()
+        switch tag {
+        case LoginItem.manage.rawValue:
+            popup.selectItem(at: 0)
+            onManageLogins?()
+        case LoginItem.unlock.rawValue:
+            popup.selectItem(at: 0)
+            if VaultPrompts.unlock() { popup.performClick(nil) }
+        case LoginItem.typed.rawValue: break
+        default:
+            let logins = LoginVault.shared.logins(store)
+            guard tag < logins.count else { return }
+            let login = logins[tag]
+            if store == .ssh {
+                sshHost.stringValue = login.host
+                sshPort.stringValue = String(login.port)
+                sshUser.stringValue = login.user
+                sshPassword.stringValue = login.password
+                sshKey.stringValue = login.keyFile
+            } else {
+                cameraHost.stringValue = login.host
+                cameraPort.stringValue = String(login.port)
+                cameraUser.stringValue = login.user
+                cameraPassword.stringValue = login.password
+            }
+        }
+    }
+
+    /// Chooses a saved login as if picked from the pop-up (used by the snapshot test hook).
+    func chooseSavedLogin(_ store: LoginVault.Store, index: Int) {
+        let popup = store == .ssh ? sshLogin : cameraLogin
+        guard popup.selectItem(withTag: index) else { return }
+        loginChosen(popup)
+    }
+
+    /// Typing in a login's fields means it's no longer the saved one.
+    func controlTextDidChange(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField else { return }
+        if [sshHost, sshUser, sshPassword, sshPort, sshKey].contains(where: { $0 === field }) {
+            sshLogin.selectItem(at: 0)
+        } else {
+            cameraLogin.selectItem(at: 0)
+        }
+    }
 
     @objc private func fieldAction(_ sender: NSTextField) {
         // Return in the last field connects; elsewhere it moves on.

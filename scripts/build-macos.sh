@@ -11,9 +11,13 @@ BUILD="$ROOT/.build"
 cd "$ROOT"
 for arch in arm64 x86_64; do
     printf 'Building %s…\n' "$arch"
-    swift build -c release --triple "$arch-apple-macosx14.0" --scratch-path "$BUILD/$arch" 2>&1 \
-        | grep -v "search path .* not found" || true
-    [ -x "$BUILD/$arch/release/PTZControl" ] || { printf 'Build failed for %s\n' "$arch" >&2; exit 1; }
+    # Check swift's own status: a failed build leaves the previous binary in place.
+    mkdir -p "$BUILD"
+    STATUS=0
+    swift build -c release --triple "$arch-apple-macosx14.0" --scratch-path "$BUILD/$arch" >"$BUILD/build-$arch.log" 2>&1 \
+        || STATUS=$?
+    grep -v "search path .* not found" "$BUILD/build-$arch.log" || true
+    [ "$STATUS" = 0 ] || { printf 'Build failed for %s\n' "$arch" >&2; exit 1; }
 done
 
 rm -rf "$APP"

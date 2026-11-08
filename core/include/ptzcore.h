@@ -96,6 +96,54 @@ int ptz_web_url(ptz_session *session, char *url, size_t url_size,
 int ptz_link_alive(ptz_session *session);
 void ptz_close(ptz_session *session);
 
+/* ---- Login vault ------------------------------------------------------------
+ * Saved SSH logins and saved camera logins: two independent stores in one file,
+ * both unlocked by the same Administrator Password. Without one, logins are kept
+ * as plain text, which needs the operator's explicit choice. Vault calls are
+ * quick except unlocking and setting the Administrator Password, which derive a
+ * key (about a second); hosts may call them from the UI thread or a worker, but
+ * never from two threads at once. */
+typedef enum { PTZ_STORE_SSH = 0, PTZ_STORE_CAMERA = 1 } ptz_store;
+
+typedef enum {
+    PTZ_VAULT_NEW = 0,      /* nothing saved yet: ask how to keep logins */
+    PTZ_VAULT_PLAIN = 1,    /* kept as plain text, by the operator's choice */
+    PTZ_VAULT_LOCKED = 2,   /* encrypted, needs the Administrator Password */
+    PTZ_VAULT_UNLOCKED = 3, /* encrypted, open for this session */
+} ptz_vault_state;
+
+typedef struct {
+    const char *host;      /* SSH host, or camera address */
+    int port;              /* SSH port, or camera HTTP port */
+    const char *user;
+    const char *password;  /* may be empty */
+    const char *key_file;  /* SSH logins only; empty for none */
+} ptz_login;
+
+typedef struct ptz_vault ptz_vault;
+
+/* Opens the vault file at `path` (a missing file is a new vault). Returns NULL
+ * and fills `error` when the file can't be read; it is then left untouched. */
+ptz_vault *ptz_vault_open(const char *path, char *error, size_t error_size);
+void ptz_vault_free(ptz_vault *vault);
+ptz_vault_state ptz_vault_get_state(const ptz_vault *vault);
+/* Returns 1 once the logins are readable; a wrong password returns 0. */
+int ptz_vault_unlock(ptz_vault *vault, const char *admin_password, char *error, size_t error_size);
+void ptz_vault_lock(ptz_vault *vault);
+/* Creates or changes the Administrator Password and re-encrypts every login, or
+ * with NULL or "" removes it and keeps the logins as plain text. Not while locked. */
+int ptz_vault_set_admin_password(ptz_vault *vault, const char *admin_password, char *error, size_t error_size);
+/* Logins are sorted by host, username and port; none are listed while locked. */
+size_t ptz_vault_count(const ptz_vault *vault, ptz_store store);
+/* The strings stay valid until the vault next changes, locks or is freed. */
+int ptz_vault_login(const ptz_vault *vault, ptz_store store, size_t index, ptz_login *login);
+/* Replaces the login at `index`, or with index -1 adds one. A login with the same
+ * host (ignoring case), port and username is replaced. Writes the file and
+ * returns the login's new index, or -1 with `error` filled. */
+long ptz_vault_save(ptz_vault *vault, ptz_store store, long index, const ptz_login *login, char *error,
+                    size_t error_size);
+int ptz_vault_remove(ptz_vault *vault, ptz_store store, size_t index, char *error, size_t error_size);
+
 /* Hosts call this from main() when PTZ_ASKPASS_SOCKET is set, then exit with
  * its result. It relays an ssh prompt to the session that spawned ssh. */
 int ptz_askpass_main(int argc, char **argv);

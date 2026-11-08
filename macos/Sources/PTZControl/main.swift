@@ -10,6 +10,7 @@ MainActor.assumeIsolated {
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
-    app.setActivationPolicy(.regular)
+    // A snapshot test copy stays out of the Dock and never takes focus.
+    app.setActivationPolicy(ProcessInfo.processInfo.environment["PTZ_SNAPSHOT_PATH"] == nil ? .regular : .prohibited)
     withExtendedLifetime(delegate) { app.run() }
 }

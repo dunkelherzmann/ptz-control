@@ -69,6 +69,9 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         applyTheme()
         if window.frame.origin == .zero { window.center() }
         eventLog.append("PTZ Control ready · core \(String(cString: ptz_core_version()))")
+        if let error = LoginVault.shared.openError {
+            eventLog.append("Saved logins are unavailable: \(error)", warning: true)
+        }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -84,6 +87,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
 
         let sidebar = PanelView(caption: "Secure link configuration", content: connection)
         connection.onConnect = { [weak self] in self?.toggleConnection() }
+        connection.onManageLogins = { ManageLoginsWindowController.shared.present() }
 
         headerTitle.font = .systemFont(ofSize: 17, weight: .semibold)
         headerUnits.font = .systemFont(ofSize: 12)
@@ -289,6 +293,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
                     self.eventLog.append("  \(axis) range: " + (range.map { "\(format($0.min)) … \(format($0.max))" } ?? "not advertised"))
                 }
                 self.refresh()
+                self.saveTickedLogins(s, cameraPassword: cameraPassword, sshPassword: sshPassword)
             case .failure(let error):
                 self.state = .idle
                 self.connection.show(message: error.message, error: true)
@@ -296,6 +301,34 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             }
             self.updateControls()
         }
+    }
+
+    /// Saves the logins whose Save login box is ticked, once the connection has proved them.
+    private func saveTickedLogins(_ s: ConnectionSettings, cameraPassword: String, sshPassword: String) {
+        var wanted: [(LoginVault.Login, LoginVault.Store)] = []
+        if connection.saveCamera.state == .on {
+            wanted.append((.init(host: s.cameraHost, port: s.cameraPort, user: s.cameraUser, password: cameraPassword), .camera))
+        }
+        if s.route == .ssh, connection.saveSSH.state == .on {
+            wanted.append((.init(host: s.sshHost, port: s.sshPort, user: s.sshUser, password: sshPassword,
+                                 keyFile: s.sshIdentity), .ssh))
+        }
+        guard !wanted.isEmpty else { return }
+        guard VaultPrompts.ensureWritable() else {
+            eventLog.append("Logins not saved.")
+            return
+        }
+        for (login, store) in wanted {
+            do {
+                try LoginVault.shared.save(login, in: store)
+                eventLog.append("Saved \(store == .ssh ? "SSH" : "camera") login \(login.label).")
+            } catch {
+                eventLog.append("Couldn't save the \(store == .ssh ? "SSH" : "camera") login: \(error.localizedDescription)", warning: true)
+            }
+        }
+        connection.saveCamera.state = .off
+        connection.saveSSH.state = .off
+        connection.reloadLogins()
     }
 
     func disconnect(then: (() -> Void)? = nil) {
@@ -616,8 +649,13 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
 
     /// PTZ_SNAPSHOT_PATH=/path.png renders the window there after a scripted
     /// connect + move (password from PTZ_PASSWORD). Used with tools/mock-camera.py.
+    /// PTZ_SNAPSHOT_SAVE_LOGIN ticks the camera's Save login box; PTZ_SNAPSHOT_USE_LOGIN fills the camera
+    /// fields from the first saved camera login; PTZ_SNAPSHOT_LOGINS_PATH also saves a picture of Manage Logins.
     func runSnapshotScript(to path: String) {
-        if let raw = ProcessInfo.processInfo.environment["PTZ_THEME"], let t = PhosphorTheme(rawValue: raw) { theme = t }
+        let env = ProcessInfo.processInfo.environment
+        if let raw = env["PTZ_THEME"], let t = PhosphorTheme(rawValue: raw) { theme = t }
+        if env["PTZ_SNAPSHOT_SAVE_LOGIN"] != nil { connection.saveCamera.state = .on }
+        if env["PTZ_SNAPSHOT_USE_LOGIN"] != nil { connection.chooseSavedLogin(.camera, index: 0) }
         connect()
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             self.targetPan.stringValue = "0.55"
@@ -634,6 +672,9 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             guard let view = self.window?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            if let loginsPath = env["PTZ_SNAPSHOT_LOGINS_PATH"] {
+                ManageLoginsWindowController.shared.snapshot(store: .camera, to: loginsPath)
+            }
             NSApp.terminate(nil)
         }
     }

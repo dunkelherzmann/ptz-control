@@ -102,6 +102,7 @@ class Handler(BaseHTTPRequestHandler):
                 "</tt:UTCDateTime></tds:SystemDateAndTime></tds:GetSystemDateAndTimeResponse>"))
         if not self.wsse_ok(xml):
             return self.reply(400, fault("Sender not authorized"))
+        print("mock: onvif", op)
         if op == "GetCapabilities":
             return self.reply(200, soap(
                 "<tds:GetCapabilitiesResponse><tds:Capabilities>"
