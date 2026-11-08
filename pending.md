@@ -43,3 +43,6 @@ itself, so these are tried by hand before a release:
 - [ ] Refresh, pause and pause after failures (§9 R1–R5).
 - [ ] Opening the browser and the fallback dialog (§10 W1–W2).
 - [ ] Event buffer (§11 E1–E2), phosphor themes and light/dark (§12 A1–A3), menus, help and About (§13 H1–H3).
+- [ ] Saved-login dialogs and Manage Logins actions (§17 P3, P6, P7): unlocking, the first-save choice, the
+  Administrator Password, New, Edit, Delete and Lock. `test-macos.sh` covers saving from the window, filling the
+  fields from a saved login and the Manage Logins list (P4, P5); the core test covers the vault itself (P1, P2).

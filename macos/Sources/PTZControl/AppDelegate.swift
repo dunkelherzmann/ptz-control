@@ -7,9 +7,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationDidFinishLaunching(_ notification: Notification) {
         console = ConsoleWindowController()
         NSApp.mainMenu = buildMenu()
+        if let path = ProcessInfo.processInfo.environment["PTZ_SNAPSHOT_PATH"] {
+            // Test copy: render off screen, never on the desktop the user is working on.
+            console.runSnapshotScript(to: path)
+            return
+        }
         console.showWindow(nil)
         NSApp.activate()
-        if let path = ProcessInfo.processInfo.environment["PTZ_SNAPSHOT_PATH"] { console.runSnapshotScript(to: path) }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -71,6 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         add(camera, "Pause Auto-Refresh", #selector(pause), "p")
         camera.addItem(.separator())
         add(camera, "Open Camera Web Interface", #selector(web), "l")
+        camera.addItem(.separator())
+        add(camera, "Manage Logins…", #selector(manageLogins), "l", [.command, .shift])
         main.addItem(withTitle: "Camera", action: nil, keyEquivalent: "").submenu = camera
 
         let view = NSMenu(title: "View")
@@ -125,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func refresh() { console.refreshNow(nil) }
     @objc private func pause() { console.togglePause(nil) }
     @objc private func web() { console.openWebInterface(nil) }
+    @objc private func manageLogins() { ManageLoginsWindowController.shared.present() }
 
     @objc private func chooseTheme(_ sender: NSMenuItem) {
         if let raw = sender.representedObject as? String, let theme = PhosphorTheme(rawValue: raw) { console.theme = theme }

@@ -20,6 +20,8 @@ No open bugs in `bugs.md`.
 
 ## To build
 
+- [ ] **Saved logins.** The Login menus, Save login, the first-save choice, unlocking and Manage Logins, over the
+  core's login vault, with the vault file in the app's own data folder. (§17 P1–P8)
 - [x] **Copy each build to the desktop.** (#7) `scripts\build-windows.ps1` copies the new `PTZControl.exe` to the desktop as
   `PTZ Control.exe`, replacing the older one. (enhancements.md)
 - [x] **Title bar reads "PTZ Control"** (#8), without "— PTZ Coordinates Controller by Herbert Cisneros". (§2 K1, §14)

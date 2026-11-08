@@ -97,8 +97,13 @@ someone else needs its quarantine flag removed once (see [Installing](#installin
 Readings are shown in the camera's own digits; a value the camera did not
 report is shown as `—` or a hatched meter, never as zero.
 
-Passwords stay in memory only. Non-secret connection settings are remembered.
-`PTZ_USER` and `PTZ_PASSWORD` are honoured as defaults when set.
+Non-secret connection settings are remembered. Passwords stay in memory only,
+unless you tick **Save login**: SSH logins and camera logins are then saved in
+two separate lists, encrypted with an Administrator Password you choose (or,
+by explicit choice, as plain text). Pick a saved login from the **Login** menu
+above the SSH or camera fields, and edit them in Camera ▸ Manage Logins (⇧⌘L).
+A forgotten Administrator Password can't be recovered. The macOS Keychain
+isn't used. `PTZ_USER` and `PTZ_PASSWORD` are honoured as defaults when set.
 
 ### SSH route
 
@@ -112,7 +117,8 @@ key file can be set. New host keys are accepted on first use. If a host key
 ## Test
 
 ```bash
-scripts/test-core.sh   # core C API vs. the mock camera, ONVIF and Axis
+scripts/test-core.sh   # core C API vs. the mock camera, ONVIF and Axis; the login vault
+scripts/test-macos.sh  # a private test copy of the Mac app vs. the mock camera, off screen; saved logins
 scripts/test-ssh.sh    # SSH route via a throwaway user-level sshd on 127.0.0.1:2222
 python3 tools/mock-camera.py --port 8080 --user admin --password secret
 ```
