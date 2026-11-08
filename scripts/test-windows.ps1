@@ -23,7 +23,7 @@ cmd /c "`"$(Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat')`" >nul && set" | Fo
 }
 $obj = Join-Path $Work 'obj'
 New-Item -ItemType Directory -Force -Path $obj | Out-Null
-$flags = @('/nologo', '/O1', '/MT', '/utf-8', '/D_CRT_SECURE_NO_WARNINGS', "/I$Root\core\include", "/Fo$obj\")
+$flags = @('/nologo', '/O1', '/MT', '/utf-8', '/DUNICODE', '/D_UNICODE', '/DNOMINMAX', '/D_WIN32_WINNT=0x0A00', '/D_CRT_SECURE_NO_WARNINGS', "/I$Root\core\include", "/Fo$obj\")
 # http_winhttp.cpp holds the UTF-16 and Windows error helpers the vault uses.
 foreach ($src in @("$Root\core\src\vault.cpp", "$Root\core\src\monocypher.cpp", "$Root\core\src\util.cpp",
                    "$Root\core\src\http_winhttp.cpp")) {
