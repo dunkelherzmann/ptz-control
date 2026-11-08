@@ -42,11 +42,12 @@ SizeF measure(Graphics &g, const std::wstring &text, float size, bool bold = fal
     return SizeF(box.Width, box.Height);
 }
 
-// Paint into an off-screen bitmap, then blit: no flicker.
+// Paint into an off-screen bitmap, then blit: no flicker. With `print_dc` (WM_PRINTCLIENT, for pictures
+// taken without a compositor) it paints into that DC instead of the window.
 template <typename F>
-void buffered_paint(HWND hwnd, F &&paint) {
+void buffered_paint(HWND hwnd, F &&paint, HDC print_dc = nullptr) {
     PAINTSTRUCT ps;
-    HDC dc = BeginPaint(hwnd, &ps);
+    HDC dc = print_dc ? print_dc : BeginPaint(hwnd, &ps);
     RECT rc;
     GetClientRect(hwnd, &rc);
     HDC mem = CreateCompatibleDC(dc);
@@ -63,7 +64,7 @@ void buffered_paint(HWND hwnd, F &&paint) {
     SelectObject(mem, old);
     DeleteObject(bitmap);
     DeleteDC(mem);
-    EndPaint(hwnd, &ps);
+    if (!print_dc) EndPaint(hwnd, &ps);
 }
 
 void track_leave(HWND hwnd) {
@@ -205,6 +206,9 @@ LRESULT CALLBACK plane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_PAINT:
             buffered_paint(hwnd, [&](Graphics &g, float w, float h) { paint_plane(*p, g, w, h); });
             return 0;
+        case WM_PRINTCLIENT:
+            buffered_paint(hwnd, [&](Graphics &g, float w, float h) { paint_plane(*p, g, w, h); }, reinterpret_cast<HDC>(wp));
+            return 0;
         case WM_MOUSEMOVE: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
             RECT rc;
@@ -336,6 +340,9 @@ LRESULT CALLBACK meter_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 1;
         case WM_PAINT:
             buffered_paint(hwnd, [&](Graphics &g, float w, float h) { paint_meter(*m, g, w, h); });
+            return 0;
+        case WM_PRINTCLIENT:
+            buffered_paint(hwnd, [&](Graphics &g, float w, float h) { paint_meter(*m, g, w, h); }, reinterpret_cast<HDC>(wp));
             return 0;
         case WM_SETCURSOR:
             if (LOWORD(lp) == HTCLIENT && m->state.enabled && m->state.range.available) {

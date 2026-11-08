@@ -18,7 +18,7 @@ id (for example **M3**), which the `pending.md` files use.
 **Shortcuts.** The Mac shortcuts are given here. Windows and Linux use Ctrl in place of ⌘ and Alt in place of ⌥, and
 hold the menu under a ☰ button in the window instead of a menu bar.
 
-**Hover text.** On the Mac and Linux only the saved-login controls (§17) have hover text so far. Each `pending.md` lists
+**Hover text.** Only the saved-login controls (§17) have hover text so far, on every platform. Each `pending.md` lists
 the rest as a gap.
 
 ## 1. Core
@@ -200,8 +200,9 @@ What differs from the Mac version today. The `pending.md` in each folder says wh
 
 **Both**
 
-- Windows has no saved logins (§17) yet. On Linux they're kept in
-  `~/.var/app/org.ptzcontrol.app/data/PTZControl/logins.vault`, and Manage Logins is in the ☰ menu (Ctrl+Shift+L).
+- Saved logins (§17) are kept in `%APPDATA%\PTZControl\logins.vault` on Windows and in
+  `~/.var/app/org.ptzcontrol.app/data/PTZControl/logins.vault` on Linux. Manage Logins is in the ☰ menu's Camera menu
+  (Ctrl+Shift+L). On Windows the saved-login dialogs and Manage Logins use Windows' standard dialog look.
 - The menu is a ☰ button: Camera, Phosphor, Coordinate Help (F1) and About. There is no Edit, View or Window menu.
 - Default size 1180 × 820. The window's size and position aren't remembered.
 - The Advanced fields are always shown, without a disclosure triangle.
@@ -278,7 +279,12 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
   and vault file, off screen and out of the Dock) against the mock camera twice: first it ticks Save login and checks
   the camera login reached the vault, then it starts from a wrong username, fills the fields from the saved login and
   checks that the camera moved. It saves pictures of the window, of Manage Logins and of the Edit form.
-  `scripts/test-linux.sh` does the same with the installed Flatpak (T5). `test-core.sh` also runs
+  `scripts/test-linux.sh` does the same with the installed Flatpak (T5).
+- **T7 Windows test.** `scripts\test-windows.ps1` builds and runs `tests/vault-smoke.c` with MSVC, then runs
+  `dist\PTZControl.exe` twice as the Mac test does, with its own registry key (`PTZ_SETTINGS_KEY`) and vault file,
+  without taking focus. Pictures are taken with `WM_PRINT`, so the test also works over SSH, where no compositor runs;
+  it fails on a blank picture. Combo boxes leave their text out of such pictures, so the snapshot logs what the Login
+  menus show. `test-core.sh` also runs
   `tests/vault-smoke.c`: plain and encrypted files, both stores, wrong and changed passwords, tampering.
 - **T5 Linux app test.** `scripts/test-linux.sh` runs the installed Flatpak off screen against the mock camera with
   its own settings folder, and passes when the window picture is saved and the camera saw the app's requests.

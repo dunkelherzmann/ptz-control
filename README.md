@@ -134,6 +134,7 @@ Built on Windows with the Visual Studio 2022 C++ Build Tools (the free
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1        # → dist\PTZControl.exe
 powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Zip   # also dist\PTZ-Control-1.0.0-Windows-x64.zip
+powershell -ExecutionPolicy Bypass -File scripts\test-windows.ps1         # vault test, then a private test copy vs. the mock camera
 ```
 
 The result is a single statically linked `PTZControl.exe` (about 0.9 MB) that

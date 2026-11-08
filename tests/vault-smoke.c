@@ -5,7 +5,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/stat.h>
+#endif
 
 static int failures;
 #define CHECK(cond)                                                     \
@@ -49,8 +51,10 @@ int main(int argc, char **argv) {
     ptz_login got;
     CHECK(ptz_vault_login(v, PTZ_STORE_CAMERA, 0, &got) && strcmp(got.user, "admin") == 0 &&
           strcmp(got.password, "cam-one") == 0);
-    struct stat st;
+#ifndef _WIN32
+    struct stat st;  /* Windows keeps it private through the profile folder's permissions instead. */
     CHECK(stat(path, &st) == 0 && (st.st_mode & 0777) == 0600);
+#endif
     CHECK(strstr(slurp(path), "cam-one") != NULL);
     ptz_vault_free(v);
 

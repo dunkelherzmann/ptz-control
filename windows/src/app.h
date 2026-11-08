@@ -9,6 +9,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "ptzcore.h"
 
@@ -133,6 +134,31 @@ struct MeterState {
 MeterState &meter_state(HWND meter);
 
 void instruments_set_theme(const Theme &theme, UINT dpi);
+
+// ---- saved logins (spec §17; logins.cpp) ----------------------------------------
+enum class LoginStore { Ssh = 0, Camera = 1 };
+enum class VaultState { Unavailable, New, Plain, Locked, Unlocked };
+
+struct SavedLogin {  // a username and its password
+    std::wstring user, password;
+};
+
+VaultState vault_state();
+std::wstring vault_open_error();
+std::vector<SavedLogin> vault_logins(LoginStore store);
+bool vault_save(const SavedLogin &login, LoginStore store, int replacing, std::wstring *error, int *index = nullptr);
+bool vault_remove(int index, LoginStore store, std::wstring *error);
+void vault_lock();
+void vault_subscribe(std::function<void()> fn);  // called after every change
+bool vault_unlock_dialog(HWND owner);
+bool vault_change_admin_dialog(HWND owner);
+bool vault_ensure_readable(HWND owner);
+bool vault_ensure_writable(HWND owner);  // asks how to keep logins the first time
+void show_manage_logins(HWND owner);     // modal
+HWND manage_logins_for_snapshot(HWND owner, LoginStore store);  // test hook: built, not shown
+void manage_logins_close_snapshot();
+HWND create_tooltips(HWND owner);
+HWND add_tooltip(HWND tips, HWND control, const wchar_t *text);
 
 // ---- console window ----------------------------------------------------------
 HWND create_console(HINSTANCE instance, int show);

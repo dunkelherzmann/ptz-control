@@ -24,17 +24,22 @@ enum : int {
     ID_SSH_HOST = 200, ID_SSH_USER, ID_SSH_PASSWORD, ID_SSH_PORT, ID_SSH_KEY, ID_CAM_HOST, ID_CAM_PORT, ID_CAM_USER,
     ID_CAM_PASSWORD, ID_HTTPS_PORT, ID_PROFILE, ID_TIMEOUT, ID_TARGET_PAN, ID_TARGET_TILT, ID_TARGET_ZOOM, ID_LOG,
     ID_PLANE, ID_METER_PAN, ID_METER_TILT, ID_METER_ZOOM,
+    ID_SSH_LOGIN = 260, ID_CAM_LOGIN, ID_SAVE_SSH, ID_SAVE_CAM,
     CMD_CONNECT = 400, CMD_DISCONNECT, CMD_MOVE, CMD_RETURN, CMD_STOP, CMD_REFRESH, CMD_PAUSE, CMD_WEB, CMD_HELP, CMD_ABOUT,
+    CMD_LOGINS,
     CMD_THEME = 420,  // + Phosphor index
 };
 
 enum class State { Idle, Connecting, Connected, Disconnecting };
+
+enum RowKind { kEdit = 0, kCombo = 1, kCheck = 2 };
 
 struct Row {
     std::wstring label;
     HWND edit;
     RECT frame;
     bool ssh;
+    int kind = kEdit;
 };
 
 struct Console {
@@ -62,6 +67,8 @@ struct Console {
     HWND https_port, profile, timeout, target_pan, target_tilt, target_zoom, log, plane, meter_pan, meter_tilt,
         meter_zoom;
     std::vector<Row> rows;
+    HWND ssh_login = nullptr, cam_login = nullptr, save_ssh = nullptr, save_cam = nullptr, tips = nullptr;
+    bool save_ssh_on = false, save_cam_on = false, filling = false;
     std::vector<HWND> target_fields;
 
     HFONT field_font = nullptr, log_font = nullptr, button_font = nullptr;
@@ -362,6 +369,96 @@ std::optional<Settings> read_settings(std::wstring &error) {
 void refresh();
 void disconnect(std::function<void()> then = nullptr);
 
+// ---- saved logins ---------------------------------------------------------------------
+
+enum { kTyped = -1, kManage = -2, kUnlock = -3 };
+
+void fill_logins(HWND box, LoginStore store) {
+    int current = static_cast<int>(SendMessageW(box, CB_GETCURSEL, 0, 0));
+    std::wstring previous;
+    if (current > 0 && static_cast<int>(SendMessageW(box, CB_GETITEMDATA, current, 0)) >= 0) {
+        previous.resize(static_cast<size_t>(SendMessageW(box, CB_GETLBTEXTLEN, current, 0)) + 1);
+        SendMessageW(box, CB_GETLBTEXT, current, reinterpret_cast<LPARAM>(previous.data()));
+        previous.resize(wcslen(previous.c_str()));
+    }
+    SendMessageW(box, CB_RESETCONTENT, 0, 0);
+    auto add = [box](const std::wstring &text, int tag) {
+        LRESULT i = SendMessageW(box, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
+        SendMessageW(box, CB_SETITEMDATA, i, tag);
+    };
+    add(L"Type a login", kTyped);
+    VaultState state = vault_state();
+    if (state == VaultState::Unavailable) {
+        add(L"Saved logins unavailable", kTyped);
+    } else if (state == VaultState::Locked) {
+        add(L"Unlock Saved Logins\u2026", kUnlock);
+    } else {
+        int i = 0;
+        for (const SavedLogin &l : vault_logins(store)) add(l.user, i++);
+    }
+    add(L"Manage Logins\u2026", kManage);
+    LRESULT found = previous.empty() ? CB_ERR : SendMessageW(box, CB_FINDSTRINGEXACT, 0, reinterpret_cast<LPARAM>(previous.c_str()));
+    SendMessageW(box, CB_SETCURSEL, found > 0 ? found : 0, 0);
+}
+
+void reload_logins() {
+    fill_logins(g->ssh_login, LoginStore::Ssh);
+    fill_logins(g->cam_login, LoginStore::Camera);
+}
+
+void login_chosen(HWND box) {
+    LoginStore store = box == g->ssh_login ? LoginStore::Ssh : LoginStore::Camera;
+    int item = static_cast<int>(SendMessageW(box, CB_GETCURSEL, 0, 0));
+    int tag = item < 0 ? kTyped : static_cast<int>(SendMessageW(box, CB_GETITEMDATA, item, 0));
+    if (tag == kManage) {
+        SendMessageW(box, CB_SETCURSEL, 0, 0);
+        show_manage_logins(g->hwnd);
+        return;
+    }
+    if (tag == kUnlock) {
+        SendMessageW(box, CB_SETCURSEL, 0, 0);
+        if (vault_unlock_dialog(g->hwnd)) SendMessageW(box, CB_SHOWDROPDOWN, TRUE, 0);
+        return;
+    }
+    if (tag < 0) return;
+    std::vector<SavedLogin> logins = vault_logins(store);
+    if (tag >= static_cast<int>(logins.size())) return;
+    g->filling = true;
+    SetWindowTextW(store == LoginStore::Ssh ? g->ssh_user : g->cam_user, logins[tag].user.c_str());
+    SetWindowTextW(store == LoginStore::Ssh ? g->ssh_password : g->cam_password, logins[tag].password.c_str());
+    g->filling = false;
+    for (auto &l : logins) SecureZeroMemory(l.password.data(), l.password.size() * sizeof(wchar_t));
+}
+
+void choose_saved_login(LoginStore store, int index) {  // test hook
+    HWND box = store == LoginStore::Ssh ? g->ssh_login : g->cam_login;
+    int count = static_cast<int>(SendMessageW(box, CB_GETCOUNT, 0, 0));
+    for (int i = 0; i < count; ++i)
+        if (static_cast<int>(SendMessageW(box, CB_GETITEMDATA, i, 0)) == index) {
+            SendMessageW(box, CB_SETCURSEL, i, 0);
+            login_chosen(box);
+            return;
+        }
+}
+
+void save_ticked_logins(std::vector<std::pair<SavedLogin, LoginStore>> &saved) {
+    g->save_ssh_on = g->save_cam_on = false;
+    InvalidateRect(g->save_ssh, nullptr, FALSE);
+    InvalidateRect(g->save_cam, nullptr, FALSE);
+    if (!saved.empty()) {
+        if (!vault_ensure_writable(g->hwnd)) {
+            log_line(L"Logins not saved.");
+        } else {
+            for (auto &[login, store] : saved) {
+                std::wstring error, kind = store == LoginStore::Ssh ? L"SSH" : L"camera";
+                if (vault_save(login, store, -1, &error)) log_line(L"Saved " + kind + L" login " + login.user + L".");
+                else log_line(L"Couldn't save the " + kind + L" login: " + error, true);
+            }
+        }
+    }
+    for (auto &[login, store] : saved) SecureZeroMemory(login.password.data(), login.password.size() * sizeof(wchar_t));
+}
+
 void connect() {
     // Capture secrets first: nothing below may clear the fields before this.
     std::wstring camera_password = text_of(g->cam_password), ssh_password = text_of(g->ssh_password);
@@ -384,7 +481,11 @@ void connect() {
     log_line(L"Connecting: " + (s.route ? L"SSH via " + s.ssh_user + L"@" + s.ssh_host : std::wstring(L"local")) + L" \u2192 " +
              s.camera_host + L":" + std::to_wstring(s.camera_port) + L" \u00b7 " + (s.vendor ? L"Axis VAPIX" : L"ONVIF"));
     update_controls();
-    link_connect(g->link, s, camera_password, s.route ? ssh_password : L"", [](LinkResult result, CameraInfo info) {
+    // What Save login keeps once the connection has proved it.
+    std::vector<std::pair<SavedLogin, LoginStore>> saved;
+    if (g->save_cam_on) saved.push_back({{s.camera_user, camera_password}, LoginStore::Camera});
+    if (s.route == 1 && g->save_ssh_on) saved.push_back({{s.ssh_user, ssh_password}, LoginStore::Ssh});
+    link_connect(g->link, s, camera_password, s.route ? ssh_password : L"", [saved](LinkResult result, CameraInfo info) mutable {
         if (result.ok) {
             g->info = info;
             g->state = State::Connected;
@@ -400,6 +501,7 @@ void connect() {
                 log_line(std::wstring(L"  ") + name + L" range: " +
                          (range.available ? format_value(range.min) + L" \u2026 " + format_value(range.max) : L"not advertised"));
             refresh();
+            save_ticked_logins(saved);
         } else {
             g->state = State::Idle;
             show_message(result.error, true);
@@ -607,7 +709,7 @@ void show_help() {
                 L"Stop (Ctrl+.) sends a PTZ stop. Disconnecting never sends a stop.\n"
                 L"Web Interface (Ctrl+L) opens the camera's own page in your browser: HTTP first, HTTPS fallback. "
                 L"No credentials are sent.\n\n"
-                L"Shortcuts: Ctrl+K connect, Ctrl+Shift+K disconnect, Ctrl+Enter move, Ctrl+R refresh, "
+                L"Shortcuts: Ctrl+K connect, Ctrl+Shift+K disconnect, Ctrl+Enter move, Ctrl+R refresh, Ctrl+Shift+L saved logins, "
                 L"Ctrl+Alt+1\u20265 phosphor.",
                 L"Coordinate help", MB_OK | MB_ICONINFORMATION);
 }
@@ -623,6 +725,7 @@ void apply_theme() {
     g->field_brush = CreateSolidBrush(g->theme.field);
     SendMessageW(g->log, EM_SETBKGNDCOLOR, 0, g->theme.panel);
     SetWindowTheme(g->log, g->theme.dark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+    for (HWND box : {g->ssh_login, g->cam_login}) SetWindowTheme(box, g->theme.dark ? L"DarkMode_CFD" : L"CFD", nullptr);
     // Recolour existing log text (warnings lose their colour; new ones keep it).
     CHARFORMAT2W format{};
     format.cbSize = sizeof format;
@@ -687,8 +790,8 @@ void layout() {
             row.frame = {};
             continue;
         }
-        if (row.ssh && row.edit == g->ssh_host) caption(L"SSH HOST");
-        if (row.edit == g->cam_host && first_camera) {
+        if (row.ssh && row.edit == g->ssh_login) caption(L"SSH HOST");
+        if (row.edit == g->cam_login && first_camera) {
             if (ssh) y += S(4);
             caption(L"CAMERA");
             first_camera = false;
@@ -699,9 +802,11 @@ void layout() {
             first_advanced = false;
         }
         row.frame = {x + S(88), y, x + w, y + S(24)};
-        place_field(row.edit, row.frame);
+        if (row.kind == kEdit) place_field(row.edit, row.frame);
+        else if (row.kind == kCombo) move(row.edit, row.frame.left, row.frame.top, row.frame.right - row.frame.left, S(240));
+        else move(row.edit, row.frame.left, row.frame.top, row.frame.right - row.frame.left, row.frame.bottom - row.frame.top);
         ShowWindow(row.edit, SW_SHOW);
-        y += S(29);
+        y += row.kind == kCheck ? S(26) : S(29);
     }
     y += S(8);
     move(g->connect, x, y, w, S(32));
@@ -813,7 +918,7 @@ void paint(HDC dc, const RECT &rc) {
         if (row.frame.right == 0) continue;
         text(gr, row.label, RectF(row.frame.left - SF(92), row.frame.top + SF(3), SF(84), SF(18)), 12.5f, t.text, false,
              FontStyleRegular, StringAlignmentFar);
-        rounded(gr, row.frame, SF(3), t.field, t.border);
+        if (row.kind == kEdit) rounded(gr, row.frame, SF(3), t.field, t.border);
     }
     text(gr, g->message, RF(g->message_rc), 11.5f, g->message_error ? t.warning : t.secondary, false, FontStyleRegular,
          StringAlignmentNear, true);
@@ -922,8 +1027,46 @@ void draw_button(const DRAWITEMSTRUCT &d) {
     bool selected = (id == ID_ROUTE_LOCAL && g->route == 0) || (id == ID_ROUTE_SSH && g->route == 1) ||
                     (id == ID_VENDOR_ONVIF && g->vendor == 0) || (id == ID_VENDOR_AXIS && g->vendor == 1);
     bool primary = id == ID_CONNECT || id == ID_MOVE;
+    bool check = id == ID_SAVE_SSH || id == ID_SAVE_CAM;
 
     RECT r = d.rcItem;
+    if (check) {
+        bool on = id == ID_SAVE_SSH ? g->save_ssh_on : g->save_cam_on;
+        HDC mem = CreateCompatibleDC(d.hDC);
+        HBITMAP bitmap = CreateCompatibleBitmap(d.hDC, r.right, r.bottom);
+        HGDIOBJ old = SelectObject(mem, bitmap);
+        {
+            Graphics gr(mem);
+            gr.SetSmoothingMode(SmoothingModeAntiAlias);
+            gr.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
+            gr.Clear(C(t.panel));
+            int box = S(14), top = (r.bottom - box) / 2;
+            RECT b = {0, top, box, top + box};
+            COLORREF ink = disabled ? blend(t.panel, t.text, 0.45) : t.text;
+            rounded(gr, b, SF(3), on ? (disabled ? blend(t.panel, t.accent, 0.5) : t.accent) : t.field,
+                    on ? t.accent : (disabled ? blend(t.panel, t.border, 0.6) : t.primary));
+            if (on) {
+                Pen pen(C(g->phosphor == Phosphor::System ? RGB(255, 255, 255) : t.background), SF(1.8f));
+                PointF tick[] = {PointF(SF(3.5f), top + SF(7.5f)), PointF(SF(6), top + SF(10.5f)),
+                                 PointF(SF(11), top + SF(4))};
+                gr.DrawLines(&pen, tick, 3);
+            }
+            wchar_t label[64];
+            GetWindowTextW(d.hwndItem, label, 64);
+            text(gr, label, RectF(SF(22), (r.bottom - SF(18)) / 2, static_cast<float>(r.right) - SF(22), SF(18)), 12.5f,
+                 ink, false, FontStyleRegular, StringAlignmentNear);
+            if (focus && !(d.itemState & ODS_NOFOCUSRECT)) {
+                Pen pen(C(t.primary), 1);
+                pen.SetDashStyle(DashStyleDot);
+                gr.DrawRectangle(&pen, SF(20), 1.0f, SF(80), static_cast<float>(r.bottom - 3));
+            }
+        }
+        BitBlt(d.hDC, 0, 0, r.right, r.bottom, mem, 0, 0, SRCCOPY);
+        SelectObject(mem, old);
+        DeleteObject(bitmap);
+        DeleteDC(mem);
+        return;
+    }
     HDC mem = CreateCompatibleDC(d.hDC);
     HBITMAP bitmap = CreateCompatibleBitmap(d.hDC, r.right, r.bottom);
     HGDIOBJ old = SelectObject(mem, bitmap);
@@ -982,6 +1125,8 @@ void show_menu() {
     AppendMenuW(camera, connected ? on : off, CMD_PAUSE, g->paused ? L"Resume Auto-Refresh\tCtrl+P" : L"Pause Auto-Refresh\tCtrl+P");
     AppendMenuW(camera, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(camera, connected ? on : off, CMD_WEB, L"Open Camera Web Interface\tCtrl+L");
+    AppendMenuW(camera, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(camera, vault_state() != VaultState::Unavailable ? on : off, CMD_LOGINS, L"Manage Logins\u2026\tCtrl+Shift+L");
     for (int i = 0; i < 5; ++i) {
         std::wstring label = std::wstring(phosphor_title(static_cast<Phosphor>(i))) + L"\tCtrl+Alt+" + std::to_wstring(i + 1);
         AppendMenuW(phosphor, MF_STRING | (static_cast<int>(g->phosphor) == i ? MF_CHECKED : 0), CMD_THEME + i, label.c_str());
@@ -1020,6 +1165,12 @@ void command(int id) {
         case ID_STOP: case CMD_STOP: stop_motion(); return;
         case ID_WEB: case CMD_WEB: open_web(); return;
         case CMD_REFRESH: refresh_now(); return;
+        case CMD_LOGINS: show_manage_logins(g->hwnd); return;
+        case ID_SAVE_SSH: case ID_SAVE_CAM:
+            if (g->state != State::Idle) return;
+            (id == ID_SAVE_SSH ? g->save_ssh_on : g->save_cam_on) ^= true;
+            InvalidateRect(id == ID_SAVE_SSH ? g->save_ssh : g->save_cam, nullptr, FALSE);
+            return;
         case CMD_PAUSE: toggle_pause(); return;
         case ID_MENU: show_menu(); return;
         case CMD_HELP: show_help(); return;
@@ -1094,11 +1245,22 @@ void create_children() {
     g->https_port = make_edit(ID_HTTPS_PORT, std::to_wstring(s.https_port), nullptr, ES_NUMBER);
     g->profile = make_edit(ID_PROFILE, std::to_wstring(s.profile), nullptr, ES_NUMBER);
     g->timeout = make_edit(ID_TIMEOUT, format_value(s.timeout), nullptr);
+    auto combo = [](int id) {
+        return CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST,
+                               0, 0, 10, 200, g->hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g->instance, nullptr);
+    };
+    g->ssh_login = combo(ID_SSH_LOGIN);
+    g->cam_login = combo(ID_CAM_LOGIN);
+    g->save_ssh = make_button(L"Save login", ID_SAVE_SSH);
+    g->save_cam = make_button(L"Save login", ID_SAVE_CAM);
     g->rows = {
+        {L"Login", g->ssh_login, {}, true, kCombo},
         {L"Host", g->ssh_host, {}, true}, {L"Username", g->ssh_user, {}, true}, {L"Password", g->ssh_password, {}, true},
-        {L"Port", g->ssh_port, {}, true}, {L"Key file", g->ssh_key, {}, true},
+        {L"Port", g->ssh_port, {}, true}, {L"Key file", g->ssh_key, {}, true}, {L"", g->save_ssh, {}, true, kCheck},
+        {L"Login", g->cam_login, {}, false, kCombo},
         {L"Address", g->cam_host, {}, false}, {L"HTTP port", g->cam_port, {}, false},
         {L"Username", g->cam_user, {}, false}, {L"Password", g->cam_password, {}, false},
+        {L"", g->save_cam, {}, false, kCheck},
         {L"HTTPS port", g->https_port, {}, false}, {L"Profile", g->profile, {}, false},
         {L"Timeout (s)", g->timeout, {}, false},
     };
@@ -1148,6 +1310,7 @@ void create_children() {
 
     ACCEL keys[] = {
         {FCONTROL | FVIRTKEY, 'K', CMD_CONNECT}, {FCONTROL | FSHIFT | FVIRTKEY, 'K', CMD_DISCONNECT},
+        {FCONTROL | FSHIFT | FVIRTKEY, 'L', CMD_LOGINS},
         {FCONTROL | FVIRTKEY, VK_RETURN, CMD_MOVE}, {FCONTROL | FVIRTKEY, 'B', CMD_RETURN},
         {FCONTROL | FVIRTKEY, VK_OEM_PERIOD, CMD_STOP}, {FCONTROL | FVIRTKEY, 'R', CMD_REFRESH},
         {FCONTROL | FVIRTKEY, 'P', CMD_PAUSE}, {FCONTROL | FVIRTKEY, 'L', CMD_WEB}, {FVIRTKEY, VK_F1, CMD_HELP},
@@ -1157,6 +1320,20 @@ void create_children() {
     };
     g->accelerators = CreateAcceleratorTableW(keys, static_cast<int>(std::size(keys)));
 
+    g->tips = create_tooltips(g->hwnd);
+    add_tooltip(g->tips, g->ssh_login,
+                L"SSH login \u2014 Fill the SSH username and password from a saved SSH login, or open Manage Logins "
+                L"(Ctrl+Shift+L).");
+    add_tooltip(g->tips, g->cam_login,
+                L"Camera login \u2014 Fill the camera username and password from a saved camera login, or open Manage "
+                L"Logins (Ctrl+Shift+L).");
+    add_tooltip(g->tips, g->save_ssh,
+                L"Save login \u2014 Once connected, save this SSH username and password to the saved SSH logins.");
+    add_tooltip(g->tips, g->save_cam,
+                L"Save login \u2014 Once connected, save this camera username and password to the saved camera logins.");
+    reload_logins();
+    vault_subscribe([] { reload_logins(); });
+
     link_set_delegate(g->link, LinkDelegate{
         [](const std::wstring &line) { log_line(line); },
         [](const std::wstring &message, bool secret) { return run_prompt(message, secret); },
@@ -1164,6 +1341,88 @@ void create_children() {
             return MessageBoxW(g->hwnd, message.c_str(), title.c_str(), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
         },
     });
+}
+
+// ---- UI test hook (PTZ_SNAPSHOT_PATH) -----------------------------------------------------
+// Like the Mac and Linux apps: connect with the saved settings (PTZ_PASSWORD), move, aim along the zoom
+// meter, save a picture of the window and close. PTZ_SNAPSHOT_SAVE_LOGIN ticks the camera's Save login box,
+// PTZ_SNAPSHOT_USE_LOGIN fills the camera fields from the first saved camera login, and
+// PTZ_SNAPSHOT_LOGINS_PATH also saves a picture of Manage Logins. The window never takes focus.
+
+enum : int { kSnapStart = 50, kSnapMove, kSnapAim, kSnapCapture };
+
+bool save_png(HWND window, const std::wstring &path) {
+    RECT r;
+    GetWindowRect(window, &r);
+    int w = r.right - r.left, h = r.bottom - r.top;
+    HDC screen = GetDC(nullptr);
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP bitmap = CreateCompatibleBitmap(screen, w, h);
+    HGDIOBJ old = SelectObject(mem, bitmap);
+    // WM_PRINT has each window paint itself into the bitmap, so it works without a compositor too
+    // (a test run over SSH, in session 0).
+    SendMessageW(window, WM_PRINT, reinterpret_cast<WPARAM>(mem), PRF_NONCLIENT | PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
+    SelectObject(mem, old);
+    bool saved = false;
+    {
+        UINT count = 0, size = 0;
+        GetImageEncodersSize(&count, &size);
+        std::vector<BYTE> buffer(size);
+        auto *codecs = reinterpret_cast<ImageCodecInfo *>(buffer.data());
+        GetImageEncoders(count, size, codecs);
+        for (UINT i = 0; i < count; ++i)
+            if (wcscmp(codecs[i].MimeType, L"image/png") == 0) {
+                Bitmap picture(bitmap, nullptr);
+                saved = picture.Save(path.c_str(), &codecs[i].Clsid, nullptr) == Ok;
+            }
+    }
+    DeleteObject(bitmap);
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+    return saved;
+}
+
+void snapshot_step(int step) {
+    switch (step) {
+        case kSnapStart:
+            if (_wgetenv(L"PTZ_SNAPSHOT_SAVE_LOGIN")) g->save_cam_on = true;
+            if (_wgetenv(L"PTZ_SNAPSHOT_USE_LOGIN")) choose_saved_login(LoginStore::Camera, 0);
+            connect();
+            SetTimer(g->hwnd, kSnapMove, 3000, nullptr);
+            return;
+        case kSnapMove:
+            SetWindowTextW(g->target_pan, L"0.55");
+            SetWindowTextW(g->target_tilt, L"0.22");
+            SetWindowTextW(g->target_zoom, L"0.4");
+            send_move();
+            SetTimer(g->hwnd, kSnapAim, 1200, nullptr);
+            return;
+        case kSnapAim:
+            SetWindowTextW(g->target_pan, L"-0.3");
+            SetWindowTextW(g->target_tilt, L"0.6");
+            if (meter_state(g->meter_zoom).on_aim) meter_state(g->meter_zoom).on_aim(0.75);
+            SetTimer(g->hwnd, kSnapCapture, 2800, nullptr);
+            return;
+        case kSnapCapture: {
+            // What each Login menu shows, for the test log (a combo box draws its text only on screen).
+            for (HWND box : {g->ssh_login, g->cam_login}) {
+                wchar_t shown[128] = L"";
+                GetWindowTextW(box, shown, 128);
+                log_line(std::wstring(box == g->ssh_login ? L"Test: SSH Login menu shows \u201c" : L"Test: camera Login menu shows \u201c") +
+                         shown + L"\u201d");
+            }
+            save_png(g->hwnd, _wgetenv(L"PTZ_SNAPSHOT_PATH"));
+            if (const wchar_t *logins = _wgetenv(L"PTZ_SNAPSHOT_LOGINS_PATH")) {
+                HWND window = manage_logins_for_snapshot(g->hwnd, LoginStore::Camera);
+                ShowWindow(window, SW_SHOWNOACTIVATE);
+                UpdateWindow(window);
+                save_png(window, logins);
+                manage_logins_close_snapshot();
+            }
+            PostMessageW(g->hwnd, WM_CLOSE, 0, 0);
+            return;
+        }
+    }
 }
 
 LRESULT CALLBACK console_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -1179,7 +1438,9 @@ LRESULT CALLBACK console_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             layout();
             update_controls();
             log_line(L"PTZ Control ready \u00b7 core " + W(ptz_core_version()));
+            if (vault_state() == VaultState::Unavailable) log_line(L"Saved logins are unavailable: " + vault_open_error(), true);
             SetTimer(hwnd, 1, 250, nullptr);
+            if (_wgetenv(L"PTZ_SNAPSHOT_PATH")) SetTimer(hwnd, kSnapStart, 300, nullptr);
             return 0;
         }
         case WM_APP_CALL: {
@@ -1191,6 +1452,11 @@ LRESULT CALLBACK console_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             (*reinterpret_cast<std::function<void()> *>(lp))();
             return 0;
         case WM_TIMER:
+            if (wp >= kSnapStart && wp <= kSnapCapture) {
+                KillTimer(hwnd, wp);
+                snapshot_step(static_cast<int>(wp));
+                return 0;
+            }
             tick();
             return 0;
         case WM_SIZE:
@@ -1216,6 +1482,12 @@ LRESULT CALLBACK console_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_ERASEBKGND:
             return 1;
+        case WM_PRINTCLIENT: {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            paint(reinterpret_cast<HDC>(wp), rc);
+            return 0;
+        }
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC dc = BeginPaint(hwnd, &ps);
@@ -1244,10 +1516,18 @@ LRESULT CALLBACK console_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             draw_button(*reinterpret_cast<DRAWITEMSTRUCT *>(lp));
             return TRUE;
         case WM_COMMAND:
+            if (lp && HIWORD(wp) == CBN_SELCHANGE &&
+                (reinterpret_cast<HWND>(lp) == g->ssh_login || reinterpret_cast<HWND>(lp) == g->cam_login)) {
+                login_chosen(reinterpret_cast<HWND>(lp));
+                return 0;
+            }
             if (HIWORD(wp) == EN_CHANGE) {
                 HWND from = reinterpret_cast<HWND>(lp);
                 if (std::find(g->target_fields.begin(), g->target_fields.end(), from) != g->target_fields.end())
                     update_target_markers();
+                // Typing a username or password means it's no longer the saved login.
+                if (!g->filling && (from == g->ssh_user || from == g->ssh_password)) SendMessageW(g->ssh_login, CB_SETCURSEL, 0, 0);
+                if (!g->filling && (from == g->cam_user || from == g->cam_password)) SendMessageW(g->cam_login, CB_SETCURSEL, 0, 0);
                 return 0;
             }
             command(LOWORD(wp));
@@ -1303,7 +1583,8 @@ HWND create_console(HINSTANCE instance, int show) {
                                 WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
                                 MulDiv(1180, static_cast<int>(dpi), 96), MulDiv(820, static_cast<int>(dpi), 96), nullptr,
                                 nullptr, instance, nullptr);
-    ShowWindow(hwnd, show);
+    // A snapshot test copy never takes focus from the desktop the user is working on.
+    ShowWindow(hwnd, _wgetenv(L"PTZ_SNAPSHOT_PATH") ? SW_SHOWNOACTIVATE : show);
     UpdateWindow(hwnd);
     return hwnd;
 }
