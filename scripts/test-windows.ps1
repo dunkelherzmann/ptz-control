@@ -27,12 +27,12 @@ $flags = @('/nologo', '/O1', '/MT', '/utf-8', '/D_CRT_SECURE_NO_WARNINGS', "/I$R
 # http_winhttp.cpp holds the UTF-16 and Windows error helpers the vault uses.
 foreach ($src in @("$Root\core\src\vault.cpp", "$Root\core\src\monocypher.cpp", "$Root\core\src\util.cpp",
                    "$Root\core\src\http_winhttp.cpp")) {
-    & cl.exe ($flags + @('/std:c++20', '/EHsc', '/c', $src)) | Out-Null
+    & cl.exe ($flags + @("/std:c++20", "/EHsc", "/c", $src)) 2>&1 | Where-Object { $_ -match "error" }
 }
-& cl.exe ($flags + @('/c', "$Root\tests\vault-smoke.c")) | Out-Null
+& cl.exe ($flags + @("/c", "$Root\tests\vault-smoke.c")) 2>&1 | Where-Object { $_ -match "error" }
 & link.exe /nologo "$obj\vault.obj" "$obj\monocypher.obj" "$obj\util.obj" "$obj\http_winhttp.obj" "$obj\vault-smoke.obj" `
     bcrypt.lib ws2_32.lib winhttp.lib `
-    "/OUT:$obj\vault-smoke.exe" | Out-Null
+    "/OUT:$obj\vault-smoke.exe" 2>&1 | Where-Object { $_ -match "error" }
 Check 'core vault test built' (Test-Path "$obj\vault-smoke.exe")
 $vaultDir = Join-Path $Work 'vault'
 New-Item -ItemType Directory -Force -Path $vaultDir | Out-Null
