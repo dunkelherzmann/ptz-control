@@ -364,6 +364,7 @@ struct Manage {
 };
 
 Manage *g_manage = nullptr;
+LoginStore g_last_store = LoginStore::Ssh;  // the list Manage Logins showed last
 
 int selected_row(Manage &m) { return static_cast<int>(SendMessageW(m.list, LVM_GETNEXTITEM, static_cast<WPARAM>(-1), LVNI_SELECTED)); }
 
@@ -758,15 +759,16 @@ bool vault_ensure_writable(HWND owner) {
     return vault_ensure_readable(owner);
 }
 
-void show_manage_logins(HWND owner) {
+void show_manage_logins(HWND owner, std::optional<LoginStore> store) {
     if (g_manage) return;
     if (vault_state() == VaultState::Unavailable) {
         show_error(owner, L"Saved logins are unavailable", vault_open_error());
         return;
     }
     if (vault_state() == VaultState::Locked) vault_unlock_dialog(owner);
-    Manage *m = manage_create(owner, LoginStore::Ssh);
+    Manage *m = manage_create(owner, store.value_or(g_last_store));
     run_modal(owner, m->hwnd, &m->done, m->list);
+    g_last_store = m->store;
     m->hwnd = nullptr;  // run_modal destroyed it
     manage_destroy(m);
 }

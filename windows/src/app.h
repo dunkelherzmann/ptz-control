@@ -156,7 +156,8 @@ bool vault_unlock_dialog(HWND owner);
 bool vault_change_admin_dialog(HWND owner);
 bool vault_ensure_readable(HWND owner);
 bool vault_ensure_writable(HWND owner);  // asks how to keep logins the first time
-void show_manage_logins(HWND owner);     // modal
+// Modal. From a Login menu, `store` picks the list shown; otherwise it shows the last one.
+void show_manage_logins(HWND owner, std::optional<LoginStore> store = std::nullopt);
 HWND manage_logins_for_snapshot(HWND owner, LoginStore store);  // test hook: built, not shown
 void manage_logins_close_snapshot();
 HWND create_tooltips(HWND owner);

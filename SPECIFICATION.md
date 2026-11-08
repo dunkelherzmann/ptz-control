@@ -322,7 +322,9 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
   Now** and **Store as Plain Text…**, which asks again with Cancel as the default. Nothing is saved until one is
   chosen.
 - **P7 Manage Logins** (Camera ▸ Manage Logins…, ⇧⌘L, or the Login menus) is a window with **SSH Logins** and
-  **Camera Logins**, each a list with the columns Name, Username and Password (hidden).
+  **Camera Logins**. Opened from a Login menu it shows that menu's list: SSH Logins from the SSH host's menu, Camera
+  Logins from the camera's. From Camera ▸ Manage Logins… it shows the list last open (SSH Logins at first). Each list
+  is a list with the columns Name, Username and Password (hidden).
   - **New…**, **Edit…** (or double-click) open a form with Name, Username, Password and **Show password**; a name and
     a username are required.
   - **Delete** (or ⌫) removes the selected login after a confirmation whose default is Cancel.

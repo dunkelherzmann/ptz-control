@@ -722,7 +722,7 @@ private:
         int tag = box->itemData(index).toInt();
         if (tag == kManage) {
             box->setCurrentIndex(0);
-            show_manage_logins(this);
+            show_manage_logins(this, store);
             return;
         }
         if (tag == kUnlock) {
