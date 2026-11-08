@@ -10,3 +10,4 @@ A box is ticked once the change has shipped. A request that covers several platf
 - [x] **Build each platform's app on its own machine.** The Windows app is built on Windows with the Visual Studio C++ Build Tools (`scripts/build-windows.ps1`, still one static portable `.exe`), and the Linux AppImage on Linux in a rootless Podman container (`scripts/build-linux.sh`), instead of cross-compiling with mingw-w64 and Apple `container` VMs on the Mac. *Requested 2026-11-08.* Linux and Windows. Done in #2.
   - [x] Windows
   - [x] Linux
+- [x] **Ship the Linux app as a Flatpak instead of an AppImage.** `org.ptzcontrol.app` on KDE's Qt 6 runtime, built on the Linux machine with flatpak-builder (`scripts/build-linux.sh`) and tested against the mock camera (`scripts/test-linux.sh`). *Requested 2026-11-08.* Linux. Done in #3.

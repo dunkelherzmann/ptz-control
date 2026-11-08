@@ -16,7 +16,7 @@ core/              shared C++20 core (C ABI in core/include/ptzcore.h)
   src/web.cpp        camera web-interface probe (HTTP, then HTTPS), no credentials sent
 macos/             Swift + AppKit host
 windows/           Win32 + GDI+ host (C++), resources and manifest
-linux/             Qt 6 Widgets host (C++), AppImage packaging and its build container
+linux/             Qt 6 Widgets host (C++) and its Flatpak manifest
 legacy/            the original ptz-control.sh
 tools/             mock camera (ONVIF + Axis) for development without hardware
 tests/, scripts/   smoke tests and the build scripts
@@ -60,7 +60,8 @@ the warning.
 
 **Windows.** SmartScreen warns on first run: choose **More info ▸ Run anyway**.
 
-**Linux.** Make the AppImage executable (`chmod +x PTZ-Control-…AppImage`) and run it.
+**Linux.** Install the bundle with `flatpak install --user PTZ-Control-…flatpak`; it appears in your
+applications menu.
 
 Only allow copies you downloaded from this repository's Releases page.
 
@@ -146,45 +147,46 @@ button holds the menu.
 - The exe is unsigned, so SmartScreen warns on first run ("More info ▸ Run
   anyway"). Sign it with a code-signing certificate to avoid that.
 
-## Build for Linux (x86_64 AppImage)
+## Build for Linux (Flatpak)
 
-Built on Linux, in a rootless Podman container from Ubuntu 22.04 (`linux/Containerfile`), so the
-AppImage runs on older distributions than the one that built it. One-time setup on Ubuntu or Debian:
-`sudo apt install podman` (Docker works too).
-
-```bash
-scripts/build-linux.sh            # → dist/PTZ-Control-1.0.0-x86_64.AppImage
-```
-
-The script builds for the machine's own CPU: run on an ARM64 Linux machine, it makes
-`PTZ-Control-…-aarch64.AppImage`.
-
-The AppImage (about 31 MB) is one self-contained file: Qt 6, libcurl and
-OpenSSL, the JetBrains Mono font, icons, the desktop entry and the licence
-notices of everything bundled. It runs on any distribution with glibc 2.35 or
-newer (Ubuntu 22.04+, Debian 12+, Fedora 36+, current Arch and openSUSE
-Tumbleweed), needs no root and no `libfuse2`:
+Built on Linux with flatpak-builder (`linux/org.ptzcontrol.app.yml`) on KDE's Qt 6 runtime from Flathub.
+One-time setup on Ubuntu or Debian:
 
 ```bash
-chmod +x PTZ-Control-1.0.0-x86_64.AppImage
-./PTZ-Control-1.0.0-x86_64.AppImage
+sudo apt install flatpak
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user -y flathub org.flatpak.Builder
 ```
 
-- What stays with the system: glibc and libstdc++, the X11/xcb client
-  libraries, fontconfig/freetype and the OpenGL drivers. The OpenGL loaders
-  and HarfBuzz are bundled as fallbacks that `AppRun` uses only when the
-  system has none.
+Then:
+
+```bash
+scripts/build-linux.sh             # → dist/PTZ-Control-1.0.0-x86_64.flatpak
+scripts/build-linux.sh --install   # also installs it for this user
+scripts/test-linux.sh              # drives the installed app against the mock camera, off screen
+```
+
+The script builds for the machine's own CPU: on an ARM64 Linux machine it makes
+`PTZ-Control-…-aarch64.flatpak`.
+
+The bundle (about 0.6 MB) holds the app, the JetBrains Mono font, icons, the desktop entry and the licence
+notices. Qt 6, libcurl, OpenSSL and the OpenSSH client come from the `org.kde.Platform` runtime, which
+Flatpak installs from Flathub with the app and keeps updated. It runs on any distribution with Flatpak and
+needs no root:
+
+```bash
+flatpak install --user PTZ-Control-1.0.0-x86_64.flatpak
+flatpak run org.ptzcontrol.app
+```
+
+- The sandbox allows the network, the display (X11 and Wayland), the GPU, `~/.ssh` and the ssh-agent
+  socket, and nothing else of the system.
 - Windows open through X11 (XWayland on Wayland desktops), falling back to
   native Wayland when no X server exists; `QT_QPA_PLATFORM=wayland` forces it.
-- Settings live in `~/.config/PTZControl/PTZControl.conf`. Shortcuts use Ctrl
+- Settings live in `~/.var/app/org.ptzcontrol.app/config/PTZControl/PTZControl.conf`. Shortcuts use Ctrl
   in place of ⌘; the ☰ button holds the menu.
-- **SSH route:** uses the system OpenSSH client (`/usr/bin/ssh`), as on macOS.
-- No FUSE at all (e.g. in a container): `./PTZ-Control-…AppImage --appimage-extract-and-run`.
-
-The AppImage launchers come from
-[AppImage/type2-runtime](https://github.com/AppImage/type2-runtime), pinned by
-checksum in the build script. `linux/test-appimage.sh` runs an AppImage against
-the mock camera under Xvfb inside a stock distribution container.
+- **SSH route:** uses the runtime's OpenSSH client with your `~/.ssh` keys, config and `known_hosts`, and
+  your ssh-agent.
 
 ## Versioning
 
