@@ -24,15 +24,13 @@ cmd /c "`"$(Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat')`" >nul && set" | Fo
 $obj = Join-Path $Work 'obj'
 New-Item -ItemType Directory -Force -Path $obj | Out-Null
 $flags = @('/nologo', '/O1', '/MT', '/utf-8', '/DUNICODE', '/D_UNICODE', '/DNOMINMAX', '/D_WIN32_WINNT=0x0A00', '/D_CRT_SECURE_NO_WARNINGS', "/I$Root\core\include", "/Fo$obj\")
-# http_winhttp.cpp holds the UTF-16 and Windows error helpers the vault uses.
-foreach ($src in @("$Root\core\src\vault.cpp", "$Root\core\src\monocypher.cpp", "$Root\core\src\util.cpp",
-                   "$Root\core\src\http_winhttp.cpp")) {
-    & cl.exe ($flags + @("/std:c++20", "/EHsc", "/c", $src)) 2>&1 | Where-Object { $_ -match "error" }
+# The whole core, as test-core.sh builds it, linked with the Windows libraries the app uses.
+foreach ($src in (Get-ChildItem "$Root\core\src\*.cpp")) {
+    & cl.exe ($flags + @('/std:c++20', '/EHsc', '/c', $src.FullName)) 2>&1 | Where-Object { $_ -match 'error' }
 }
-& cl.exe ($flags + @("/c", "$Root\tests\vault-smoke.c")) 2>&1 | Where-Object { $_ -match "error" }
-& link.exe /nologo "$obj\vault.obj" "$obj\monocypher.obj" "$obj\util.obj" "$obj\http_winhttp.obj" "$obj\vault-smoke.obj" `
-    bcrypt.lib ws2_32.lib winhttp.lib `
-    "/OUT:$obj\vault-smoke.exe" 2>&1 | Where-Object { $_ -match "error" }
+& cl.exe ($flags + @('/c', "$Root\tests\vault-smoke.c")) 2>&1 | Where-Object { $_ -match 'error' }
+& link.exe /nologo (Get-ChildItem "$obj\*.obj" | ForEach-Object FullName) winhttp.lib ws2_32.lib bcrypt.lib advapi32.lib `
+    shell32.lib user32.lib "/OUT:$obj\vault-smoke.exe" 2>&1 | Where-Object { $_ -match 'error' }
 Check 'core vault test built' (Test-Path "$obj\vault-smoke.exe")
 $vaultDir = Join-Path $Work 'vault'
 New-Item -ItemType Directory -Force -Path $vaultDir | Out-Null
