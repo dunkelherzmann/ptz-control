@@ -120,14 +120,15 @@ python3 tools/mock-camera.py --port 8080 --user admin --password secret
 
 ## Build for Windows (10/11, x64)
 
-Cross-compiled from macOS or Linux with mingw-w64 (`brew install mingw-w64`):
+Built on Windows with the Visual Studio 2022 C++ Build Tools (the free
+"Desktop development with C++" workload) and git, from PowerShell:
 
-```bash
-scripts/build-windows.sh          # → dist/PTZControl.exe
-scripts/build-windows.sh --zip    # also dist/PTZ-Control-1.0.0-Windows-x64.zip
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1        # → dist\PTZControl.exe
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Zip   # also dist\PTZ-Control-1.0.0-Windows-x64.zip
 ```
 
-The result is a single statically linked `PTZControl.exe` (about 1.8 MB) that
+The result is a single statically linked `PTZControl.exe` (about 0.9 MB) that
 imports only Windows system DLLs. Copy it anywhere and run it: there is no
 installer, it runs as the signed-in user (`asInvoker`), and settings live
 under `HKCU\Software\PTZControl`. Shortcuts use Ctrl in place of ⌘; the ☰
@@ -145,18 +146,20 @@ button holds the menu.
 - The exe is unsigned, so SmartScreen warns on first run ("More info ▸ Run
   anyway"). Sign it with a code-signing certificate to avoid that.
 
-## Build for Linux (x86_64 and arm64 AppImages)
+## Build for Linux (x86_64 AppImage)
 
-Built on macOS with Apple's `container` tool (`brew install container`), in an
-Ubuntu 22.04 container per CPU (`linux/Containerfile`):
+Built on Linux, in a rootless Podman container from Ubuntu 22.04 (`linux/Containerfile`), so the
+AppImage runs on older distributions than the one that built it. One-time setup on Ubuntu or Debian:
+`sudo apt install podman` (Docker works too).
 
 ```bash
 scripts/build-linux.sh            # → dist/PTZ-Control-1.0.0-x86_64.AppImage
-                                  #   dist/PTZ-Control-1.0.0-aarch64.AppImage
-scripts/build-linux.sh aarch64    # one architecture only
 ```
 
-Each AppImage (about 31 MB) is one self-contained file: Qt 6, libcurl and
+The script builds for the machine's own CPU: run on an ARM64 Linux machine, it makes
+`PTZ-Control-…-aarch64.AppImage`.
+
+The AppImage (about 31 MB) is one self-contained file: Qt 6, libcurl and
 OpenSSL, the JetBrains Mono font, icons, the desktop entry and the licence
 notices of everything bundled. It runs on any distribution with glibc 2.35 or
 newer (Ubuntu 22.04+, Debian 12+, Fedora 36+, current Arch and openSUSE
