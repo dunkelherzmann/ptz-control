@@ -57,7 +57,6 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "PTZ Control"
-        window.subtitle = "PTZ Coordinates Controller by Herbert Cisneros"
         window.minSize = NSSize(width: 980, height: 680)
         window.setFrameAutosaveName("ConsoleWindow")
         window.tabbingMode = .disallowed

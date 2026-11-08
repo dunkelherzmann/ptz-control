@@ -145,7 +145,7 @@ public:
         vendor_ = settings_.vendor;
         link_ = create_link();
         setObjectName("console");
-        setWindowTitle("PTZ Control — PTZ Coordinates Controller by Herbert Cisneros");
+        setWindowTitle("PTZ Control");
         setMinimumSize(1000, 740);
         resize(1180, 820);
         build();
