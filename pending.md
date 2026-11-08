@@ -16,7 +16,7 @@ No open bugs in `bugs.md`.
 
 ## To build
 
-- [ ] **Title bar reads "PTZ Control" only.** Drop the window's subtitle "PTZ Coordinates Controller by Herbert
+- [ ] **Title bar reads "PTZ Control".** Drop the window's subtitle "PTZ Coordinates Controller by Herbert
   Cisneros". (§2 K1)
 - [ ] **Hover text on every control**: what it is, what it does and its shortcut, for the route and vendor choices,
   every field, Connect, the Advanced triangle, Move, Return to Start, Stop, Web Interface, the plane and the meters.

@@ -16,7 +16,7 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [ ] Linux
   - [ ] Windows
 - [x] **Keep a specification and a plan per version:** `SPECIFICATION.md` describes every feature with its id, platforms, shortcut and hover text, and the builds per platform; `pending.md` (macOS), `windows/pending.md` and `linux/pending.md` list what each version still lacks or gets wrong, in build order. *Requested 2026-11-08.* Done in #5.
-- [ ] **The title bar reads "PTZ Control" only,** on every platform: no "PTZ Coordinates Controller by Herbert Cisneros" subtitle or suffix. *Requested 2026-11-08.* Mac, Linux and Windows.
+- [ ] **The title bar reads "PTZ Control",** on every platform: no "PTZ Coordinates Controller by Herbert Cisneros" subtitle or suffix. *Requested 2026-11-08.* Mac, Linux and Windows.
   - [ ] Mac
   - [ ] Linux
   - [ ] Windows

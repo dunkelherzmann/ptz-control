@@ -20,7 +20,7 @@ No open bugs in `bugs.md`.
 
 ## To build
 
-- [ ] **Title bar reads "PTZ Control" only**, without "— PTZ Coordinates Controller by Herbert Cisneros". (§2 K1, §14)
+- [ ] **Title bar reads "PTZ Control"**, without "— PTZ Coordinates Controller by Herbert Cisneros". (§2 K1, §14)
 - [ ] **A test copy that can be driven.** The snapshot hook (`PTZ_SNAPSHOT_PATH`) the Mac and Linux apps have, so a
   test can connect, move and save a picture of the window against the mock camera. (§16 T4)
 - [ ] **Core tests on Windows.** `test-core.sh` and `test-ssh.sh` run only where clang and libcurl are; the WinHTTP
