@@ -246,7 +246,9 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
 - **B2 Windows** (built on Windows with the Visual Studio 2022 C++ Build Tools): `scripts/build-windows.ps1` compiles
   the core and the host with MSVC into one statically linked `dist\PTZControl.exe` (x64, about 0.9 MB) that imports
   only Windows system DLLs. No installer; it runs as the signed-in user (`asInvoker`). `-Zip` also writes
-  `dist\PTZ-Control-<version>-Windows-x64.zip`. The exe is unsigned, so SmartScreen warns on first run.
+  `dist\PTZ-Control-<version>-Windows-x64.zip`. Every build is also copied to the desktop as `PTZ Control.exe`,
+  replacing the older copy (skipped with a warning while that copy is open). The exe is unsigned, so SmartScreen
+  warns on first run.
 - **B3 Linux** (built on Linux with flatpak-builder): `scripts/build-linux.sh` builds `org.ptzcontrol.app` from
   `linux/org.ptzcontrol.app.yml` on KDE's Qt 6 runtime (`org.kde.Platform` 6.11) for the machine's own CPU and writes
   `dist/PTZ-Control-<version>-<arch>.flatpak` (about 0.6 MB). The bundle holds the app, JetBrains Mono, the icons,
