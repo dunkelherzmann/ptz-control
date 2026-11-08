@@ -20,3 +20,6 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [ ] Mac
   - [ ] Linux
   - [ ] Windows
+- [ ] **Windows: a portable `.exe` on the desktop.** PTZ Control for Windows stays a single static `PTZControl.exe` with no installer, runtime or anything added to the system, and every new Windows build is copied to the Windows PC's desktop as `PTZ Control.exe` so it's easy to find. *Requested 2026-11-08 · Windows.*
+  - [x] Single static portable `.exe` (already the case)
+  - [ ] Copied to the desktop by `scripts\build-windows.ps1` on every build (done by hand for 1.0.14)

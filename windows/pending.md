@@ -20,6 +20,8 @@ No open bugs in `bugs.md`.
 
 ## To build
 
+- [ ] **Copy each build to the desktop.** `scripts\build-windows.ps1` copies the new `PTZControl.exe` to the desktop as
+  `PTZ Control.exe`, replacing the older one. (enhancements.md)
 - [ ] **Title bar reads "PTZ Control"**, without "— PTZ Coordinates Controller by Herbert Cisneros". (§2 K1, §14)
 - [ ] **A test copy that can be driven.** The snapshot hook (`PTZ_SNAPSHOT_PATH`) the Mac and Linux apps have, so a
   test can connect, move and save a picture of the window against the mock camera. (§16 T4)
