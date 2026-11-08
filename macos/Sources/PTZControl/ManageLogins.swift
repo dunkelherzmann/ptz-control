@@ -238,6 +238,21 @@ import AppKit
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        // And the Edit form for the first login, as it appears inside its dialog.
+        guard let first = logins.first else { return }
+        let form = LoginFormView(first, store: store)
+        let holder = NSView(frame: NSRect(x: 0, y: 0, width: form.frame.width + 24, height: form.frame.height + 24))
+        holder.appearance = view.effectiveAppearance
+        holder.wantsLayer = true
+        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            holder.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        }
+        form.setFrameOrigin(NSPoint(x: 12, y: 12))
+        holder.addSubview(form)
+        guard let formRep = holder.bitmapImageRepForCachingDisplay(in: holder.bounds) else { return }
+        holder.cacheDisplay(in: holder.bounds, to: formRep)
+        try? formRep.representation(using: .png, properties: [:])?
+            .write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-form.png")))
     }
 }
 
@@ -252,53 +267,96 @@ final class LoginTable: NSTableView {
 
 /// The New and Edit form: host or address, port, username, password (with Show password)
 /// and, for SSH logins, the key file.
-@MainActor enum LoginForm {
-    static func run(_ login: LoginVault.Login, store: LoginVault.Store, title: String) -> LoginVault.Login? {
-        let host = NSTextField(string: login.host)
-        let port = NSTextField(string: String(login.port))
-        let user = NSTextField(string: login.user)
-        let hidden = NSSecureTextField(string: login.password)
-        let shown = NSTextField(string: login.password)
-        let show = NSButton(checkboxWithTitle: "Show password", target: nil, action: nil)
-        let key = NSTextField(string: login.keyFile)
+@MainActor final class LoginFormView: NSGridView {
+    let host = NSTextField()
+    let port = NSTextField()
+    let user = NSTextField()
+    let secureField = NSSecureTextField()
+    let plainField = NSTextField()
+    let show = NSButton(checkboxWithTitle: "Show password", target: nil, action: nil)
+    let key = NSTextField()
+    private let toggle: ShowPasswordToggle
+    let store: LoginVault.Store
+
+    init(_ login: LoginVault.Login, store: LoginVault.Store) {
+        self.store = store
+        toggle = ShowPasswordToggle(hidden: secureField, shown: plainField)
+        super.init(frame: .zero)
+        host.stringValue = login.host
+        port.stringValue = String(login.port)
+        user.stringValue = login.user
+        secureField.stringValue = login.password
+        plainField.stringValue = login.password
+        key.stringValue = login.keyFile
         host.placeholderString = store == .ssh ? "jump.example.com" : "192.168.1.100"
         user.placeholderString = store == .ssh ? "username" : "admin"
-        hidden.placeholderString = store == .ssh ? "blank for keys / agent" : "camera password"
-        shown.placeholderString = hidden.placeholderString
+        secureField.placeholderString = store == .ssh ? "blank for keys / agent" : "camera password"
+        plainField.placeholderString = secureField.placeholderString
         key.placeholderString = "optional, e.g. ~/.ssh/id_ed25519"
         show.toolTip = "Show password — Shows the saved password as text while this form is open."
+        show.target = toggle
+        show.action = #selector(ShowPasswordToggle.flip(_:))
         for (field, label) in [(host, store == .ssh ? "Host" : "Address"), (port, "Port"), (user, "Username"),
-                               (hidden, "Password"), (shown, "Password"), (key, "Key file")] {
+                               (secureField, "Password"), (plainField, "Password"), (key, "Key file")] {
             field.font = Fonts.mono(12)
             field.usesSingleLineMode = true
             field.setAccessibilityLabel(label)
             field.translatesAutoresizingMaskIntoConstraints = false
             field.widthAnchor.constraint(equalToConstant: 250).isActive = true
         }
-        shown.isHidden = true
-        let passwordStack = NSStackView(views: [hidden, shown])
-        let toggle = ShowPasswordToggle(hidden: hidden, shown: shown)
-        show.target = toggle
-        show.action = #selector(ShowPasswordToggle.flip(_:))
+        plainField.isHidden = true
+        let password = NSStackView(views: [secureField, plainField])
 
         func label(_ text: String) -> NSTextField {
             let l = NSTextField(labelWithString: text)
             l.alignment = .right
             return l
         }
-        var rows: [[NSView]] = [[label(store == .ssh ? "Host" : "Address"), host], [label("Port"), port],
-                                [label("Username"), user], [label("Password"), passwordStack],
-                                [NSGridCell.emptyContentView, show]]
-        if store == .ssh { rows.append([label("Key file"), key]) }
-        let grid = NSGridView(views: rows)
-        grid.rowSpacing = 8
-        grid.columnSpacing = 8
-        grid.frame = NSRect(x: 0, y: 0, width: 340, height: CGFloat(rows.count) * 30)
+        addRow(with: [label(store == .ssh ? "Host" : "Address"), host])
+        addRow(with: [label("Port"), port])
+        addRow(with: [label("Username"), user])
+        addRow(with: [label("Password"), password])
+        addRow(with: [NSGridCell.emptyContentView, show])
+        if store == .ssh { addRow(with: [label("Key file"), key]) }
+        rowSpacing = 8
+        columnSpacing = 8
+        column(at: 0).xPlacement = .trailing
         host.nextKeyView = port
         port.nextKeyView = user
-        user.nextKeyView = hidden
-        hidden.nextKeyView = store == .ssh ? key : host
+        user.nextKeyView = secureField
+        secureField.nextKeyView = store == .ssh ? key : host
+        frame = NSRect(origin: .zero, size: fittingSize)
+    }
 
+    required init?(coder: NSCoder) { fatalError() }
+
+    var password: String {
+        get { toggle.sync(); return secureField.stringValue }
+        set { secureField.stringValue = newValue; plainField.stringValue = newValue }
+    }
+
+    /// The login as entered, or the reason it can't be saved.
+    func login() -> Result<LoginVault.Login, LinkError> {
+        var result = LoginVault.Login()
+        result.host = host.stringValue.trimmingCharacters(in: .whitespaces)
+        result.user = user.stringValue.trimmingCharacters(in: .whitespaces)
+        result.password = password
+        result.keyFile = store == .ssh ? key.stringValue.trimmingCharacters(in: .whitespaces) : ""
+        guard let p = Int(port.stringValue.trimmingCharacters(in: .whitespaces)), (1...65535).contains(p) else {
+            return .failure(LinkError(message: "The port must be an integer between 1 and 65535."))
+        }
+        result.port = p
+        if result.host.isEmpty || result.user.isEmpty {
+            return .failure(LinkError(message: "\(store == .ssh ? "Host" : "Address") and username are required."))
+        }
+        return .success(result)
+    }
+}
+
+@MainActor enum LoginForm {
+    static func run(_ login: LoginVault.Login, store: LoginVault.Store, title: String) -> LoginVault.Login? {
+        let form = LoginFormView(login, store: store)
+        defer { form.password = "" }
         var note = store == .ssh ? "The password may stay blank for keys or ssh-agent." : ""
         while true {
             let alert = NSAlert()
@@ -306,33 +364,14 @@ final class LoginTable: NSTableView {
             alert.informativeText = note
             alert.addButton(withTitle: "Save")
             alert.addButton(withTitle: "Cancel")
-            alert.accessoryView = grid
-            alert.window.initialFirstResponder = host
+            alert.accessoryView = form
+            alert.window.initialFirstResponder = form.host
             NSApp.activate()
-            let ok = alert.runModal() == .alertFirstButtonReturn
-            toggle.sync()
-            let password = hidden.stringValue
-            defer { hidden.stringValue = ""; shown.stringValue = "" }
-            guard ok else { return nil }
-            var result = LoginVault.Login()
-            result.host = host.stringValue.trimmingCharacters(in: .whitespaces)
-            result.user = user.stringValue.trimmingCharacters(in: .whitespaces)
-            result.password = password
-            result.keyFile = store == .ssh ? key.stringValue.trimmingCharacters(in: .whitespaces) : ""
-            guard let p = Int(port.stringValue.trimmingCharacters(in: .whitespaces)), (1...65535).contains(p) else {
-                note = "The port must be an integer between 1 and 65535."
-                hidden.stringValue = password
-                shown.stringValue = password
-                continue
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+            switch form.login() {
+            case .success(let result): return result
+            case .failure(let error): note = error.message
             }
-            result.port = p
-            if result.host.isEmpty || result.user.isEmpty {
-                note = "\(store == .ssh ? "Host" : "Address") and username are required."
-                hidden.stringValue = password
-                shown.stringValue = password
-                continue
-            }
-            return result
         }
     }
 }

@@ -276,7 +276,7 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
 - **T6 Mac app test.** `scripts/test-macos.sh` runs a private test copy of the Mac app (its own bundle id, settings
   and vault file, off screen and out of the Dock) against the mock camera twice: first it ticks Save login and checks
   the camera login reached the vault, then it starts from a wrong username, fills the fields from the saved login and
-  checks that the camera moved. It saves pictures of the window and of Manage Logins. `test-core.sh` also runs
+  checks that the camera moved. It saves pictures of the window, of Manage Logins and of the Edit form. `test-core.sh` also runs
   `tests/vault-smoke.c`: plain and encrypted files, both stores, wrong and changed passwords, tampering.
 - **T5 Linux app test.** `scripts/test-linux.sh` runs the installed Flatpak off screen against the mock camera with
   its own settings folder, and passes when the window picture is saved and the camera saw the app's requests.

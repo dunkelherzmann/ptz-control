@@ -241,8 +241,8 @@ struct ptz_vault {
             if (value < low || value > high || value != static_cast<uint32_t>(value)) throw damaged;
             return static_cast<uint32_t>(value);
         };
-        blocks = whole(parts[1], 8, 1 << 22);
-        passes = whole(parts[2], 1, 64);
+        blocks = whole(parts[1], 8, 1 << 18);  // at most 256 MiB
+        passes = whole(parts[2], 1, 16);
         std::vector<uint8_t> salt_bytes, nonce_bytes;
         while (!body.empty() && (body.back() == '\n' || body.back() == '\r')) body.pop_back();
         if (!unhex(parts[3], salt_bytes) || salt_bytes.size() != kSalt || !unhex(parts[4], nonce_bytes) ||
@@ -313,7 +313,7 @@ struct ptz_vault {
             throw ptz::Error("Cannot save the logins: " + ptz::windows_error(code));
         }
 #else
-        int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+        int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
         if (fd < 0) {
             wipe(text);
             throw ptz::Error(std::string("Cannot save the logins: ") + std::strerror(errno));
