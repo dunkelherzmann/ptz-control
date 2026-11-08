@@ -1359,10 +1359,12 @@ bool save_png(HWND window, const std::wstring &path) {
     HDC mem = CreateCompatibleDC(screen);
     HBITMAP bitmap = CreateCompatibleBitmap(screen, w, h);
     HGDIOBJ old = SelectObject(mem, bitmap);
-    BOOL ok = PrintWindow(window, mem, PW_RENDERFULLCONTENT);
+    // WM_PRINT has each window paint itself into the bitmap, so it works without a compositor too
+    // (a test run over SSH, in session 0).
+    SendMessageW(window, WM_PRINT, reinterpret_cast<WPARAM>(mem), PRF_NONCLIENT | PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
     SelectObject(mem, old);
     bool saved = false;
-    if (ok) {
+    {
         UINT count = 0, size = 0;
         GetImageEncodersSize(&count, &size);
         std::vector<BYTE> buffer(size);
@@ -1473,6 +1475,12 @@ LRESULT CALLBACK console_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_ERASEBKGND:
             return 1;
+        case WM_PRINTCLIENT: {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            paint(reinterpret_cast<HDC>(wp), rc);
+            return 0;
+        }
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC dc = BeginPaint(hwnd, &ps);

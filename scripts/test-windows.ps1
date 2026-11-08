@@ -59,6 +59,19 @@ function Settings($user) {
     Set-ItemProperty $key CameraPort $Port -Type DWord
     Set-ItemProperty $key CameraUser $user
 }
+# A picture counts only when something was drawn: many colors, not one flat fill.
+Add-Type -AssemblyName System.Drawing
+function Drawn($path) {
+    if (-not (Test-Path $path)) { return $false }
+    $image = [System.Drawing.Bitmap]::FromFile($path)
+    try {
+        $colors = @{}
+        for ($x = 0; $x -lt $image.Width; $x += [Math]::Max(1, [int]($image.Width / 40))) {
+            for ($y = 0; $y -lt $image.Height; $y += [Math]::Max(1, [int]($image.Height / 40))) { $colors[$image.GetPixel($x, $y).ToArgb()] = 1 }
+        }
+        return $colors.Count -ge 8
+    } finally { $image.Dispose() }
+}
 function Moves { @(Select-String -Path $mockLog -Pattern '^mock: onvif AbsoluteMove' -ErrorAction SilentlyContinue).Count }
 function RunApp($vars) {
     $saved = @{}
@@ -76,7 +89,7 @@ try {
     RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PATH = $shot; PTZ_SNAPSHOT_SAVE_LOGIN = '1' }
     Check 'run 1 connected and moved' ((Moves) -ge 1)
     Check 'run 1 saved the camera login' ((Get-Content $vault) -contains "camera`tadmin`tsecret")
-    Check 'window picture saved' ((Test-Path $shot) -and (Get-Item $shot).Length -gt 0)
+    Check 'window picture drawn' (Drawn $shot)
     $before = Moves
 
     Settings 'nobody'
@@ -85,7 +98,7 @@ try {
     RunApp @{ PTZ_PASSWORD = $null; PTZ_SNAPSHOT_PATH = (Join-Path $Out 'windows-saved-login.png'); PTZ_SNAPSHOT_USE_LOGIN = '1';
               PTZ_SNAPSHOT_LOGINS_PATH = $logins }
     Check 'run 2 connected with the saved login and moved' ((Moves) -gt $before)
-    Check 'Manage Logins picture saved' ((Test-Path $logins) -and (Get-Item $logins).Length -gt 0)
+    Check 'Manage Logins picture drawn' (Drawn $logins)
     Check 'still one camera login' (@(Get-Content $vault | Where-Object { $_ -like 'camera*' }).Count -eq 1)
 } finally {
     Stop-Process -Id $mock.Id -ErrorAction SilentlyContinue
