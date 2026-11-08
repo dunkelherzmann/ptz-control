@@ -15,3 +15,4 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [ ] Mac
   - [ ] Linux
   - [ ] Windows
+- [x] **Keep a specification and a plan per version:** `SPECIFICATION.md` describes every feature with its id, platforms, shortcut and hover text, and the builds per platform; `pending.md` (macOS), `windows/pending.md` and `linux/pending.md` list what each version still lacks or gets wrong, in build order. *Requested 2026-11-08.* Done in #5.

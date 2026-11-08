@@ -1,0 +1,36 @@
+# Linux: what isn't production-ready yet
+
+What the Linux version lacks or gets wrong compared with the macOS reference in
+[`SPECIFICATION.md`](../SPECIFICATION.md), in build order, each with its spec section. Section 14 of the spec describes
+how Linux differs today. Fix broken items first, one pull request each, and tick an item with its PR number once it
+is built and its test passes on Linux. [`bugs.md`](../bugs.md) and [`enhancements.md`](../enhancements.md) stay the record
+of requests and releases.
+
+## Bugs to fix
+
+No open bugs in `bugs.md`.
+
+- [ ] **System doesn't follow a light/dark switch while the app runs.** It reads the desktop's setting once, at
+  launch; the Mac and Windows versions follow the switch. Listen for the portal's color-scheme change and reapply.
+  (§12 A2)
+
+## To build
+
+- [ ] **Remember the window's size and position.** (§2 K2)
+- [ ] **Advanced behind a disclosure, closed at first.** (§3 F5)
+- [ ] **Return in a connection field moves to the next field**, and connects only from the camera password or the
+  Connect button. (§3 F8)
+- [ ] **Event buffer keeps its place** when you've scrolled up; it jumps to the newest line today. (§11 E2)
+- [ ] **Hover text on every control**, as listed in the Mac `pending.md`. (§3, §7, §8, §10)
+- [ ] **Screen readers.** The status chip, the readouts, the plane and the meters are painted widgets without an
+  accessible name or value, so Orca can't read the position or aim with them. (§7 I2–I7)
+- [ ] **Feature tests beyond the snapshot.** `test-linux.sh` checks that the Flatpak connects to the mock camera over
+  the Local route with ONVIF, moves and returns to the start, by counting requests and saving a picture. Extend it to
+  Axis, the SSH route through a throwaway `sshd`, and a check of the values the app shows. (§16 T4–T5)
+
+## Not checked automatically
+
+- [ ] Whether `test-core.sh` and `test-ssh.sh` (§16 T2–T3) run on the Linux machine: they need clang and libcurl's
+  headers, and were written on the Mac.
+- [ ] Everything in spec sections 2–13 beyond connect, move and return with ONVIF on the Local route, in particular
+  the SSH route inside the Flatpak sandbox (§5), on X11 and on native Wayland (§14).
