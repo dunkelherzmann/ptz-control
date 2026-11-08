@@ -87,7 +87,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
 
         let sidebar = PanelView(caption: "Secure link configuration", content: connection)
         connection.onConnect = { [weak self] in self?.toggleConnection() }
-        connection.onManageLogins = { ManageLoginsWindowController.shared.present() }
+        connection.onManageLogins = { ManageLoginsWindowController.shared.present(store: $0) }
 
         headerTitle.font = .systemFont(ofSize: 17, weight: .semibold)
         headerUnits.font = .systemFont(ofSize: 12)

@@ -36,12 +36,17 @@ import AppKit
     required init?(coder: NSCoder) { fatalError() }
 
     /// Opens the window, asking for the Administrator Password first when logins are locked.
-    func present() {
+    /// From a Login menu it shows that menu's list (SSH or camera).
+    func present(store: LoginVault.Store? = nil) {
         guard vault.state != .unavailable else {
             VaultPrompts.showError("Saved logins are unavailable", vault.openError ?? "")
             return
         }
         if vault.state == .locked { _ = VaultPrompts.unlock() }
+        if let store, store != self.store {
+            storeControl.selectedSegment = store.rawValue
+            table.deselectAll(nil)
+        }
         reload()
         if window?.isVisible != true { window?.center() }
         showWindow(nil)

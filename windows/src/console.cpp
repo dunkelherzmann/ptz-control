@@ -412,7 +412,7 @@ void login_chosen(HWND box) {
     int tag = item < 0 ? kTyped : static_cast<int>(SendMessageW(box, CB_GETITEMDATA, item, 0));
     if (tag == kManage) {
         SendMessageW(box, CB_SETCURSEL, 0, 0);
-        show_manage_logins(g->hwnd);
+        show_manage_logins(g->hwnd, store);
         return;
     }
     if (tag == kUnlock) {

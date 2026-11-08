@@ -264,6 +264,7 @@ public:
     }
 
     void show_store(LoginStore store) {
+        if (this->store() != store) table_->clearSelection();
         (store == LoginStore::Ssh ? ssh_tab_ : camera_tab_)->setChecked(true);
         reload();
     }
@@ -595,7 +596,7 @@ bool vault_ensure_writable(QWidget *parent) {
     return vault_ensure_readable(parent);
 }
 
-void show_manage_logins(QWidget *parent) {
+void show_manage_logins(QWidget *parent, std::optional<LoginStore> store) {
     if (vault_state() == VaultState::Unavailable) {
         show_error(parent, "Saved logins are unavailable", vault_open_error());
         return;
@@ -605,6 +606,7 @@ void show_manage_logins(QWidget *parent) {
         g_manage = new ManageLogins(parent);
         g_manage->setAttribute(Qt::WA_DeleteOnClose);
     }
+    if (store) g_manage->show_store(*store);
     g_manage->show();
     g_manage->raise();
     g_manage->activateWindow();

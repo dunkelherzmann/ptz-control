@@ -126,7 +126,8 @@ bool vault_unlock_dialog(QWidget *parent);
 bool vault_change_admin_dialog(QWidget *parent);
 bool vault_ensure_readable(QWidget *parent);
 bool vault_ensure_writable(QWidget *parent);  // asks how to keep logins the first time
-void show_manage_logins(QWidget *parent);
+// From a Login menu, `store` picks the list shown; otherwise it keeps the last one.
+void show_manage_logins(QWidget *parent, std::optional<LoginStore> store = std::nullopt);
 QPixmap manage_logins_snapshot(QWidget *parent, LoginStore store);  // test hook
 QPixmap login_form_snapshot(QWidget *parent, LoginStore store);     // test hook
 

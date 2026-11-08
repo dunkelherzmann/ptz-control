@@ -34,7 +34,7 @@ final class ConnectionPanel: NSView, Themed, NSTextFieldDelegate {
     private var messageIsError = false
 
     var onConnect: (() -> Void)?
-    var onManageLogins: (() -> Void)?
+    var onManageLogins: ((LoginVault.Store) -> Void)?
 
     init() {
         super.init(frame: .zero)
@@ -301,7 +301,7 @@ final class ConnectionPanel: NSView, Themed, NSTextFieldDelegate {
         switch tag {
         case LoginItem.manage.rawValue:
             popup.selectItem(at: 0)
-            onManageLogins?()
+            onManageLogins?(store)
         case LoginItem.unlock.rawValue:
             popup.selectItem(at: 0)
             if VaultPrompts.unlock() { popup.performClick(nil) }
