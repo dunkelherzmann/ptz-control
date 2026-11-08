@@ -11,3 +11,7 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [x] Windows
   - [x] Linux
 - [x] **Ship the Linux app as a Flatpak instead of an AppImage.** `org.ptzcontrol.app` on KDE's Qt 6 runtime, built on the Linux machine with flatpak-builder (`scripts/build-linux.sh`) and tested against the mock camera (`scripts/test-linux.sh`). *Requested 2026-11-08.* Linux. Done in #3.
+- [ ] **Login vaults for SSH hosts and for cameras,** like Herb's Terminal's login vault. Two separate stores: one for SSH logins, one for camera logins. Both are unlocked by the same Administrator Password, but they stay independent of each other: one SSH host can be used with several different camera logins, and a local camera (the Local route) needs no SSH login at all. *Requested 2026-11-08.* Mac, Linux and Windows.
+  - [ ] Mac
+  - [ ] Linux
+  - [ ] Windows
