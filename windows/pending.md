@@ -8,7 +8,7 @@ record of requests and releases.
 
 ## Next (top priority)
 
-- [ ] **☰ menu matches the Mac's in-window menus.** Once the Mac has moved every menu into its window, check that this version's in-window menu holds the same menus, submenus, order and shortcuts, and that no command is reachable only somewhere else. (H1, enhancements.md) *Asked 2026-11-09.*
+- [x] **☰ menu matches the Mac's in-window menus** (#23). The ☰ holds the same menus, submenus, order and shortcuts, and no command is reachable only somewhere else. (H1, enhancements.md) *Asked 2026-11-09.*
 
 ## Bugs to fix
 

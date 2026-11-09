@@ -41,13 +41,18 @@ moves() { grep -c '^mock: onvif AbsoluteMove' "$WORK/mock.log" || true; }
 settings admin
 rm -f "$SHOT"
 run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PATH="$SHOT" --env=PTZ_SNAPSHOT_RETURN=1 --env=PTZ_SNAPSHOT_SAVE_LOGIN=1 \
-    --env=PTZ_SNAPSHOT_LOGIN_NAME=cam1
+    --env=PTZ_SNAPSHOT_LOGIN_NAME=cam1 --env=PTZ_MENU_REPORT="$WORK/menus.txt"
 REQUESTS="$(grep -c '"POST ' "$WORK/mock.log" || true)"
 check "run 1 connected and moved ($REQUESTS camera requests)" "$([ "$(moves)" -ge 1 ] && echo 0 || echo 1)"
 check "run 1 saved the camera login" \
     "$(printf 'camera\tcam1\tadmin\tsecret\n' | grep -qxF -f - "$VAULT" && echo 0 || echo 1)"
 check "the vault file is private (0600)" "$([ "$(stat -c %a "$VAULT")" = 600 ] && echo 0 || echo 1)"
 check "window picture saved" "$([ -s "$SHOT" ] && echo 0 || echo 1)"
+check "Main Menu button in the window and in Manage Logins" \
+    "$(grep -qx 'main menu button: yes' "$WORK/menus.txt" && grep -qx 'manage logins main menu button: yes' "$WORK/menus.txt" && echo 0 || echo 1)"
+check "Main Menu holds the Mac's menus in order" \
+    "$([ "$(grep -v ':' "$WORK/menus.txt" | grep -v '^ ' | paste -sd,)" = 'PTZ Control,Edit,Camera,View,Window,Help' ] && echo 0 || echo 1)"
+check "a Main Menu command acts" "$(grep -qx 'menu command acts: theme System -> Green Phosphor' "$WORK/menus.txt" && echo 0 || echo 1)"
 BEFORE="$(moves)"
 
 # Run 2: wrong username in the settings, no PTZ_PASSWORD: only the saved login can connect.

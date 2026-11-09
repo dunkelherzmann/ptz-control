@@ -34,7 +34,7 @@ A box is ticked once the change has shipped. A request that covers several platf
 
 - [x] **Keep each platform's files in its own folder.** The root holds only what applies to the whole project (shared core, docs, trackers, version and cross-platform scripts); `macos/`, `linux/` and `windows/` each hold their own build and test scripts and `pending.md`. Also line endings fixed by `.gitattributes`, a build check on every pull request (GitHub Actions on macOS, Linux and Windows), and the duplicate root `ptz-control.sh` removed (it lives in `legacy/`). *Requested 2026-11-09.* All platforms. Done in #19.
 
-- [ ] **All menus and submenus in the app's window, on macOS too.** Nothing in the macOS menu bar beyond the app menu macOS always shows, so on wide screens no command needs a trip to the top of the screen. Top priority: the next item in every `pending.md`. *Requested 2026-11-09.* All platforms.
+- [x] **All menus and submenus in the app's window, on macOS too.** Nothing in the macOS menu bar beyond the app menu macOS always shows, so on wide screens no command needs a trip to the top of the screen. Top priority: the next item in every `pending.md`. *Requested 2026-11-09.* All platforms.
   - [x] Mac (#22)
-  - [ ] Linux
-  - [ ] Windows
+  - [x] Linux (#23)
+  - [x] Windows (#23)

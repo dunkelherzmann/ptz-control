@@ -11,6 +11,8 @@
 #include <uxtheme.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -26,8 +28,9 @@ enum : int {
     ID_PLANE, ID_METER_PAN, ID_METER_TILT, ID_METER_ZOOM,
     ID_SSH_LOGIN = 260, ID_CAM_LOGIN, ID_SAVE_SSH, ID_SAVE_CAM,
     CMD_CONNECT = 400, CMD_DISCONNECT, CMD_MOVE, CMD_RETURN, CMD_STOP, CMD_REFRESH, CMD_PAUSE, CMD_WEB, CMD_HELP, CMD_ABOUT,
-    CMD_LOGINS,
-    CMD_THEME = 420,  // + Phosphor index
+    CMD_LOGINS, CMD_QUIT, CMD_UNDO, CMD_REDO, CMD_CUT, CMD_COPY, CMD_PASTE, CMD_SELECT_ALL, CMD_MINIMIZE, CMD_MAXIMIZE,
+    CMD_CLOSE,
+    CMD_THEME = 450,  // + Phosphor index; keep clear of the commands above
 };
 
 enum class State { Idle, Connecting, Connected, Disconnecting };
@@ -1126,10 +1129,37 @@ void draw_button(const DRAWITEMSTRUCT &d) {
     DeleteDC(mem);
 }
 
-void show_menu() {
-    HMENU menu = CreatePopupMenu(), camera = CreatePopupMenu(), phosphor = CreatePopupMenu();
+void command(int id);
+
+// The ☰ Main Menu (spec §13 H1): every menu of the app, each as a submenu, in the Mac's order.
+HMENU build_menu() {
+    HMENU menu = CreatePopupMenu(), app = CreatePopupMenu(), edit = CreatePopupMenu(), camera = CreatePopupMenu(),
+          view = CreatePopupMenu(), phosphor = CreatePopupMenu(), window = CreatePopupMenu(), help = CreatePopupMenu();
     bool connected = g->state == State::Connected;
     UINT on = MF_STRING, off = MF_STRING | MF_GRAYED;
+    AppendMenuW(app, on, CMD_ABOUT, L"About PTZ Control");
+    AppendMenuW(app, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(app, on, CMD_QUIT, L"Quit PTZ Control\tCtrl+Q");
+
+    // Edit acts on the field that has the focus, as its own shortcuts do.
+    HWND focus = GetFocus();
+    wchar_t cls[32] = L"";
+    if (focus) GetClassNameW(focus, cls, 32);
+    bool rich = _wcsnicmp(cls, L"RichEdit", 8) == 0;
+    bool text = rich || _wcsicmp(cls, L"Edit") == 0;
+    bool editable = text && !(GetWindowLongW(focus, GWL_STYLE) & ES_READONLY);
+    DWORD from = 0, to = 0;
+    if (text) SendMessageW(focus, EM_GETSEL, reinterpret_cast<WPARAM>(&from), reinterpret_cast<LPARAM>(&to));
+    bool selected = to > from;
+    AppendMenuW(edit, editable && SendMessageW(focus, EM_CANUNDO, 0, 0) ? on : off, CMD_UNDO, L"Undo\tCtrl+Z");
+    // Plain Windows edit fields keep one undo step and no redo; rich edit fields (the event buffer) have both.
+    AppendMenuW(edit, editable && rich && SendMessageW(focus, EM_CANREDO, 0, 0) ? on : off, CMD_REDO, L"Redo\tCtrl+Shift+Z");
+    AppendMenuW(edit, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(edit, editable && selected ? on : off, CMD_CUT, L"Cut\tCtrl+X");
+    AppendMenuW(edit, selected ? on : off, CMD_COPY, L"Copy\tCtrl+C");
+    AppendMenuW(edit, editable && IsClipboardFormatAvailable(CF_UNICODETEXT) ? on : off, CMD_PASTE, L"Paste\tCtrl+V");
+    AppendMenuW(edit, text ? on : off, CMD_SELECT_ALL, L"Select All\tCtrl+A");
+
     AppendMenuW(camera, g->state == State::Idle || g->state == State::Connecting ? on : off, CMD_CONNECT,
                 g->state == State::Connecting ? L"Cancel Connection\tCtrl+K" : L"Connect\tCtrl+K");
     AppendMenuW(camera, connected ? on : off, CMD_DISCONNECT, L"Disconnect\tCtrl+Shift+K");
@@ -1143,20 +1173,67 @@ void show_menu() {
     AppendMenuW(camera, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(camera, connected ? on : off, CMD_WEB, L"Open Camera Web Interface\tCtrl+L");
     AppendMenuW(camera, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(camera, vault_state() != VaultState::Unavailable ? on : off, CMD_LOGINS, L"Manage Logins\u2026\tCtrl+Shift+L");
+    AppendMenuW(camera, vault_state() != VaultState::Unavailable ? on : off, CMD_LOGINS, L"Manage Logins…\tCtrl+Shift+L");
+
     for (int i = 0; i < 5; ++i) {
         std::wstring label = std::wstring(phosphor_title(static_cast<Phosphor>(i))) + L"\tCtrl+Alt+" + std::to_wstring(i + 1);
         AppendMenuW(phosphor, MF_STRING | (static_cast<int>(g->phosphor) == i ? MF_CHECKED : 0), CMD_THEME + i, label.c_str());
     }
+    AppendMenuW(view, MF_POPUP, reinterpret_cast<UINT_PTR>(phosphor), L"Phosphor");
+
+    AppendMenuW(window, on, CMD_MINIMIZE, L"Minimize\tCtrl+M");
+    AppendMenuW(window, on, CMD_MAXIMIZE, IsZoomed(g->hwnd) ? L"Restore" : L"Maximize");
+    AppendMenuW(window, on, CMD_CLOSE, L"Close\tCtrl+W");
+
+    AppendMenuW(help, on, CMD_HELP, L"Coordinate Help\tF1");
+
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(app), L"PTZ Control");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(edit), L"Edit");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(camera), L"Camera");
-    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(phosphor), L"Phosphor");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, CMD_HELP, L"Coordinate Help\tF1");
-    AppendMenuW(menu, MF_STRING, CMD_ABOUT, L"About PTZ Control");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"View");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(window), L"Window");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Help");
+    return menu;
+}
+
+void show_menu() {
+    HMENU menu = build_menu();
     RECT r;
     GetWindowRect(g->menu, &r);
     TrackPopupMenu(menu, TPM_RIGHTALIGN | TPM_TOPALIGN, r.right, r.bottom + S(2), 0, g->hwnd, nullptr);
     DestroyMenu(menu);
+}
+
+// Test copy (PTZ_MENU_REPORT): the Main Menu's outline, its button, and whether a menu command acts.
+void write_menu_report(const wchar_t *path) {
+    std::wstring out = std::wstring(L"main menu button: ") + (g->menu ? L"yes" : L"no") + L"\n";
+    Phosphor before = g->phosphor;
+    command(CMD_THEME + 1);
+    out += L"menu command acts: theme " + std::wstring(phosphor_title(before)) + L" -> " + phosphor_title(g->phosphor) + L"\n";
+    command(CMD_THEME + static_cast<int>(before));
+    HMENU menu = build_menu();
+    std::function<void(HMENU, int)> outline = [&](HMENU m, int depth) {
+        for (int i = 0, n = GetMenuItemCount(m); i < n; ++i) {
+            wchar_t title[128] = L"";
+            MENUITEMINFOW info{sizeof(info), MIIM_FTYPE | MIIM_STRING | MIIM_SUBMENU};
+            info.dwTypeData = title;
+            info.cch = 127;
+            GetMenuItemInfoW(m, i, TRUE, &info);
+            if (info.fType & MFT_SEPARATOR) continue;
+            std::wstring t = title;
+            out += std::wstring(depth * 2, L' ') + t.substr(0, t.find(L'\t')) + L"\n";
+            if (info.hSubMenu) outline(info.hSubMenu, depth + 1);
+        }
+    };
+    outline(menu, 0);
+    DestroyMenu(menu);
+    std::string utf8(WideCharToMultiByte(CP_UTF8, 0, out.c_str(), -1, nullptr, 0, nullptr, nullptr), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, out.c_str(), -1, utf8.data(), static_cast<int>(utf8.size()), nullptr, nullptr);
+    utf8.pop_back();
+    if (FILE *f = _wfopen(path, L"wb")) {
+        fwrite(utf8.data(), 1, utf8.size(), f);
+        fclose(f);
+    }
 }
 
 void command(int id) {
@@ -1189,6 +1266,17 @@ void command(int id) {
             InvalidateRect(id == ID_SAVE_SSH ? g->save_ssh : g->save_cam, nullptr, FALSE);
             return;
         case CMD_PAUSE: toggle_pause(); return;
+        case CMD_QUIT: case CMD_CLOSE: PostMessageW(g->hwnd, WM_CLOSE, 0, 0); return;
+        case CMD_MINIMIZE: ShowWindow(g->hwnd, SW_MINIMIZE); return;
+        case CMD_MAXIMIZE: ShowWindow(g->hwnd, IsZoomed(g->hwnd) ? SW_RESTORE : SW_MAXIMIZE); return;
+        case CMD_UNDO: case CMD_CUT: case CMD_COPY: case CMD_PASTE: case CMD_SELECT_ALL: {
+            HWND focus = GetFocus();
+            if (!focus) return;
+            if (id == CMD_SELECT_ALL) SendMessageW(focus, EM_SETSEL, 0, -1);
+            else SendMessageW(focus, id == CMD_UNDO ? WM_UNDO : id == CMD_CUT ? WM_CUT : id == CMD_COPY ? WM_COPY : WM_PASTE, 0, 0);
+            return;
+        }
+        case CMD_REDO: if (HWND focus = GetFocus()) SendMessageW(focus, EM_REDO, 0, 0); return;
         case ID_MENU: show_menu(); return;
         case CMD_HELP: show_help(); return;
         case CMD_ABOUT: {
@@ -1334,6 +1422,7 @@ void create_children() {
         {FCONTROL | FALT | FVIRTKEY, '1', CMD_THEME + 0}, {FCONTROL | FALT | FVIRTKEY, '2', CMD_THEME + 1},
         {FCONTROL | FALT | FVIRTKEY, '3', CMD_THEME + 2}, {FCONTROL | FALT | FVIRTKEY, '4', CMD_THEME + 3},
         {FCONTROL | FALT | FVIRTKEY, '5', CMD_THEME + 4},
+        {FCONTROL | FVIRTKEY, 'Q', CMD_QUIT}, {FCONTROL | FVIRTKEY, 'M', CMD_MINIMIZE}, {FCONTROL | FVIRTKEY, 'W', CMD_CLOSE},
     };
     g->accelerators = CreateAcceleratorTableW(keys, static_cast<int>(std::size(keys)));
 
@@ -1402,6 +1491,7 @@ bool save_png(HWND window, const std::wstring &path) {
 void snapshot_step(int step) {
     switch (step) {
         case kSnapStart:
+            if (const wchar_t *menus = _wgetenv(L"PTZ_MENU_REPORT")) write_menu_report(menus);
             if (_wgetenv(L"PTZ_SNAPSHOT_SAVE_LOGIN")) g->save_cam_on = true;
             if (_wgetenv(L"PTZ_SNAPSHOT_USE_LOGIN")) choose_saved_login(LoginStore::Camera, 0);
             connect();

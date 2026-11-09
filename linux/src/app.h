@@ -130,7 +130,12 @@ bool vault_ensure_writable(QWidget *parent);  // asks how to keep logins the fir
 void show_manage_logins(QWidget *parent, std::optional<LoginStore> store = std::nullopt);
 QPixmap manage_logins_snapshot(QWidget *parent, LoginStore store);  // test hook
 QPixmap login_form_snapshot(QWidget *parent, LoginStore store);     // test hook
+class QDialog;
+QDialog *open_manage_logins_for_test(QWidget *parent);              // test hook: built, not shown
 
 // ---- console window ----------------------------------------------------------
 class QWidget;
 QWidget *create_console();
+// The ☰ Main Menu (spec §13 H1) at the end of `row`, and the app's shortcuts in `window`.
+class QBoxLayout;
+void attach_main_menu(QWidget *window, QBoxLayout *row);

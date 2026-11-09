@@ -9,6 +9,7 @@
 #include <QComboBox>
 #include <QCloseEvent>
 #include <QDateTime>
+#include <QDialog>
 #include <QDesktopServices>
 #include <QDir>
 #include <QGridLayout>
@@ -31,6 +32,9 @@
 #include <QVBoxLayout>
 
 #include <deque>
+#include <QPointer>
+#include <QTextEdit>
+#include <QFile>
 
 namespace {
 
@@ -368,14 +372,7 @@ private:
         chip_ = new Chip;
         header->addWidget(chip_, 0, Qt::AlignTop);
         header->addSpacing(10);
-        menu_button_ = new QToolButton;
-        menu_button_->setObjectName("menu");
-        menu_button_->setText("☰");
-        menu_button_->setFixedSize(34, 28);
-        menu_button_->setPopupMode(QToolButton::InstantPopup);
-        menu_button_->setCursor(Qt::PointingHandCursor);
-        menu_ = new QMenu(menu_button_);
-        menu_button_->setMenu(menu_);
+        menu_button_ = main_menu_button();
         header->addWidget(menu_button_, 0, Qt::AlignTop);
         right->addLayout(header);
 
@@ -469,7 +466,6 @@ private:
             connect(f, &QLineEdit::textChanged, this, [this] { update_target_markers(); });
             connect(f, &QLineEdit::returnPressed, this, [this] { send_move(); });
         }
-        connect(menu_, &QMenu::aboutToShow, this, [this] { build_menu(); });
 
         plane_->state.on_aim = [this](double pan, double tilt) {
             target_pan_->setText(format_value(pan));
@@ -490,24 +486,7 @@ private:
             };
         }
 
-        auto key = [this](const QKeySequence &seq, std::function<void()> fn) {
-            auto *s = new QShortcut(seq, this);
-            s->setContext(Qt::WindowShortcut);
-            connect(s, &QShortcut::activated, this, std::move(fn));
-        };
-        key(QKeySequence("Ctrl+K"), [this] { if (state_ == State::Idle || state_ == State::Connecting) toggle_connection(); });
-        key(QKeySequence("Ctrl+Shift+K"), [this] { disconnect(); });
-        key(QKeySequence("Ctrl+Shift+L"), [this] { show_manage_logins(this); });
-        key(QKeySequence("Ctrl+Return"), [this] { send_move(); });
-        key(QKeySequence("Ctrl+Enter"), [this] { send_move(); });
-        key(QKeySequence("Ctrl+B"), [this] { return_to_start(); });
-        key(QKeySequence("Ctrl+."), [this] { stop_motion(); });
-        key(QKeySequence("Ctrl+R"), [this] { refresh_now(); });
-        key(QKeySequence("Ctrl+P"), [this] { toggle_pause(); });
-        key(QKeySequence("Ctrl+L"), [this] { open_web(); });
-        key(QKeySequence("Ctrl+Q"), [this] { close(); });
-        key(QKeySequence(Qt::Key_F1), [this] { show_help(); });
-        for (int i = 0; i < 5; ++i) key(QKeySequence(QString("Ctrl+Alt+%1").arg(i + 1)), [this, i] { set_theme(i); });
+        install_shortcuts(this);
 
         link_set_delegate(link_, LinkDelegate{
             [this](const QString &line) { log_line(line); },
@@ -1077,8 +1056,52 @@ private:
             "Ctrl+Alt+1…5 phosphor, Ctrl+Q quit.");
     }
 
-    void build_menu() {
-        menu_->clear();
+public:
+    // ---- Main Menu (spec §13 H1) -------------------------------------------------------
+
+    // The ☰ button: every menu of the app, each as a submenu, in the Mac's order.
+    QToolButton *main_menu_button() {
+        auto *button = new QToolButton;
+        button->setObjectName("menu");
+        button->setText("☰");
+        button->setFixedSize(34, 28);
+        button->setPopupMode(QToolButton::InstantPopup);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setFocusPolicy(Qt::NoFocus);  // the Edit commands act on the field that keeps the focus
+        button->setToolTip("Main Menu: every command of PTZ Control, with its shortcut");
+        button->setAccessibleName("Main Menu");
+        auto *menu = new QMenu(button);
+        button->setMenu(menu);
+        connect(menu, &QMenu::aboutToShow, button, [this, menu, button] { build_menu(menu, button->window()); });
+        return button;
+    }
+
+    // The app's shortcuts, in any window that has a Main Menu.
+    void install_shortcuts(QWidget *window) {
+        auto key = [window](const QKeySequence &seq, std::function<void()> fn) {
+            auto *s = new QShortcut(seq, window);
+            s->setContext(Qt::WindowShortcut);
+            QObject::connect(s, &QShortcut::activated, window, std::move(fn));
+        };
+        key(QKeySequence("Ctrl+K"), [this] { if (state_ == State::Idle || state_ == State::Connecting) toggle_connection(); });
+        key(QKeySequence("Ctrl+Shift+K"), [this] { disconnect(); });
+        key(QKeySequence("Ctrl+Shift+L"), [this] { show_manage_logins(this); });
+        key(QKeySequence("Ctrl+Return"), [this] { send_move(); });
+        key(QKeySequence("Ctrl+Enter"), [this] { send_move(); });
+        key(QKeySequence("Ctrl+B"), [this] { return_to_start(); });
+        key(QKeySequence("Ctrl+."), [this] { stop_motion(); });
+        key(QKeySequence("Ctrl+R"), [this] { refresh_now(); });
+        key(QKeySequence("Ctrl+P"), [this] { toggle_pause(); });
+        key(QKeySequence("Ctrl+L"), [this] { open_web(); });
+        key(QKeySequence("Ctrl+Q"), [this] { close(); });
+        key(QKeySequence("Ctrl+M"), [window] { window->showMinimized(); });
+        key(QKeySequence("Ctrl+W"), [window] { window->close(); });
+        key(QKeySequence(Qt::Key_F1), [this] { show_help(); });
+        for (int i = 0; i < 5; ++i) key(QKeySequence(QString("Ctrl+Alt+%1").arg(i + 1)), [this, i] { set_theme(i); });
+    }
+
+    void build_menu(QMenu *menu, QWidget *window) {
+        menu->clear();
         bool connected = state_ == State::Connected;
         auto item = [](QMenu *m, const QString &text, const QString &keys, bool enabled, std::function<void()> fn) {
             QAction *a = m->addAction(keys.isEmpty() ? text : text + "\t" + keys);
@@ -1086,7 +1109,29 @@ private:
             QObject::connect(a, &QAction::triggered, m, std::move(fn));
             return a;
         };
-        QMenu *camera = menu_->addMenu("Camera");
+        QMenu *app = menu->addMenu("PTZ Control");
+        item(app, "About PTZ Control", "", true, [this] { show_about(); });
+        app->addSeparator();
+        item(app, "Quit PTZ Control", "Ctrl+Q", true, [this] { close(); });
+
+        // Edit acts on the field that has the focus, as its own shortcuts do.
+        QPointer<QWidget> focus = window->focusWidget();
+        auto *line = qobject_cast<QLineEdit *>(focus.data());
+        auto *plain = qobject_cast<QPlainTextEdit *>(focus.data());
+        bool editable = (line && !line->isReadOnly()) || (plain && !plain->isReadOnly());
+        bool text = line || plain;
+        bool selected = (line && line->hasSelectedText()) || (plain && plain->textCursor().hasSelection());
+        auto send = [focus](const char *slot) { return [focus, slot] { if (focus) QMetaObject::invokeMethod(focus, slot); }; };
+        QMenu *edit = menu->addMenu("Edit");
+        item(edit, "Undo", "Ctrl+Z", line ? line->isUndoAvailable() : false, send("undo"));
+        item(edit, "Redo", "Ctrl+Shift+Z", line ? line->isRedoAvailable() : false, send("redo"));
+        edit->addSeparator();
+        item(edit, "Cut", "Ctrl+X", editable && selected, send("cut"));
+        item(edit, "Copy", "Ctrl+C", selected, send("copy"));
+        item(edit, "Paste", "Ctrl+V", editable, send("paste"));
+        item(edit, "Select All", "Ctrl+A", text, send("selectAll"));
+
+        QMenu *camera = menu->addMenu("Camera");
         item(camera, state_ == State::Connecting ? "Cancel Connection" : "Connect", "Ctrl+K",
              state_ == State::Idle || state_ == State::Connecting, [this] { toggle_connection(); });
         item(camera, "Disconnect", "Ctrl+Shift+K", connected, [this] { disconnect(); });
@@ -1102,27 +1147,69 @@ private:
         camera->addSeparator();
         item(camera, "Manage Logins…", "Ctrl+Shift+L", vault_state() != VaultState::Unavailable,
              [this] { show_manage_logins(this); });
-        QMenu *phosphor = menu_->addMenu("Phosphor");
+
+        QMenu *view = menu->addMenu("View");
+        QMenu *phosphor = view->addMenu("Phosphor");
         for (int i = 0; i < 5; ++i) {
             QAction *a = item(phosphor, phosphor_title(static_cast<Phosphor>(i)), QString("Ctrl+Alt+%1").arg(i + 1), true,
                               [this, i] { set_theme(i); });
             a->setCheckable(true);
             a->setChecked(static_cast<int>(phosphor_) == i);
         }
-        menu_->addSeparator();
-        item(menu_, "Coordinate Help", "F1", true, [this] { show_help(); });
-        item(menu_, "About PTZ Control", "", true, [this] {
-            // QMessageBox shows rich text and opens its links in the browser.
-            QMessageBox::about(this, "About PTZ Control",
-                               "<p><b>PTZ Control " + QString::fromUtf8(ptz_core_version()).toHtmlEscaped() +
-                                   "</b></p><p>PTZ Coordinates Controller<br>ONVIF · Axis VAPIX · Local or SSH</p>"
-                                   "<p>By dunkelherzmann<br><a href=\"https://github.com/dunkelherzmann/ptz-control\">"
-                                   "https://github.com/dunkelherzmann/ptz-control</a></p>");
-        });
-        menu_->addSeparator();
-        item(menu_, "Quit", "Ctrl+Q", true, [this] { close(); });
+
+        QPointer<QWidget> target = window;
+        QMenu *windows = menu->addMenu("Window");
+        item(windows, "Minimize", "Ctrl+M", true, [target] { if (target) target->showMinimized(); });
+        item(windows, target->isMaximized() ? "Restore" : "Maximize", "", true,
+             [target] { if (target) target->isMaximized() ? target->showNormal() : target->showMaximized(); });
+        item(windows, "Close", "Ctrl+W", true, [target] { if (target) target->close(); });
+
+        QMenu *help = menu->addMenu("Help");
+        item(help, "Coordinate Help", "F1", true, [this] { show_help(); });
     }
 
+    void show_about() {
+        // QMessageBox shows rich text and opens its links in the browser.
+        QMessageBox::about(this, "About PTZ Control",
+                           "<p><b>PTZ Control " + QString::fromUtf8(ptz_core_version()).toHtmlEscaped() +
+                               "</b></p><p>PTZ Coordinates Controller<br>ONVIF · Axis VAPIX · Local or SSH</p>"
+                               "<p>By dunkelherzmann<br><a href=\"https://github.com/dunkelherzmann/ptz-control\">"
+                               "https://github.com/dunkelherzmann/ptz-control</a></p>");
+    }
+
+    // Test copy (PTZ_MENU_REPORT): the Main Menu's outline, where its buttons are, and whether a menu command acts.
+    void write_menu_report(const QString &path) {
+        QStringList lines;
+        QMenu menu;
+        build_menu(&menu, this);
+        std::function<void(QMenu *, int)> outline = [&](QMenu *m, int depth) {
+            for (QAction *a : m->actions()) {
+                if (a->isSeparator()) continue;
+                lines << QString(depth * 2, ' ') + a->text().section('\t', 0, 0);
+                if (a->menu()) outline(a->menu(), depth + 1);
+            }
+        };
+        outline(&menu, 0);
+        auto has_button = [](QWidget *w) {
+            for (auto *b : w->findChildren<QToolButton *>("menu"))
+                if (b->accessibleName() == "Main Menu") return true;
+            return false;
+        };
+        QDialog *logins = open_manage_logins_for_test(this);
+        lines.prepend(QString("manage logins main menu button: ") + (logins && has_button(logins) ? "yes" : "no"));
+        delete logins;
+        lines.prepend(QString("main menu button: ") + (has_button(this) ? "yes" : "no"));
+        int before = static_cast<int>(phosphor_);
+        for (QAction *a : menu.findChildren<QAction *>())
+            if (a->text().startsWith("Green Phosphor")) a->trigger();
+        lines.insert(2, QString("menu command acts: theme %1 -> %2")
+                            .arg(phosphor_title(static_cast<Phosphor>(before)), phosphor_title(phosphor_)));
+        set_theme(before);
+        QFile file(path);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) file.write((lines.join('\n') + '\n').toUtf8());
+    }
+
+private:
     // ---- theme ------------------------------------------------------------------------
 
     void set_theme(int index) {
@@ -1229,6 +1316,7 @@ private:
         if (QByteArray name = qgetenv("PTZ_THEME"); !name.isEmpty())
             for (int i = 0; i < 5; ++i)
                 if (phosphor_title(static_cast<Phosphor>(i)).toLower().startsWith(QString::fromUtf8(name).toLower())) set_theme(i);
+        if (QString path = qEnvironmentVariable("PTZ_MENU_REPORT"); !path.isEmpty()) write_menu_report(path);
         if (qEnvironmentVariableIsSet("PTZ_SNAPSHOT_SAVE_LOGIN")) save_cam_->setChecked(true);
         if (qEnvironmentVariableIsSet("PTZ_SNAPSHOT_USE_LOGIN")) choose_saved_login(LoginStore::Camera, 0);
         connect_camera();
@@ -1281,7 +1369,6 @@ private:
     QLabel *vendor_note_, *message_, *title_, *units_, *footer_;
     Chip *chip_;
     QToolButton *menu_button_;
-    QMenu *menu_;
     PlaneView *plane_;
     MeterView *meter_pan_, *meter_tilt_, *meter_zoom_;
     Readouts *readouts_;
@@ -1290,4 +1377,12 @@ private:
 
 }  // namespace
 
-QWidget *create_console() { return new Console; }
+Console *g_console = nullptr;
+
+QWidget *create_console() { return g_console = new Console; }
+
+void attach_main_menu(QWidget *window, QBoxLayout *row) {
+    if (!g_console) return;
+    row->addWidget(g_console->main_menu_button(), 0, Qt::AlignTop);
+    g_console->install_shortcuts(window);
+}

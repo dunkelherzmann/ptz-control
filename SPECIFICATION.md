@@ -207,7 +207,11 @@ What differs from the Mac version today. The `pending.md` in each folder says wh
 - Saved logins (§17) are kept in `%APPDATA%\PTZControl\logins.vault` on Windows and in
   `~/.var/app/org.ptzcontrol.app/data/PTZControl/logins.vault` on Linux. Manage Logins is in the ☰ menu's Camera menu
   (Ctrl+Shift+L). On Windows the saved-login dialogs and Manage Logins use Windows' standard dialog look.
-- The menu is a ☰ button: Camera, Phosphor, Coordinate Help (F1) and About. There is no Edit, View or Window menu.
+- The ☰ Main Menu holds the Mac's menus in the Mac's order, with Ctrl for ⌘ and Alt for ⌥: PTZ Control (About,
+  Quit PTZ Control Ctrl+Q; Hide, Hide Others and Show All are macOS-only), Edit (Undo, Redo, Cut, Copy, Paste, Select
+  All, acting on the field that has the focus), Camera, View ▸ Phosphor, Window (Minimize Ctrl+M, Maximize, Close
+  Ctrl+W) and Help (Coordinate Help, F1 here for ⌘?). The button sits at the right end of the window's header, since
+  the desktop draws the title bar.
 - Default size 1180 × 820. The window's size and position aren't remembered.
 - The Advanced fields are always shown, without a disclosure triangle.
 - Enter in any connection field connects while nothing is connected.
@@ -227,7 +231,8 @@ What differs from the Mac version today. The `pending.md` in each folder says wh
 - Windows OpenSSH has no connection sharing, so the HTTPS port set under Advanced is forwarded when the tunnel opens,
   and a camera that redirects to another HTTPS port can't be reached through SSH.
 - The key file field takes a full path (placeholder `C:\Users\me\.ssh\id_ed25519`).
-- There is no Quit command; close the window (Alt+F4).
+- Manage Logins is modal, so it has no ☰ of its own: the main window waits while it's open. Redo is greyed in
+  Windows' plain text fields, which keep a single undo step.
 
 **Linux**
 
@@ -239,7 +244,7 @@ What differs from the Mac version today. The `pending.md` in each folder says wh
   `QT_QPA_PLATFORM=wayland` forces it.
 - Settings live in `~/.var/app/org.ptzcontrol.app/config/PTZControl/PTZControl.conf`.
 - SSH uses the Flatpak runtime's OpenSSH client with the user's `~/.ssh` and ssh-agent.
-- Quit is in the ☰ menu (Ctrl+Q).
+- Manage Logins has its own ☰ Main Menu, at the right of its top row, and every shortcut works there too.
 
 ## 15. Build, packaging and versions
 

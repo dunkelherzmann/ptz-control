@@ -234,6 +234,8 @@ public:
         top->addStretch(1);
         top->setSpacing(6);
         for (QPushButton *b : {new_, edit_, delete_}) top->addWidget(b);
+        top->addSpacing(4);
+        attach_main_menu(this, top);
         auto *bottom = new QHBoxLayout;
         bottom->addWidget(lock_);
         bottom->addWidget(admin_);
@@ -611,6 +613,8 @@ void show_manage_logins(QWidget *parent, std::optional<LoginStore> store) {
     g_manage->raise();
     g_manage->activateWindow();
 }
+
+QDialog *open_manage_logins_for_test(QWidget *parent) { return new ManageLogins(parent); }
 
 QPixmap manage_logins_snapshot(QWidget *parent, LoginStore store) {
     ManageLogins dialog(parent);
