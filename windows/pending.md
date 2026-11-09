@@ -22,7 +22,7 @@ No open bugs in `bugs.md`.
 
 - [x] **Saved logins.** The Login menus, Save login, the first-save choice, unlocking and Manage Logins, over the
   core's login vault, with the vault file in the app's own data folder. (§17 P1–P8; #11)
-- [x] **Copy each build to the desktop.** (#7) `scripts\build-windows.ps1` copies the new `PTZControl.exe` to the desktop as
+- [x] **Copy each build to the desktop.** (#7) `windows\scripts\build.ps1` copies the new `PTZControl.exe` to the desktop as
   `PTZ Control.exe`, replacing the older one. (enhancements.md)
 - [x] **Title bar reads "PTZ Control"** (#8), without "— PTZ Coordinates Controller by Herbert Cisneros". (§2 K1, §14)
 - [x] **A test copy that can be driven.** The snapshot hook (`PTZ_SNAPSHOT_PATH`) the Mac and Linux apps have, so a
@@ -38,7 +38,7 @@ No open bugs in `bugs.md`.
 - [ ] **Key file with `~`.** The field takes a full path; check whether Windows' `ssh` expands `~\.ssh\…`, and
   expand it in the app if not. (§3 F3)
 - [ ] **Quit in the ☰ menu** (Ctrl+Q), as on Linux; today only closing the window quits. (§2 K4, §13 H1)
-- [ ] **Hover text on every control**, as listed in the Mac `pending.md`. (§3, §7, §8, §10)
+- [ ] **Hover text on every control**, as listed in `macos/pending.md`. (§3, §7, §8, §10)
 - [ ] **Narrator.** Field labels, captions, the header, the status chip, the status message, the readouts and the
   footer are painted, not controls, so Narrator reads the fields without labels and can't read the position; the
   plane and meters have no accessible name or value. (§3, §7)
@@ -46,7 +46,7 @@ No open bugs in `bugs.md`.
 ## Not checked automatically
 
 - [ ] Saved-login dialogs and Manage Logins actions (§17 P3, P6, P7), and how the Login menus look in light and dark
-  on a real desktop. `test-windows.ps1` covers saving, filling the fields from a saved login and the Manage Logins
+  on a real desktop. `windows\scripts\test.ps1` covers saving, filling the fields from a saved login and the Manage Logins
   list (P4, P5).
 
 Nothing tests the Windows app or its core build. Before a release, try by hand everything in spec sections 2–13, on

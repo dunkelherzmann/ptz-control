@@ -2,11 +2,11 @@
 # (MSVC). Fully static (/MT): one portable .exe that imports only Windows system DLLs, no installer,
 # no administrator rights.
 # Every build is also copied to the desktop as "PTZ Control.exe", replacing the older copy.
-# Usage: powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 [-Zip]
+# Usage: powershell -ExecutionPolicy Bypass -File windows\scripts\build.ps1 [-Zip]
 param([switch]$Zip)
 $ErrorActionPreference = 'Stop'
 
-$Root = Split-Path -Parent $PSScriptRoot
+$Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Obj = Join-Path $Root '.build\windows'
 $Dist = Join-Path $Root 'dist'
 New-Item -ItemType Directory -Force $Obj, $Dist | Out-Null

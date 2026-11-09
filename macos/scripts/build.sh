@@ -1,9 +1,9 @@
 #!/bin/sh
 # Builds a self-contained "PTZ Control.app" (universal arm64 + x86_64) in dist/.
-# Needs only the Xcode Command Line Tools. Usage: scripts/build-macos.sh [--zip]
+# Needs only the Xcode Command Line Tools. Usage: macos/scripts/build.sh [--zip]
 set -eu
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VERSION="$(sh "$ROOT/scripts/version.sh" --header)"
 APP="$ROOT/dist/PTZ Control.app"
 BUILD="$ROOT/.build"
@@ -28,7 +28,7 @@ strip -x "$APP/Contents/MacOS/PTZControl"
 
 ICONSET="$BUILD/AppIcon.iconset"
 rm -rf "$ICONSET"
-swift "$ROOT/scripts/make-icon.swift" "$ICONSET"
+swift "$ROOT/macos/scripts/make-icon.swift" "$ICONSET"
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST

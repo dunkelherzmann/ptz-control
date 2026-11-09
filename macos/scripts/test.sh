@@ -3,11 +3,11 @@
 # saved camera logins: run 1 types a login, ticks Save login and connects; run 2 starts with a
 # wrong username and fills the fields from the saved login. The test copy has its own bundle id,
 # settings and vault file, so it never touches the user's PTZ Control, settings or saved logins.
-# Usage: scripts/test-macos.sh   (builds dist/PTZ Control.app first unless it exists)
+# Usage: macos/scripts/test.sh   (builds dist/PTZ Control.app first unless it exists)
 set -eu
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 APP="$ROOT/dist/PTZ Control.app"
-[ -d "$APP" ] || "$ROOT/scripts/build-macos.sh" >/dev/null
+[ -d "$APP" ] || "$ROOT/macos/scripts/build.sh" >/dev/null
 OUT="$ROOT/.build/test"
 WORK="$(mktemp -d "$ROOT/.build/test-XXXXXX")"
 TEST_ID=com.herbertcisneros.PTZControl.test

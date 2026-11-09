@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Packs PNGs from an .iconset (scripts/make-icon.swift) into a Windows .ico.
+"""Packs PNGs from an .iconset (macos/scripts/make-icon.swift) into a Windows .ico.
 
-    python3 scripts/make-ico.py <AppIcon.iconset> <out.ico>
+    python3 windows/scripts/make-ico.py <AppIcon.iconset> <out.ico>
 """
 import struct
 import sys

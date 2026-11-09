@@ -5,12 +5,12 @@
 #   flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 #   flatpak install --user -y flathub org.flatpak.Builder
 # The KDE runtime and SDK it needs are installed from Flathub on the first build.
-# Usage: scripts/build-linux.sh [--install]   (--install also installs the result for this user)
+# Usage: linux/scripts/build.sh [--install]   (--install also installs the result for this user)
 set -eu
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ID=org.ptzcontrol.app
-[ "$(uname -s)" = Linux ] || { echo "build-linux.sh runs on Linux; build the macOS app with scripts/build-macos.sh" >&2; exit 1; }
+[ "$(uname -s)" = Linux ] || { echo "linux/scripts/build.sh runs on Linux; build the macOS app with macos/scripts/build.sh" >&2; exit 1; }
 flatpak info org.flatpak.Builder >/dev/null 2>&1 \
     || { echo "org.flatpak.Builder not found; see the setup lines at the top of this script" >&2; exit 1; }
 VERSION="$(sh "$ROOT/scripts/version.sh" --header)"

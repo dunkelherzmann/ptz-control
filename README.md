@@ -14,12 +14,12 @@ core/              shared C++20 core (C ABI in core/include/ptzcore.h)
   src/tunnel_win     same on Windows: inbox ssh.exe, askpass over a per-user named pipe
   src/http_*.cpp     libcurl (macOS/Linux) or WinHTTP (Windows)
   src/web.cpp        camera web-interface probe (HTTP, then HTTPS), no credentials sent
-macos/             Swift + AppKit host
-windows/           Win32 + GDI+ host (C++), resources and manifest
-linux/             Qt 6 Widgets host (C++) and its Flatpak manifest
+macos/             Swift + AppKit host, its build and test scripts
+windows/           Win32 + GDI+ host (C++), resources, manifest, build and test scripts
+linux/             Qt 6 Widgets host (C++), its Flatpak manifest, build and test scripts
 legacy/            the original ptz-control.sh
 tools/             mock camera (ONVIF + Axis) for development without hardware
-tests/, scripts/   smoke tests and the build scripts
+tests/, scripts/   core smoke tests and the scripts for every platform (version, core and SSH tests)
 ```
 
 ## Installing
@@ -33,7 +33,7 @@ them once.
 ```bash
 git clone https://github.com/dunkelherzmann/ptz-control.git
 cd ptz-control
-scripts/build-macos.sh      # macOS: needs only the free Command Line Tools (xcode-select --install)
+macos/scripts/build.sh      # macOS: needs only the free Command Line Tools (xcode-select --install)
 ```
 
 Windows and Linux builds are described below. An app built on your own Mac isn't quarantined, so
@@ -70,8 +70,8 @@ Only allow copies you downloaded from this repository's Releases page.
 Needs only the Xcode Command Line Tools.
 
 ```bash
-scripts/build-macos.sh          # → dist/PTZ Control.app (universal arm64 + x86_64)
-scripts/build-macos.sh --zip    # also dist/PTZ-Control-1.0.0-macOS.zip
+macos/scripts/build.sh          # → dist/PTZ Control.app (universal arm64 + x86_64)
+macos/scripts/build.sh --zip    # also dist/PTZ-Control-1.0.0-macOS.zip
 ```
 
 The app is ad-hoc signed. It runs on the Mac that built it; a copy given to
@@ -119,7 +119,7 @@ key file can be set. New host keys are accepted on first use. If a host key
 
 ```bash
 scripts/test-core.sh   # core C API vs. the mock camera, ONVIF and Axis; the login vault
-scripts/test-macos.sh  # a private test copy of the Mac app vs. the mock camera, off screen; saved logins
+macos/scripts/test.sh  # a private test copy of the Mac app vs. the mock camera, off screen; saved logins
 scripts/test-ssh.sh    # SSH route via a throwaway user-level sshd on 127.0.0.1:2222
 python3 tools/mock-camera.py --port 8080 --user admin --password secret
 ```
@@ -132,9 +132,9 @@ Built on Windows with the Visual Studio 2022 C++ Build Tools (the free
 "Desktop development with C++" workload) and git, from PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1        # → dist\PTZControl.exe
-powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Zip   # also dist\PTZ-Control-1.0.0-Windows-x64.zip
-powershell -ExecutionPolicy Bypass -File scripts\test-windows.ps1         # vault test, then a private test copy vs. the mock camera
+powershell -ExecutionPolicy Bypass -File windows\scripts\build.ps1        # → dist\PTZControl.exe
+powershell -ExecutionPolicy Bypass -File windows\scripts\build.ps1 -Zip   # also dist\PTZ-Control-1.0.0-Windows-x64.zip
+powershell -ExecutionPolicy Bypass -File windows\scripts\test.ps1         # vault test, then a private test copy vs. the mock camera
 ```
 
 The result is a single statically linked `PTZControl.exe` (about 0.9 MB) that
@@ -170,9 +170,9 @@ flatpak install --user -y flathub org.flatpak.Builder
 Then:
 
 ```bash
-scripts/build-linux.sh             # → dist/PTZ-Control-1.0.0-x86_64.flatpak
-scripts/build-linux.sh --install   # also installs it for this user
-scripts/test-linux.sh              # drives the installed app against the mock camera, off screen; saved logins
+linux/scripts/build.sh             # → dist/PTZ-Control-1.0.0-x86_64.flatpak
+linux/scripts/build.sh --install   # also installs it for this user
+linux/scripts/test.sh              # drives the installed app against the mock camera, off screen; saved logins
 ```
 
 The script builds for the machine's own CPU: on an ARM64 Linux machine it makes

@@ -31,3 +31,5 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [x] Mac (#15)
   - [x] Linux (#15)
   - [x] Windows (#15)
+
+- [ ] **Keep each platform's files in its own folder.** The root holds only what applies to the whole project (shared core, docs, trackers, version and cross-platform scripts); `macos/`, `linux/` and `windows/` each hold their own build and test scripts and `pending.md`. Also line endings fixed by `.gitattributes`, a build check on every pull request (GitHub Actions on macOS, Linux and Windows), and the duplicate root `ptz-control.sh` removed (it lives in `legacy/`). *Requested 2026-11-09.* All platforms.

@@ -3,9 +3,9 @@
 #  2. The app (dist\PTZControl.exe) twice, with its own registry key and vault file, never taking focus:
 #     run 1 types a login, ticks Save login and connects; run 2 starts with a wrong username and fills the
 #     camera fields from the saved login. Each run saves pictures in .build\test.
-# Usage: scripts\test-windows.ps1   (after scripts\build-windows.ps1)
+# Usage: windows\scripts\test.ps1   (after windows\scripts\build.ps1)
 $ErrorActionPreference = 'Stop'
-$Root = Split-Path -Parent $PSScriptRoot
+$Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Out = Join-Path $Root '.build\test'
 $Work = Join-Path $Root ('.build\test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $Out, $Work | Out-Null
@@ -15,7 +15,7 @@ function Check($what, $ok) {
 }
 
 # ---- 1. core vault test ------------------------------------------------------------------
-# The x64 compiler environment, found the way build-windows.ps1 finds it.
+# The x64 compiler environment, found the way windows\scripts\build.ps1 finds it.
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 cmd /c "`"$(Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat')`" >nul && set" | ForEach-Object {

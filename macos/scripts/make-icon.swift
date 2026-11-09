@@ -1,5 +1,5 @@
 // Draws the app icon (phosphor reticle on a dark console tile) into an .iconset.
-// Usage: swift scripts/make-icon.swift <output.iconset>
+// Usage: swift macos/scripts/make-icon.swift <output.iconset>
 import AppKit
 
 let output = URL(fileURLWithPath: CommandLine.arguments[1])

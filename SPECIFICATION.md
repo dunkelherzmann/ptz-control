@@ -8,7 +8,7 @@ One shared C++20 core does all camera, HTTP and SSH work. Each platform has its 
 
 | Version | Host | Folder | Its plan |
 | --- | --- | --- | --- |
-| macOS (the reference) | Swift and AppKit | `macos/` | [`pending.md`](pending.md) |
+| macOS (the reference) | Swift and AppKit | `macos/` | [`macos/pending.md`](macos/pending.md) |
 | Windows 10 and 11, x64 | Win32 and GDI+, C++ | `windows/` | [`windows/pending.md`](windows/pending.md) |
 | Linux, as a Flatpak | Qt 6 Widgets, C++ | `linux/` | [`linux/pending.md`](linux/pending.md) |
 
@@ -241,18 +241,18 @@ What differs from the Mac version today. The `pending.md` in each folder says wh
 
 Each version is built on its own kind of machine. Nothing is cross-compiled.
 
-- **B1 macOS** (built on a Mac with the Xcode Command Line Tools): `scripts/build-macos.sh` builds a universal
+- **B1 macOS** (built on a Mac with the Xcode Command Line Tools): `macos/scripts/build.sh` builds a universal
   (arm64 + x86_64) `dist/PTZ Control.app` for macOS 14 or later with Swift Package Manager, draws its icon with
-  `scripts/make-icon.swift`, and signs it ad hoc with the hardened runtime. Bundle ID `com.herbertcisneros.PTZControl`.
+  `macos/scripts/make-icon.swift`, and signs it ad hoc with the hardened runtime. Bundle ID `com.herbertcisneros.PTZControl`.
   It declares a Local Network usage description. `--zip` also writes `dist/PTZ-Control-<version>-macOS.zip`. The app
   isn't notarized, so a downloaded copy needs its quarantine flag removed once (README, Installing).
-- **B2 Windows** (built on Windows with the Visual Studio 2022 C++ Build Tools): `scripts/build-windows.ps1` compiles
+- **B2 Windows** (built on Windows with the Visual Studio 2022 C++ Build Tools): `windows/scripts/build.ps1` compiles
   the core and the host with MSVC into one statically linked `dist\PTZControl.exe` (x64, about 0.9 MB) that imports
   only Windows system DLLs. No installer; it runs as the signed-in user (`asInvoker`). `-Zip` also writes
   `dist\PTZ-Control-<version>-Windows-x64.zip`. Every build is also copied to the desktop as `PTZ Control.exe`,
   replacing the older copy (skipped with a warning while that copy is open). The exe is unsigned, so SmartScreen
   warns on first run.
-- **B3 Linux** (built on Linux with flatpak-builder): `scripts/build-linux.sh` builds `org.ptzcontrol.app` from
+- **B3 Linux** (built on Linux with flatpak-builder): `linux/scripts/build.sh` builds `org.ptzcontrol.app` from
   `linux/org.ptzcontrol.app.yml` on KDE's Qt 6 runtime (`org.kde.Platform` 6.11) for the machine's own CPU and writes
   `dist/PTZ-Control-<version>-<arch>.flatpak` (about 0.6 MB). The bundle holds the app, JetBrains Mono, the icons,
   the desktop entry, the AppStream metadata and the licence notices; Qt, libcurl, OpenSSL and OpenSSH come from the
@@ -261,7 +261,7 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
 - **B4 Releases** carry the macOS zip, the Windows zip and the Linux Flatpak.
 - **B5 Versions** are `major.minor.patch`: `VERSION` holds major.minor, and the patch is the number of commits since
   `VERSION` last changed. `scripts/version.sh` prints it and, with `--header`, writes `core/include/ptz_version.h`
-  (not tracked); `build-windows.ps1` does the same in PowerShell.
+  (not tracked); `windows\scripts\build.ps1` does the same in PowerShell.
 
 ## 16. Tests
 
@@ -275,18 +275,18 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
 - **T4 Window snapshot.** With `PTZ_SNAPSHOT_PATH` (and `PTZ_PASSWORD`, optionally `PTZ_THEME`) the Mac and Linux
   apps connect with the saved settings, move, aim along the zoom meter, save a picture of the window and quit. The
   Linux app returns to the start first when `PTZ_SNAPSHOT_RETURN` is set.
-- **T6 Mac app test.** `scripts/test-macos.sh` runs a private test copy of the Mac app (its own bundle id, settings
+- **T6 Mac app test.** `macos/scripts/test.sh` runs a private test copy of the Mac app (its own bundle id, settings
   and vault file, off screen and out of the Dock) against the mock camera twice: first it ticks Save login and checks
   the camera login reached the vault, then it starts from a wrong username, fills the fields from the saved login and
   checks that the camera moved. It saves pictures of the window, of Manage Logins and of the Edit form.
-  `scripts/test-linux.sh` does the same with the installed Flatpak (T5).
-- **T7 Windows test.** `scripts\test-windows.ps1` builds and runs `tests/vault-smoke.c` with MSVC, then runs
+  `linux/scripts/test.sh` does the same with the installed Flatpak (T5).
+- **T7 Windows test.** `windows\scripts\test.ps1` builds and runs `tests/vault-smoke.c` with MSVC, then runs
   `dist\PTZControl.exe` twice as the Mac test does, with its own registry key (`PTZ_SETTINGS_KEY`) and vault file,
   without taking focus. Pictures are taken with `WM_PRINT`, so the test also works over SSH, where no compositor runs;
   it fails on a blank picture. Combo boxes leave their text out of such pictures, so the snapshot logs what the Login
   menus show. `test-core.sh` also runs
   `tests/vault-smoke.c`: plain and encrypted files, both stores, wrong and changed passwords, tampering.
-- **T5 Linux app test.** `scripts/test-linux.sh` runs the installed Flatpak off screen against the mock camera with
+- **T5 Linux app test.** `linux/scripts/test.sh` runs the installed Flatpak off screen against the mock camera with
   its own settings folder, and passes when the window picture is saved and the camera saw the app's requests.
 
 ## 17. Saved logins

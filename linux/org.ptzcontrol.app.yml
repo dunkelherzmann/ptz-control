@@ -1,4 +1,4 @@
-# PTZ Control for Linux as a Flatpak. Build it on Linux with scripts/build-linux.sh, which runs
+# PTZ Control for Linux as a Flatpak. Build it on Linux with linux/scripts/build.sh, which runs
 #   flatpak run org.flatpak.Builder --user --force-clean <build-dir> linux/org.ptzcontrol.app.yml
 # after writing the version header (scripts/version.sh --header).
 id: org.ptzcontrol.app

@@ -1,9 +1,9 @@
 # Mac: what isn't production-ready yet
 
-The macOS version is the reference: its features are the ones in [`SPECIFICATION.md`](SPECIFICATION.md). This file lists
+The macOS version is the reference: its features are the ones in [`SPECIFICATION.md`](../SPECIFICATION.md). This file lists
 what the Mac version still lacks or gets wrong against that list and the project's rules, in build order, each with
 its spec section. Fix broken items first, one pull request each, and tick an item with its PR number once it is built
-and its test passes on the Mac. [`bugs.md`](bugs.md) and [`enhancements.md`](enhancements.md) stay the record of requests and
+and its test passes on the Mac. [`bugs.md`](../bugs.md) and [`enhancements.md`](../enhancements.md) stay the record of requests and
 releases.
 
 ## Bugs to fix
@@ -44,5 +44,5 @@ itself, so these are tried by hand before a release:
 - [ ] Opening the browser and the fallback dialog (§10 W1–W2).
 - [ ] Event buffer (§11 E1–E2), phosphor themes and light/dark (§12 A1–A3), menus, help and About (§13 H1–H3).
 - [ ] Saved-login dialogs and Manage Logins actions (§17 P3, P6, P7): unlocking, the first-save choice, the
-  Administrator Password, New, Edit, Delete and Lock. `test-macos.sh` covers saving from the window, filling the
+  Administrator Password, New, Edit, Delete and Lock. `macos/scripts/test.sh` covers saving from the window, filling the
   fields from a saved login and the Manage Logins list (P4, P5); the core test covers the vault itself (P1, P2).

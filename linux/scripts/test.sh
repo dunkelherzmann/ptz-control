@@ -3,9 +3,9 @@
 # Run 1 types a login, ticks Save login and connects; run 2 starts with a wrong username and fills the camera
 # fields from the saved login. It uses its own settings folder and vault file and never touches the user's PTZ
 # Control settings, saved logins or windows.
-# Usage: scripts/test-linux.sh [screenshot.png]   (default: .build/test/flatpak.png)
+# Usage: linux/scripts/test.sh [screenshot.png]   (default: .build/test/flatpak.png)
 set -eu
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ID=org.ptzcontrol.app
 SHOT="$(realpath -m "${1:-$ROOT/.build/test/flatpak.png}")"
 SHOTS="$(dirname "$SHOT")"

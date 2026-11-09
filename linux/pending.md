@@ -24,17 +24,17 @@ No open bugs in `bugs.md`.
 - [ ] **Return in a connection field moves to the next field**, and connects only from the camera password or the
   Connect button. (§3 F8)
 - [ ] **Event buffer keeps its place** when you've scrolled up; it jumps to the newest line today. (§11 E2)
-- [ ] **Hover text on every control**, as listed in the Mac `pending.md`. (§3, §7, §8, §10)
+- [ ] **Hover text on every control**, as listed in `macos/pending.md`. (§3, §7, §8, §10)
 - [ ] **Screen readers.** The status chip, the readouts, the plane and the meters are painted widgets without an
   accessible name or value, so Orca can't read the position or aim with them. (§7 I2–I7)
-- [ ] **Feature tests beyond the snapshot.** `test-linux.sh` checks that the Flatpak connects to the mock camera over
+- [ ] **Feature tests beyond the snapshot.** `linux/scripts/test.sh` checks that the Flatpak connects to the mock camera over
   the Local route with ONVIF, moves and returns to the start, by counting requests and saving a picture. Extend it to
   Axis, the SSH route through a throwaway `sshd`, and a check of the values the app shows. (§16 T4–T5)
 
 ## Not checked automatically
 
 - [ ] Saved-login dialogs and Manage Logins actions (§17 P3, P6, P7): unlocking, the first-save choice, the
-  Administrator Password, New, Edit, Delete and Lock. `test-linux.sh` covers saving from the window, filling the
+  Administrator Password, New, Edit, Delete and Lock. `linux/scripts/test.sh` covers saving from the window, filling the
   fields from a saved login and the Manage Logins list (P4, P5).
 
 - [ ] Whether `test-core.sh` and `test-ssh.sh` (§16 T2–T3) run on the Linux machine: they need clang and libcurl's
