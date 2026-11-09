@@ -102,7 +102,7 @@ unless you tick **Save login**: the username and password are then saved, in
 two separate lists for SSH and cameras, encrypted with an Administrator
 Password you choose (or, by explicit choice, as plain text). Pick a saved login
 from the **Login** menu above the SSH or camera fields, and edit them in
-Camera ▸ Manage Logins (⇧⌘L; Ctrl+Shift+L in the ☰ menu on Linux).
+☰ ▸ Camera ▸ Manage Logins (⇧⌘L; Ctrl+Shift+L on Linux).
 A forgotten Administrator Password can't be recovered. The macOS Keychain
 isn't used. `PTZ_USER` and `PTZ_PASSWORD` are honoured as defaults when set.
 

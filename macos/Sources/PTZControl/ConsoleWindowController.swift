@@ -664,6 +664,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         if let raw = env["PTZ_THEME"], let t = PhosphorTheme(rawValue: raw) { theme = t }
         if env["PTZ_SNAPSHOT_SAVE_LOGIN"] != nil { connection.saveCamera.state = .on }
         if env["PTZ_SNAPSHOT_USE_LOGIN"] != nil { connection.chooseSavedLogin(.camera, index: 0) }
+        if let reportPath = env["PTZ_MENU_REPORT"] { writeMenuReport(to: reportPath) }
         connect()
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             self.targetPan.stringValue = "0.55"
@@ -680,11 +681,33 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             guard let view = self.window?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            if let framePath = env["PTZ_SNAPSHOT_FRAME_PATH"], let frame = view.superview,
+               let frameRep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) {
+                frame.cacheDisplay(in: frame.bounds, to: frameRep)  // title bar included, for the Main Menu button
+                try? frameRep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: framePath))
+            }
             if let loginsPath = env["PTZ_SNAPSHOT_LOGINS_PATH"] {
                 ManageLoginsWindowController.shared.snapshot(store: .camera, to: loginsPath)
             }
             NSApp.terminate(nil)
         }
+    }
+}
+
+extension ConsoleWindowController {
+    /// Test copy: where the menus are, and whether a shortcut reaches the in-window menu (⌥⌘2 picks Green Phosphor).
+    func writeMenuReport(to path: String) {
+        let before = theme
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .option], timestamp: 0,
+                                     windowNumber: 0, context: nil, characters: "2", charactersIgnoringModifiers: "2",
+                                     isARepeat: false, keyCode: 19)
+        let routed = event.map { InWindowMenu.route($0) } ?? false
+        let lines = ["menu bar: " + (NSApp.mainMenu?.items.map(\.title).joined(separator: ", ") ?? ""),
+                     "main menu button: " + (window.flatMap { InWindowMenu.button(in: $0) } != nil ? "yes" : "no"),
+                     "shortcut routed: \(routed) theme \(before.rawValue) -> \(theme.rawValue)"]
+            + InWindowMenu.outline()
+        try? (lines.joined(separator: "\n") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        theme = before
     }
 }
 

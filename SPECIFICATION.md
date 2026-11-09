@@ -15,8 +15,8 @@ One shared C++20 core does all camera, HTTP and SSH work. Each platform has its 
 Sections 1–13 and 17 describe the Mac app. Windows and Linux follow it unless section 14 says otherwise. Every feature has an
 id (for example **M3**), which the `pending.md` files use.
 
-**Shortcuts.** The Mac shortcuts are given here. Windows and Linux use Ctrl in place of ⌘ and Alt in place of ⌥, and
-hold the menu under a ☰ button in the window instead of a menu bar.
+**Shortcuts.** The Mac shortcuts are given here. Windows and Linux use Ctrl in place of ⌘ and Alt in place of ⌥. On
+every platform the menus sit under a ☰ button in the window, never only in a menu bar at the top of the screen.
 
 **Hover text.** Only the saved-login controls (§17) have hover text so far, on every platform. Each `pending.md` lists
 the rest as a gap.
@@ -185,10 +185,14 @@ the rest as a gap.
 
 ## 13. Menus, help and About
 
-- **H1 Menu bar**: PTZ Control (About, Services, Hide, Hide Others, Show All, Quit), Edit (Undo, Redo, Cut, Copy,
-  Paste, Select All), Camera (Connect, Disconnect, Move to Target, Return to Starting Coordinates, Stop Motion, Refresh
-  Position, Pause Auto-Refresh, Open Camera Web Interface), View (Phosphor), Window (Minimize, Zoom, Close), Help
-  (Coordinate Help). Camera commands are enabled only when they can act.
+- **H1 Main Menu** (☰), beside the window controls of the main window and of Manage Logins, holds every menu, each as
+  a submenu: PTZ Control (About, Hide, Hide Others, Show All, Quit), Edit (Undo, Redo, Cut, Copy, Paste, Select All),
+  Camera (Connect, Disconnect, Move to Target, Return to Starting Coordinates, Stop Motion, Refresh Position, Pause
+  Auto-Refresh, Open Camera Web Interface, Manage Logins), View (Phosphor), Window (Minimize, Zoom, Close), Help
+  (Coordinate Help). Camera commands are enabled only when they can act. Hover text: "Main Menu: every command of PTZ
+  Control, with its shortcut"; VoiceOver reads "Main Menu". On the Mac the menu bar keeps only the app menu macOS
+  always shows (About, Services, Hide, Hide Others, Show All, Quit), so on a wide screen no command needs a trip to the
+  top of the screen. Every shortcut works from any window, Cut, Copy and Paste in text fields included.
 - **H2 Coordinate Help** (⌘?) explains absolute targets, the units per vendor, blank or `x`, aiming on the plane and
   meters, starting coordinates, the 2 s refresh, Stop and the web interface.
 - **H3 About** shows the name, the version, "PTZ Coordinates Controller", "ONVIF · Axis VAPIX · Local or SSH",

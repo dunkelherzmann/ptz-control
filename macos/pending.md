@@ -8,7 +8,7 @@ releases.
 
 ## Next (top priority)
 
-- [ ] **Every menu in the window, none in the macOS menu bar.** The menus of the menu bar (H1) and their submenus move under a ☰ button in the window, as on Windows and Linux, so nothing needs a trip to the top of a wide screen. The macOS menu bar keeps only the app menu macOS always shows. Every shortcut keeps working, Undo, Cut, Copy, Paste and Select All in text fields included, and every item keeps its hover text and VoiceOver label. Describe the new menu in `SPECIFICATION.md` in the same PR. (H1, enhancements.md) *Asked 2026-11-09.*
+- [x] **Every menu in the window, none in the macOS menu bar.** (#22) The menus of the menu bar (H1) and their submenus move under a ☰ button in the window, as on Windows and Linux, so nothing needs a trip to the top of a wide screen. The macOS menu bar keeps only the app menu macOS always shows. Every shortcut keeps working, Undo, Cut, Copy, Paste and Select All in text fields included, and every item keeps its hover text and VoiceOver label. Describe the new menu in `SPECIFICATION.md` in the same PR. (H1, enhancements.md) *Asked 2026-11-09.*
 
 ## Bugs to fix
 

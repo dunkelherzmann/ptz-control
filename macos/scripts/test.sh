@@ -43,11 +43,16 @@ chmod 600 "$VAULT"
 defaults write "$TEST_ID" ConnectionSettings -data "$(settings admin)"
 rm -f "$OUT/macos.png"
 PTZ_VAULT_PATH="$VAULT" PTZ_PASSWORD=secret PTZ_SNAPSHOT_PATH="$OUT/macos.png" PTZ_SNAPSHOT_SAVE_LOGIN=1 \
+    PTZ_MENU_REPORT="$WORK/menus.txt" PTZ_SNAPSHOT_FRAME_PATH="$OUT/macos-window.png" \
     PTZ_SNAPSHOT_LOGIN_NAME=cam1 \
     "$BIN" >"$WORK/app1.log" 2>&1 || true
 check "run 1 connected and moved" "$([ "$(moves)" -ge 1 ] && echo 0 || echo 1)"
 check "run 1 saved the camera login" "$(printf 'camera\tcam1\tadmin\tsecret\n' | grep -qxF -f - "$VAULT" && echo 0 || echo 1)"
 check "the vault file is private (0600)" "$([ "$(stat -f %Lp "$VAULT")" = 600 ] && echo 0 || echo 1)"
+check "menu bar holds only the app menu" "$(grep -qx 'menu bar: PTZ Control' "$WORK/menus.txt" && echo 0 || echo 1)"
+check "Main Menu button beside the window controls" "$(grep -qx 'main menu button: yes' "$WORK/menus.txt" && echo 0 || echo 1)"
+check "Main Menu holds every menu" "$(for m in 'PTZ Control' Edit Camera View Window Help; do grep -qx "$m" "$WORK/menus.txt" || exit 1; done && echo 0 || echo 1)"
+check "a shortcut reaches the in-window menu" "$(grep -q 'shortcut routed: true theme system -> green' "$WORK/menus.txt" && echo 0 || echo 1)"
 check "window picture saved" "$([ -s "$OUT/macos.png" ] && echo 0 || echo 1)"
 BEFORE="$(moves)"
 

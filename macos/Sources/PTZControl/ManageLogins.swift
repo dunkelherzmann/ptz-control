@@ -27,6 +27,7 @@ import AppKit
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        InWindowMenu.attach(to: window)
         build()
         NotificationCenter.default.addObserver(forName: LoginVault.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.reload() }

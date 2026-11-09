@@ -6,7 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         console = ConsoleWindowController()
-        NSApp.mainMenu = buildMenu()
+        InWindowMenu.install(full: buildMenu(), appMenu: buildAppMenu(services: true), appName: "PTZ Control")
+        InWindowMenu.attach(to: console.window!)
         if let path = ProcessInfo.processInfo.environment["PTZ_SNAPSHOT_PATH"] {
             // Test copy: render off screen, never on the desktop the user is working on.
             console.runSnapshotScript(to: path)
@@ -29,23 +30,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: Menu
 
-    private func buildMenu() -> NSMenu {
-        let main = NSMenu()
-
-        let appMenu = NSMenu()
+    /// The app menu: in the menu bar (with Services, which macOS keeps there) and first in the ☰ menu.
+    private func buildAppMenu(services: Bool) -> NSMenu {
+        let appMenu = NSMenu(title: "PTZ Control")
         appMenu.addItem(withTitle: "About PTZ Control", action: #selector(about), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
-        let services = NSMenu()
-        appMenu.addItem(withTitle: "Services", action: nil, keyEquivalent: "").submenu = services
-        NSApp.servicesMenu = services
-        appMenu.addItem(.separator())
+        if services {
+            let servicesMenu = NSMenu()
+            appMenu.addItem(withTitle: "Services", action: nil, keyEquivalent: "").submenu = servicesMenu
+            NSApp.servicesMenu = servicesMenu
+            appMenu.addItem(.separator())
+        }
         appMenu.addItem(withTitle: "Hide PTZ Control", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let others = appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
         others.keyEquivalentModifierMask = [.command, .option]
         appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit PTZ Control", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        main.addItem(withTitle: "PTZ Control", action: nil, keyEquivalent: "").submenu = appMenu
+        return appMenu
+    }
+
+    /// The ☰ menu in the window: every menu of the app, each as a submenu.
+    private func buildMenu() -> NSMenu {
+        let main = NSMenu()
+        main.addItem(withTitle: "PTZ Control", action: nil, keyEquivalent: "").submenu = buildAppMenu(services: false)
 
         let edit = NSMenu(title: "Edit")
         edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
@@ -100,7 +108,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let help = NSMenu(title: "Help")
         add(help, "Coordinate Help", #selector(coordinateHelp), "?")
         main.addItem(withTitle: "Help", action: nil, keyEquivalent: "").submenu = help
-        NSApp.helpMenu = help
         return main
     }
 
