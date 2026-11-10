@@ -87,7 +87,7 @@ function RunApp($vars) {
         # Its verdict comes on stderr, which Windows PowerShell turns into errors that 'Stop' would throw.
         $ErrorActionPreference = 'Continue'
         $verdict = @(& python $Observer run --out (Join-Path $Out 'observer') --name "run $script:Runs" --timeout 60 `
-            --guard 'HKCU\Software\PTZControl' --guard "$env:APPDATA\PTZControl" -- $exe 2>&1 | ForEach-Object { "$_" })
+            --allow $Work --allow $Out --guard 'HKCU\Software\PTZControl' --guard "$env:APPDATA\PTZControl" -- $exe 2>&1 | ForEach-Object { "$_" })
         $problems = @($verdict | Where-Object { $_ -like 'observer: PROBLEM*' })
         Check "run $($script:Runs): no crash, hang or change to the real app's data (master-control)" ($problems.Count -eq 0)
         $problems | ForEach-Object { Write-Output "     $_" }
