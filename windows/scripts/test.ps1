@@ -73,12 +73,28 @@ function Drawn($path) {
     } finally { $image.Dispose() }
 }
 function Moves { @(Select-String -Path $mockLog -Pattern '^mock: onvif AbsoluteMove' -ErrorAction SilentlyContinue).Count }
+# The app-observer skill watches each run when it's installed (PTZ_NO_OBSERVE=1 skips it): a crash, a window that
+# stops responding or a change to the real app's settings or saved logins fails the run.
+$Observer = Join-Path $HOME '.agents\library\app-observer\scripts\observer.py'
+$script:Runs = 0
+Remove-Item -Recurse -Force (Join-Path $Out 'observer') -ErrorAction SilentlyContinue
 function RunApp($vars) {
     $saved = @{}
     $all = @{ PTZ_SETTINGS_KEY = $KeyName; PTZ_VAULT_PATH = $vault } + $vars
     foreach ($k in $all.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $all[$k]) }
-    $p = Start-Process $exe -PassThru
-    if (-not $p.WaitForExit(60000)) { $p.Kill() }
+    $script:Runs++
+    if ((Test-Path $Observer) -and -not $env:PTZ_NO_OBSERVE) {
+        # Its verdict comes on stderr, which Windows PowerShell turns into errors that 'Stop' would throw.
+        $ErrorActionPreference = 'Continue'
+        $verdict = @(& python $Observer run --out (Join-Path $Out 'observer') --name "run $script:Runs" --timeout 60 `
+            --guard 'HKCU\Software\PTZControl' --guard "$env:APPDATA\PTZControl" -- $exe 2>&1 | ForEach-Object { "$_" })
+        $problems = @($verdict | Where-Object { $_ -like 'observer: PROBLEM*' })
+        Check "run $($script:Runs): no crash, hang or change to the real app's data (app-observer)" ($problems.Count -eq 0)
+        $problems | ForEach-Object { Write-Output "     $_" }
+    } else {
+        $p = Start-Process $exe -PassThru
+        if (-not $p.WaitForExit(60000)) { $p.Kill() }
+    }
     foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
 }
 

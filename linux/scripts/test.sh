@@ -25,11 +25,32 @@ printf 'PTZ Control logins 1\nplain\n' >"$VAULT"
 chmod 600 "$VAULT"
 sleep 1
 
+# The app-observer skill watches each run when it's installed (PTZ_NO_OBSERVE=1 skips it): a crash, a write
+# outside the test folders or a change to the real app's data fails the run; its verdict lands in app.log.
+OBSERVER="$HOME/.agents/library/app-observer/scripts/observer.py"
+RUNS=0
+rm -rf "$SHOTS/observer"
 run() {  # extra --env options...
-    # Flatpak sets XDG_CONFIG_HOME itself, so the test settings folder is chosen inside the sandbox.
-    timeout 60 flatpak run --filesystem="$WORK" --filesystem="$SHOTS" --command=sh \
+    RUNS=$((RUNS + 1))
+    set -- flatpak run --filesystem="$WORK" --filesystem="$SHOTS" --command=sh \
         --env=QT_QPA_PLATFORM=offscreen --env=PTZ_VAULT_PATH="$VAULT" "$@" \
-        "$ID" -c 'XDG_CONFIG_HOME="$1" exec ptz-control' sh "$WORK/config" >>"$WORK/app.log" 2>&1 || true
+        "$ID" -c 'XDG_CONFIG_HOME="$1" exec ptz-control' sh "$WORK/config"
+    # Flatpak sets XDG_CONFIG_HOME itself, so the test settings folder is chosen inside the sandbox.
+    if [ -f "$OBSERVER" ] && [ -z "${PTZ_NO_OBSERVE:-}" ]; then
+        python3 "$OBSERVER" run --out "$SHOTS/observer" --name "run $RUNS" --timeout 60 --allow "$WORK/" \
+            --allow "$SHOTS/" --guard "$HOME/.var/app/$ID" --log "$WORK/app.log" -- "$@" >>"$WORK/app.log" 2>&1 || true
+    else
+        timeout 60 "$@" >>"$WORK/app.log" 2>&1 || true
+    fi
+}
+observed() {  # run number: fails the run when the observer found a problem in it
+    [ -f "$OBSERVER" ] && [ -z "${PTZ_NO_OBSERVE:-}" ] || return 0
+    verdict="$(python3 -c 'import json, sys
+last = json.loads(open(sys.argv[1]).read().splitlines()[-1])
+print("\n".join("     " + json.dumps(p)[:300] for p in last["problems"]))' "$SHOTS/observer/summaries.jsonl" 2>&1)" \
+        || verdict="     the observer left no verdict"
+    check "run $1: no crash, stray write or change to the real app's data (app-observer)" "$([ -z "$verdict" ] && echo 0 || echo 1)"
+    [ -z "$verdict" ] || printf '%s\n' "$verdict"
 }
 FAIL=0
 check() {  # description, condition result
@@ -53,6 +74,7 @@ check "Main Menu button in the window and in Manage Logins" \
 check "Main Menu holds the Mac's menus in order" \
     "$([ "$(grep -v ':' "$WORK/menus.txt" | grep -v '^ ' | paste -sd,)" = 'PTZ Control,Edit,Camera,View,Window,Help' ] && echo 0 || echo 1)"
 check "a Main Menu command acts" "$(grep -qx 'menu command acts: theme System -> Green Phosphor' "$WORK/menus.txt" && echo 0 || echo 1)"
+observed 1
 BEFORE="$(moves)"
 
 # Run 2: wrong username in the settings, no PTZ_PASSWORD: only the saved login can connect.
@@ -62,6 +84,7 @@ rm -f "$LOGINS" "$SHOTS/flatpak-logins-form.png"
 run --env=PTZ_SNAPSHOT_PATH="$SHOTS/flatpak-saved-login.png" --env=PTZ_SNAPSHOT_USE_LOGIN=1 \
     --env=PTZ_SNAPSHOT_LOGINS_PATH="$LOGINS"
 check "run 2 connected with the saved login and moved" "$([ "$(moves)" -gt "$BEFORE" ] && echo 0 || echo 1)"
+observed 2
 check "Manage Logins and form pictures saved" \
     "$([ -s "$LOGINS" ] && [ -s "$SHOTS/flatpak-logins-form.png" ] && echo 0 || echo 1)"
 check "still one camera login" "$([ "$(grep -c '^camera' "$VAULT")" = 1 ] && echo 0 || echo 1)"
