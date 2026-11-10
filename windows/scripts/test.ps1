@@ -73,9 +73,9 @@ function Drawn($path) {
     } finally { $image.Dispose() }
 }
 function Moves { @(Select-String -Path $mockLog -Pattern '^mock: onvif AbsoluteMove' -ErrorAction SilentlyContinue).Count }
-# The app-observer skill watches each run when it's installed (PTZ_NO_OBSERVE=1 skips it): a crash, a window that
+# The master-control skill watches each run when it's installed (PTZ_NO_OBSERVE=1 skips it): a crash, a window that
 # stops responding or a change to the real app's settings or saved logins fails the run.
-$Observer = Join-Path $HOME '.agents\library\app-observer\scripts\observer.py'
+$Observer = Join-Path $HOME '.agents\library\master-control\scripts\observer.py'
 $script:Runs = 0
 Remove-Item -Recurse -Force (Join-Path $Out 'observer') -ErrorAction SilentlyContinue
 function RunApp($vars) {
@@ -89,7 +89,7 @@ function RunApp($vars) {
         $verdict = @(& python $Observer run --out (Join-Path $Out 'observer') --name "run $script:Runs" --timeout 60 `
             --guard 'HKCU\Software\PTZControl' --guard "$env:APPDATA\PTZControl" -- $exe 2>&1 | ForEach-Object { "$_" })
         $problems = @($verdict | Where-Object { $_ -like 'observer: PROBLEM*' })
-        Check "run $($script:Runs): no crash, hang or change to the real app's data (app-observer)" ($problems.Count -eq 0)
+        Check "run $($script:Runs): no crash, hang or change to the real app's data (master-control)" ($problems.Count -eq 0)
         $problems | ForEach-Object { Write-Output "     $_" }
     } else {
         $p = Start-Process $exe -PassThru

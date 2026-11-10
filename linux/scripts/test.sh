@@ -25,9 +25,9 @@ printf 'PTZ Control logins 1\nplain\n' >"$VAULT"
 chmod 600 "$VAULT"
 sleep 1
 
-# The app-observer skill watches each run when it's installed (PTZ_NO_OBSERVE=1 skips it): a crash, a write
+# The master-control skill watches each run when it's installed (PTZ_NO_OBSERVE=1 skips it): a crash, a write
 # outside the test folders or a change to the real app's data fails the run; its verdict lands in app.log.
-OBSERVER="$HOME/.agents/library/app-observer/scripts/observer.py"
+OBSERVER="$HOME/.agents/library/master-control/scripts/observer.py"
 RUNS=0
 rm -rf "$SHOTS/observer"
 run() {  # extra --env options...
@@ -49,7 +49,7 @@ observed() {  # run number: fails the run when the observer found a problem in i
 last = json.loads(open(sys.argv[1]).read().splitlines()[-1])
 print("\n".join("     " + json.dumps(p)[:300] for p in last["problems"]))' "$SHOTS/observer/summaries.jsonl" 2>&1)" \
         || verdict="     the observer left no verdict"
-    check "run $1: no crash, stray write or change to the real app's data (app-observer)" "$([ -z "$verdict" ] && echo 0 || echo 1)"
+    check "run $1: no crash, stray write or change to the real app's data (master-control)" "$([ -z "$verdict" ] && echo 0 || echo 1)"
     [ -z "$verdict" ] || printf '%s\n' "$verdict"
 }
 FAIL=0

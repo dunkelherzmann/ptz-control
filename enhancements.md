@@ -38,6 +38,6 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [x] Mac (#22)
   - [x] Linux (#23)
   - [x] Windows (#23)
-- [x] **Tests watch what the app does in the background** (asked 2026-11-10, Linux and Windows). Each test run of the app goes through the app-observer skill: a crash, a window that stops responding, a write outside the test folders (Linux) or a change to the real app's settings and saved logins fails the run. `PTZ_NO_OBSERVE=1` turns it off.
+- [x] **Tests watch what the app does in the background** (asked 2026-11-10, Linux and Windows). Each test run of the app goes through the master-control skill: a crash, a window that stops responding, a write outside the test folders (Linux) or a change to the real app's settings and saved logins fails the run. `PTZ_NO_OBSERVE=1` turns it off.
   - [x] Linux (`linux/scripts/test.sh`)
   - [x] Windows (`windows/scripts/test.ps1`)
