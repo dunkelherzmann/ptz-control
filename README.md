@@ -3,8 +3,8 @@
 A native app to read and set absolute pan/tilt/zoom on ONVIF (Bosch, Milesight, …) and Axis VAPIX cameras,
 either directly or through an SSH host.
 
-Built like [TMOG](https://tmog.org/): one shared C++20 core, one native UI per
-platform, no web view, no Python runtime.
+Built like [TMOG](https://tmog.org/): one shared C++20 core and one native UI per
+platform, without a web view or a Python runtime.
 
 ```
 core/              shared C++20 core (C ABI in core/include/ptzcore.h)
@@ -203,7 +203,7 @@ Versions are `major.minor.patch`. [`VERSION`](VERSION) holds the major and minor
 
 ## Open source
 
-PTZ Control is free and open source under the [MIT License](LICENSE): use it, change it and share it, for personal or commercial work. Just keep the copyright and license notice with any copy. Third-party components keep their own licenses; see [NOTICES](NOTICES).
+PTZ Control is free and open source under the [MIT License](LICENSE): use it, change it and share it, for personal or commercial work. Keep the copyright and license notice with any copy. Third-party components keep their own licenses; see [NOTICES](NOTICES).
 
 ## Support
 

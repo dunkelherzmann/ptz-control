@@ -41,3 +41,4 @@ A box is ticked once the change has shipped. A request that covers several platf
 - [x] **Tests watch what the app does in the background** (asked 2026-11-10, Linux and Windows). Each test run of the app goes through the master-control skill: a crash, a window that stops responding, a write outside the test folders (Linux) or a change to the real app's settings and saved logins fails the run. `PTZ_NO_OBSERVE=1` turns it off.
   - [x] Linux (`linux/scripts/test.sh`)
   - [x] Windows (`windows/scripts/test.ps1`)
+- [x] **Plain wording in the explanatory docs** (asked 2026-11-12, all platforms). A pass with the humanizer skill over `README.md` and `SPECIFICATION.md`. In #27: the README's opening says what the app leaves out in a full sentence. The rest already read plainly.
