@@ -9,3 +9,4 @@ Items marked *found in testing* were found while testing other work, not reporte
   - [x] Mac
   - [x] Linux
   - [x] Windows
+- [x] **The core test sometimes ran before its mock camera was listening.** `scripts/test-core.sh` paused one second after starting the mock, and on a busy GitHub macOS runner both connect checks failed with "Camera unreachable". It now waits until the port answers, up to 10 seconds. *Found in testing, 2026-11-12 · Mac (GitHub's build).*

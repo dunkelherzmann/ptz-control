@@ -17,5 +17,6 @@ mkdir -p "$OUT/vault" && "$OUT/vault-smoke" "$OUT/vault"
 python3 "$ROOT/tools/mock-camera.py" --port 8080 >"$OUT/mock.log" 2>&1 &
 MOCK=$!
 trap 'kill $MOCK 2>/dev/null' EXIT
-sleep 1
+# Wait until the mock camera answers (up to 10 s): a fixed one-second pause was too short on a busy machine.
+for _ in $(seq 1 50); do nc -z 127.0.0.1 8080 2>/dev/null && break; sleep 0.2; done
 "$OUT/core-smoke"
