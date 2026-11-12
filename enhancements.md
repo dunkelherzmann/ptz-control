@@ -42,3 +42,4 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [x] Linux (`linux/scripts/test.sh`)
   - [x] Windows (`windows/scripts/test.ps1`)
 - [x] **Plain wording in the explanatory docs** (asked 2026-11-12, all platforms). A pass with the humanizer skill over `README.md` and `SPECIFICATION.md`. In #27: the README's opening says what the app leaves out in a full sentence. The rest already read plainly.
+- [x] **Release 1.0.76 on GitHub,** with the latest build for each system (asked 2026-11-12, all platforms). Published as `v1.0.76` from #27's commit: the Mac zip, the Linux Flatpak and the Windows zip, each built on its own system and passing the app's tests there. Installed on the Mac, Linux and Windows.
