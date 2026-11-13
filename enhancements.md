@@ -46,3 +46,7 @@ A box is ticked once the change has shipped. A request that covers several platf
 - [x] **A clean repository** (asked 2026-11-12, all platforms). The project moved to a new repository of the same name with a rewritten history. Pull request numbers up to #30 in these files refer to the earlier repository, which is gone; the releases were carried over with their files and notes, and `main` keeps its protection.
 - [x] **The ☰ Main Menu button in the same place on the Mac as on Linux and Windows** (asked 2026-11-13, Mac). It moves from beside the window controls to the right end of the window's header, after the status chip, and to the right of Manage Logins' top row, framed like the window's other buttons; the menu opens right-aligned under it. Done in #2.
 - [x] **Release 1.0.81 for macOS on GitHub** (asked 2026-11-13, Mac). Published as `v1.0.81` from #2's commit with the Mac zip; Windows and Linux haven't changed, and the notes point to 1.0.76 for them.
+- [ ] **Aim from the camera's picture** (asked 2026-11-13, all platforms). A still picture of the camera's current view under the position plane, with the plane's grid drawn over it: clicking a point of the picture aims at it, and the camera moves so that point comes to the centre. The window grows to fit the picture. A Range | Picture switch keeps the whole-range plane. ONVIF uses `GetSnapshotUri` and a move in the field-of-view space, Axis `image.cgi` and `center=`.
+  - [ ] Mac
+  - [ ] Linux
+  - [ ] Windows

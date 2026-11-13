@@ -20,6 +20,7 @@ struct CameraInfo {
     let tilt: AxisRange?
     let zoom: AxisRange?
     let zoomInteger: Bool
+    let viewMoves: Bool  // a point of the picture can be brought to its centre
 }
 
 /// A measured value; `nil` readings mean unavailable, never zero.
@@ -165,7 +166,7 @@ final class CameraLink: @unchecked Sendable {
                 name: withUnsafeBytes(of: info.name) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) },
                 units: withUnsafeBytes(of: info.units) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) },
                 pan: range(info.pan), tilt: range(info.tilt), zoom: range(info.zoom),
-                zoomInteger: info.zoom_integer != 0))
+                zoomInteger: info.zoom_integer != 0, viewMoves: info.view_moves != 0))
         }, completion: completion)
     }
 
@@ -207,6 +208,47 @@ final class CameraLink: @unchecked Sendable {
                 if let zoom = target.zoom { t.has_zoom = 1; t.zoom = zoom }
                 var error = [CChar](repeating: 0, count: 1024)
                 return ptz_move(session, &t, &error, error.count) != 0 ? .success(()) : self.failure(error, session: session)
+            }
+        }, completion: completion)
+    }
+
+    /// A still picture of the camera's current view.
+    func picture(completion: @escaping @MainActor (Result<NSImage, LinkError>) -> Void) {
+        run({
+            switch self.requireSession() {
+            case .failure(let e): return .failure(e)
+            case .success(let session):
+                var data: UnsafeMutablePointer<UInt8>?
+                var size = 0
+                var width: Int32 = 0, height: Int32 = 0
+                var error = [CChar](repeating: 0, count: 1024)
+                guard ptz_picture(session, &data, &size, &width, &height, &error, error.count) != 0, let data else {
+                    return self.failure(error, session: session)
+                }
+                let bytes = Data(bytes: data, count: size)
+                ptz_free(data)
+                return .success((bytes, NSSize(width: Int(width), height: Int(height))))
+            }
+        }, completion: { (result: Result<(Data, NSSize), LinkError>) in
+            completion(result.flatMap { bytes, size in
+                guard let image = NSImage(data: bytes) else {
+                    return .failure(LinkError(message: "The camera's picture could not be read"))
+                }
+                image.size = size  // pixels, whatever the file's DPI
+                return .success(image)
+            })
+        })
+    }
+
+    /// Brings the point (x, y) of the last picture to its centre; x and y run from −1 to 1, up positive.
+    func moveInView(x: Double, y: Double, completion: @escaping @MainActor (Result<Void, LinkError>) -> Void) {
+        run({
+            switch self.requireSession() {
+            case .failure(let e): return .failure(e)
+            case .success(let session):
+                var error = [CChar](repeating: 0, count: 1024)
+                return ptz_move_in_view(session, x, y, &error, error.count) != 0
+                    ? .success(()) : self.failure(error, session: session)
             }
         }, completion: completion)
     }

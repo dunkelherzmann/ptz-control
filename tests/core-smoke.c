@@ -61,6 +61,22 @@ static void exercise(ptz_vendor vendor, double pan, double tilt, double zoom, do
     }
     CHECK(ptz_stop(s, error, sizeof error), "stop (%s)", error);
 
+    unsigned char *picture = NULL;
+    size_t picture_bytes = 0;
+    int width = 0, height = 0;
+    CHECK(ptz_picture(s, &picture, &picture_bytes, &width, &height, error, sizeof error) && picture_bytes > 100 &&
+              width > 0 && height > 0, "picture %dx%d, %zu bytes (%s)", width, height, picture_bytes, error);
+    ptz_free(picture);
+    CHECK(info.view_moves, "camera aims within the view");
+    ptz_position before, after;
+    ptz_get_position(s, &before, error, sizeof error);
+    CHECK(ptz_move_in_view(s, 0.5, 0.5, error, sizeof error), "aim at the picture's upper right (%s)", error);
+    sleep(3);
+    CHECK(ptz_get_position(s, &after, error, sizeof error) && after.pan.value > before.pan.value &&
+              after.tilt.value > before.tilt.value, "moved right and up: pan %s -> %s, tilt %s -> %s",
+          before.pan.text, after.pan.text, before.tilt.text, after.tilt.text);
+    CHECK(!ptz_move_in_view(s, 1.5, 0, error, sizeof error), "point outside the picture refused: %s", error);
+
     char url[512], notice[256];
     CHECK(ptz_web_url(s, url, sizeof url, notice, sizeof notice, error, sizeof error), "web url %s %s", url, error);
     ptz_close(s);

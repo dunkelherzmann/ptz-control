@@ -51,6 +51,15 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
     private let eventLog = EventLogView()
     private let footer = NSTextField(labelWithString: "")
     private var planePanel: PanelView!
+    private let planeModeControl = NSSegmentedControl(labels: ["Range", "Picture"], trackingMode: .selectOne,
+                                                      target: nil, action: nil)
+    private let pictureButton = NSButton()
+    private var takingPicture = false
+    /// When the camera last moved and a fresh picture is wanted once it stops.
+    private var pictureDue: Date?
+    private var lastRead = Date.distantPast
+    /// The window's height in Range mode, restored when leaving Picture mode.
+    private var rangeWindowHeight: CGFloat?
     private var themedLabels: [(NSTextField, (PhosphorTheme) -> NSColor)] = []
 
     init() {
@@ -69,6 +78,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         updateControls()
         applyTheme()
         if window.frame.origin == .zero { window.center() }
+        setPlaneMode(PlaneMode(rawValue: UserDefaults.standard.string(forKey: "PlaneMode") ?? "") ?? .range)
         eventLog.append("PTZ Control ready · core \(String(cString: ptz_core_version()))")
         if let error = LoginVault.shared.openError {
             eventLog.append("Saved logins are unavailable: \(error)", warning: true)
@@ -112,6 +122,33 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             self?.sendMove()
         }
         planePanel = PanelView(caption: "Position plane // XY — click to aim, double-click to move", content: plane)
+        plane.onPictureAim = { [weak self] point in self?.aimInPicture(point) }
+        plane.onPictureAimAndMove = { [weak self] point in
+            self?.aimInPicture(point)
+            self?.sendMove()
+        }
+        planeModeControl.target = self
+        planeModeControl.action = #selector(planeModeChanged(_:))
+        planeModeControl.controlSize = .small
+        planeModeControl.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        planeModeControl.toolTip = "Range shows the camera's whole pan/tilt range; Picture shows a still picture of its view."
+        planeModeControl.setToolTip("Range: the camera's whole pan/tilt range. Click to aim, double-click to move (⌘1)",
+                                    forSegment: 0)
+        planeModeControl.setToolTip("Picture: a still picture of what the camera sees. Click a point to aim at it, "
+                                    + "double-click to move the camera there (⌘2)", forSegment: 1)
+        planeModeControl.setAccessibilityLabel("Position plane view")
+        pictureButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh Picture")
+        pictureButton.bezelStyle = .accessoryBarAction
+        pictureButton.isBordered = false
+        pictureButton.showsBorderOnlyWhileMouseInside = true
+        pictureButton.controlSize = .small
+        pictureButton.toolTip = "Refresh Picture: take a new picture of the camera's view now (⇧⌘R)"
+        pictureButton.setAccessibilityLabel("Refresh Picture")
+        pictureButton.target = self
+        pictureButton.action = #selector(refreshPicture(_:))
+        let planeAccessory = NSStackView(views: [pictureButton, planeModeControl])
+        planeAccessory.spacing = 6
+        planePanel.setAccessory(planeAccessory)
 
         for (meter, field) in [(panMeter, targetPan), (tiltMeter, targetTilt), (zoomMeter, targetZoom)] {
             meter.onAim = { [weak self] value in
@@ -289,6 +326,12 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
                 self.failures = 0
                 self.paused = false
                 self.plane.resetTrail()
+                self.plane.viewMoves = info.viewMoves
+                self.plane.picture = nil
+                self.plane.pictureNote = nil
+                self.plane.pictureTarget = nil
+                self.pictureDue = nil
+                self.takePicture()
                 self.connection.show(message: "Connected. No movement has been sent.", error: false)
                 self.eventLog.append("Connected: \(info.name)")
                 self.eventLog.append(info.units)
@@ -354,6 +397,9 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             self.info = nil
             self.current = nil
             self.starting = nil
+            self.plane.picture = nil
+            self.plane.pictureTarget = nil
+            self.pictureDue = nil
             self.connection.show(message: "Disconnected.", error: false)
             self.eventLog.append("Disconnected")
             self.updateControls()
@@ -370,7 +416,19 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
     // MARK: Position refresh
 
     private func tick() {
-        guard state == .connected, !paused, !link.isBusy, Date() >= nextRefresh else { return }
+        guard state == .connected, !link.isBusy else { return }
+        if let due = pictureDue {
+            // A fresh picture once the camera has stopped: a reading taken after the move that says it isn't moving,
+            // or, when the camera doesn't say, three seconds.
+            let age = Date().timeIntervalSince(due)
+            let stopped = lastRead > due.addingTimeInterval(0.8) && current?.moveStatus != nil && current?.moveStatus != "MOVING"
+            if stopped || (age >= 3 && (current?.moveStatus == nil || paused)) || age >= 30 {
+                pictureDue = nil
+                takePicture()
+                return
+            }
+        }
+        guard !paused, Date() >= nextRefresh else { return }
         refresh()
     }
 
@@ -398,6 +456,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             switch result {
             case .success(let snapshot):
                 self.failures = 0
+                self.lastRead = Date()
                 if self.starting == nil {
                     self.starting = snapshot
                     self.eventLog.append("Starting coordinates: \(Self.describe(snapshot))")
@@ -455,6 +514,10 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
 
     private func sendMove() {
         guard state == .connected else { return }
+        if plane.mode == .picture, let point = plane.pictureTarget {
+            sendPictureMove(point)
+            return
+        }
         do {
             let target = try parseTarget()
             if target.isEmpty { eventLog.append("All axes unchanged; no move sent."); return }
@@ -495,6 +558,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             case .success:
                 self.eventLog.append("\(describe) accepted: \(summary) (movement may still be in progress)")
                 self.nextRefresh = .distantPast
+                self.cameraMoved()
             case .failure(let error):
                 if error.linkLost { self.linkLost(error.message); return }
                 self.eventLog.append("\(describe) failed: \(error.message)", warning: true)
@@ -504,12 +568,140 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         updateControls()
     }
 
+    // MARK: Picture
+
+    @objc private func planeModeChanged(_ sender: NSSegmentedControl) {
+        setPlaneMode(sender.selectedSegment == 1 ? .picture : .range)
+    }
+
+    var planeMode: PlaneMode { plane.mode }
+
+    func setPlaneMode(_ mode: PlaneMode) {
+        let changed = mode != plane.mode
+        plane.mode = mode
+        planeModeControl.selectedSegment = mode == .picture ? 1 : 0
+        pictureButton.isHidden = mode == .range
+        planePanel.caption = mode == .picture
+            ? "Camera picture // view — click to aim, double-click to move there"
+            : "Position plane // XY — click to aim, double-click to move"
+        UserDefaults.standard.set(mode.rawValue, forKey: "PlaneMode")
+        if mode == .picture {
+            fitWindowToPicture()
+            if plane.picture == nil || changed { takePicture() }
+        } else {
+            restoreRangeHeight()
+        }
+        updateControls()
+    }
+
+    @objc func refreshPicture(_ sender: Any?) {
+        guard state == .connected else { return }
+        if plane.mode != .picture { setPlaneMode(.picture) } else { takePicture() }
+    }
+
+    private func takePicture() {
+        guard state == .connected, plane.mode == .picture, !takingPicture else { return }
+        takingPicture = true
+        link.picture { [weak self] result in
+            guard let self else { return }
+            self.takingPicture = false
+            guard self.state == .connected else { return }
+            switch result {
+            case .success(let image):
+                let reshaped = self.plane.picture?.size != image.size
+                if self.plane.pictureStale { self.plane.pictureTarget = nil }  // the camera has moved since
+                self.plane.picture = image
+                self.plane.pictureTaken = Date()
+                self.plane.pictureStale = false
+                self.plane.pictureNote = nil
+                if reshaped {
+                    self.eventLog.append("Camera picture: \(Int(image.size.width)) × \(Int(image.size.height))"
+                                         + (self.info?.viewMoves == true ? "" : "; this camera can't aim from its picture"))
+                    self.fitWindowToPicture()
+                }
+            case .failure(let error):
+                if error.linkLost { self.linkLost(error.message); return }
+                if self.plane.pictureNote != error.message { self.eventLog.append("Picture failed: \(error.message)", warning: true) }
+                self.plane.pictureNote = error.message
+                self.plane.pictureStale = false
+            }
+            self.updateControls()
+        }
+    }
+
+    private func aimInPicture(_ point: CGPoint) {
+        plane.pictureTarget = CGPoint(x: min(max(point.x, -1), 1), y: min(max(point.y, -1), 1))
+    }
+
+    private func sendPictureMove(_ point: CGPoint) {
+        guard info?.viewMoves == true else {
+            eventLog.append("This camera can't aim from its picture; use the target fields or the Range plane.", warning: true)
+            return
+        }
+        let describe = String(format: "%.2f %@, %.2f %@ of the picture", abs(point.x), point.x < 0 ? "left" : "right",
+                              abs(point.y), point.y < 0 ? "down" : "up")
+        link.moveInView(x: Double(point.x), y: Double(point.y)) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.eventLog.append("Move toward the picture point accepted: \(describe) (movement may still be in progress)")
+                self.nextRefresh = .distantPast
+                self.cameraMoved()
+            case .failure(let error):
+                if error.linkLost { self.linkLost(error.message); return }
+                self.eventLog.append("Move toward the picture point failed: \(error.message)", warning: true)
+            }
+            self.updateControls()
+        }
+        updateControls()
+    }
+
+    /// The picture is out of date once the camera moves; a new one is taken when it stops.
+    private func cameraMoved() {
+        guard plane.mode == .picture, plane.picture != nil else { return }
+        plane.pictureStale = true
+        pictureDue = Date()
+    }
+
+    /// In Picture mode the plane takes the picture's shape: the window grows or shrinks in height, keeping its top
+    /// edge, within the screen.
+    private func fitWindowToPicture() {
+        guard plane.mode == .picture, let window, let content = window.contentView else { return }
+        content.layoutSubtreeIfNeeded()
+        let size = plane.picture?.size ?? NSSize(width: 16, height: 9)
+        guard size.width > 0, plane.bounds.width > 0 else { return }
+        let wanted = ((plane.bounds.width - 2) * size.height / size.width + 2).rounded()
+        let delta = wanted - plane.bounds.height
+        guard abs(delta) >= 2 else { return }
+        if rangeWindowHeight == nil { rangeWindowHeight = window.frame.height }
+        var frame = window.frame
+        frame.size.height += delta
+        frame.origin.y -= delta
+        if let screen = (window.screen ?? NSScreen.main)?.visibleFrame {
+            frame.size.height = min(frame.height, screen.height)
+            if frame.maxY > screen.maxY { frame.origin.y = screen.maxY - frame.height }
+            if frame.minY < screen.minY { frame.origin.y = screen.minY }
+        }
+        window.setFrame(frame, display: true, animate: window.isVisible)
+    }
+
+    private func restoreRangeHeight() {
+        guard let height = rangeWindowHeight, let window else { return }
+        rangeWindowHeight = nil
+        var frame = window.frame
+        frame.origin.y += frame.height - height
+        frame.size.height = height
+        window.setFrame(frame, display: true, animate: window.isVisible)
+    }
+
     @objc func stopAction(_ sender: Any?) {
         guard state == .connected else { return }
         link.stop { [weak self] result in
             guard let self else { return }
             switch result {
-            case .success: self.eventLog.append("Stop accepted")
+            case .success:
+                self.eventLog.append("Stop accepted")
+                self.cameraMoved()
             case .failure(let error):
                 if error.linkLost { self.linkLost(error.message); return }
                 self.eventLog.append("Stop failed: \(error.message)", warning: true)
@@ -559,6 +751,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         }
         startButton.isEnabled = connected && !(starting?.isEmpty ?? true)
         plane.enabled = connected
+        pictureButton.isEnabled = connected && !takingPicture
         for meter in [panMeter, tiltMeter, zoomMeter] { meter.enabled = connected }
         zoomMeter.integer = info?.zoomInteger == true
 
@@ -668,6 +861,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         if env["PTZ_SNAPSHOT_SAVE_LOGIN"] != nil { connection.saveCamera.state = .on }
         if env["PTZ_SNAPSHOT_USE_LOGIN"] != nil { connection.chooseSavedLogin(.camera, index: 0) }
         if let reportPath = env["PTZ_MENU_REPORT"] { writeMenuReport(to: reportPath) }
+        if env["PTZ_SNAPSHOT_PICTURE"] != nil { runPictureScript(to: path, env: env); return }
         connect()
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             self.targetPan.stringValue = "0.55"
@@ -698,6 +892,32 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
 }
 
 extension ConsoleWindowController {
+    /// Test copy, PTZ_SNAPSHOT_PICTURE: Picture mode, aim at a point of the picture (a picture of that is saved to
+    /// PTZ_SNAPSHOT_AIM_PATH), move there, and save the window once the new picture has come.
+    fileprivate func runPictureScript(to path: String, env: [String: String]) {
+        setPlaneMode(.picture)
+        connect()
+        func save(_ file: String) {
+            guard let view = window?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: file))
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            self.plane.onPictureAim?(CGPoint(x: 0.45, y: 0.3))
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.4) {
+            if let aimPath = env["PTZ_SNAPSHOT_AIM_PATH"] { save(aimPath) }
+            self.sendMove()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.4) {
+            if let movingPath = env["PTZ_SNAPSHOT_MOVING_PATH"] { save(movingPath) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+            save(path)
+            NSApp.terminate(nil)
+        }
+    }
+
     /// Test copy: where the menus are, and whether a shortcut reaches the in-window menu (⌥⌘2 picks Green Phosphor).
     func writeMenuReport(to path: String) {
         let before = theme
@@ -715,7 +935,10 @@ extension ConsoleWindowController {
 }
 
 extension ConsoleWindowController: NSTextFieldDelegate {
-    func controlTextDidChange(_ obj: Notification) { updateTargetMarkers() }
+    func controlTextDidChange(_ obj: Notification) {
+        plane.pictureTarget = nil  // an absolute target takes over from a point of the picture
+        updateTargetMarkers()
+    }
 }
 
 /// Solid background following the theme.

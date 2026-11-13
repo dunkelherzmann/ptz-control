@@ -2,6 +2,8 @@
 #include "ptzcore.h"
 #include "internal.hpp"
 
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 struct ptz_session {
@@ -10,6 +12,7 @@ struct ptz_session {
     std::unique_ptr<ptz::Tunnel> tunnel;
     std::unique_ptr<ptz::Camera> camera;
     std::unique_ptr<ptz::WebInterface> web;
+    int picture_width = 0, picture_height = 0;  // the last picture's size, for aiming in it
 
     std::string redact(std::string message) const {
         for (const std::string *secret : {&camera_password, &ssh_password}) {
@@ -136,6 +139,37 @@ extern "C" void ptz_info_get(ptz_session *session, ptz_info *info) {
     info->tilt = export_range(session->camera->tilt_range);
     info->zoom = export_range(session->camera->zoom_range);
     info->zoom_integer = session->camera->zoom_integer();
+    info->view_moves = session->camera->view_moves();
+}
+
+extern "C" int ptz_picture(ptz_session *session, unsigned char **data, size_t *size, int *width, int *height,
+                           char *error, size_t error_size) {
+    *data = nullptr;
+    *size = 0;
+    *width = *height = 0;
+    return guarded(session, error, error_size, [&] {
+        if (!ptz_link_alive(session)) throw ptz::Error("SSH connection closed; reconnect to continue");
+        std::string bytes = session->camera->picture();
+        auto dimensions = ptz::picture_size(bytes);
+        auto *copy = static_cast<unsigned char *>(std::malloc(bytes.size()));
+        if (!copy) throw ptz::Error("Not enough memory for the camera's picture");
+        std::memcpy(copy, bytes.data(), bytes.size());
+        *data = copy;
+        *size = bytes.size();
+        *width = session->picture_width = dimensions->first;
+        *height = session->picture_height = dimensions->second;
+    });
+}
+
+extern "C" void ptz_free(void *data) { std::free(data); }
+
+extern "C" int ptz_move_in_view(ptz_session *session, double x, double y, char *error, size_t error_size) {
+    return guarded(session, error, error_size, [&] {
+        if (!ptz_link_alive(session)) throw ptz::Error("SSH connection closed; the move was not sent");
+        if (!std::isfinite(x) || !std::isfinite(y) || x < -1 || x > 1 || y < -1 || y > 1)
+            throw ptz::Error("The point to aim at must lie inside the picture");
+        session->camera->move_in_view(x, y, session->picture_width, session->picture_height);
+    });
 }
 
 extern "C" int ptz_get_position(ptz_session *session, ptz_position *position, char *error, size_t error_size) {

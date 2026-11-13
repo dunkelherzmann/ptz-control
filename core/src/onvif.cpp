@@ -1,6 +1,7 @@
 // ONVIF PTZ over SOAP 1.2 with WS-Security UsernameToken digest.
 #include "internal.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <ctime>
 
@@ -12,6 +13,8 @@ constexpr const char *kDeviceNs = "http://www.onvif.org/ver10/device/wsdl";
 constexpr const char *kMediaNs = "http://www.onvif.org/ver10/media/wsdl";
 constexpr const char *kPtzNs = "http://www.onvif.org/ver20/ptz/wsdl";
 constexpr const char *kSchemaNs = "http://www.onvif.org/ver10/schema";
+// ONVIF PTZ spec, Annex A.3.2: origin at the picture's centre, (1,1) at its upper right corner.
+constexpr const char *kFovSpace = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov";
 
 struct Space {
     std::string uri;
@@ -101,6 +104,8 @@ public:
         pan_tilt_ = choose_space(spaces_of(*spaces, "AbsolutePanTiltPositionSpace"), default_pan_tilt, "pan/tilt");
         pan_range = pan_tilt_.x;
         tilt_range = pan_tilt_.y;
+        for (const auto &space : spaces_of(*spaces, "RelativePanTiltTranslationSpace"))
+            if (space.uri == kFovSpace) fov_ = space;
         auto zooms = spaces_of(*spaces, "AbsoluteZoomPositionSpace");
         if (!zooms.empty()) {
             zoom_ = choose_space(zooms, default_zoom, "zoom");
@@ -181,6 +186,33 @@ public:
         call(ptz_, kPtzNs, "http://www.onvif.org/ver20/ptz/wsdl/Stop",
              "<tptz:Stop><tptz:ProfileToken>" + xml_escape(profile_token_) +
                  "</tptz:ProfileToken><tptz:PanTilt>true</tptz:PanTilt><tptz:Zoom>true</tptz:Zoom></tptz:Stop>",
+             "tptz");
+    }
+
+    std::string picture() override {
+        if (snapshot_uri_.empty()) {
+            auto body = call(media_, kMediaNs, "http://www.onvif.org/ver10/media/wsdl/GetSnapshotUri",
+                             "<trt:GetSnapshotUri><trt:ProfileToken>" + xml_escape(profile_token_) +
+                                 "</trt:ProfileToken></trt:GetSnapshotUri>",
+                             "trt");
+            const XmlNode *uri = body.find("Uri");
+            if (!uri || trim(uri->text).empty()) throw Error("Camera did not give an address for its picture");
+            snapshot_uri_ = route(trim(uri->text));
+        }
+        return fetch_picture(snapshot_uri_, p_.user, p_.password, p_.timeout);
+    }
+
+    bool view_moves() const override { return fov_.has_value(); }
+
+    void move_in_view(double x, double y, int, int) override {
+        if (!fov_) throw Error("This camera can't aim from its picture: it doesn't offer ONVIF moves within the view");
+        auto clamp = [](double v, const Range &r) { return r.available ? std::min(std::max(v, r.min), r.max) : v; };
+        x = clamp(x, fov_->x);
+        y = clamp(y, fov_->y);
+        call(ptz_, kPtzNs, "http://www.onvif.org/ver20/ptz/wsdl/RelativeMove",
+             "<tptz:RelativeMove><tptz:ProfileToken>" + xml_escape(profile_token_) +
+                 "</tptz:ProfileToken><tptz:Translation><tt:PanTilt x=\"" + format_number(x) + "\" y=\"" +
+                 format_number(y) + "\" space=\"" + kFovSpace + "\"/></tptz:Translation></tptz:RelativeMove>",
              "tptz");
     }
 
@@ -331,6 +363,8 @@ private:
     bool http_digest_ = false;
     Space pan_tilt_;
     std::optional<Space> zoom_;
+    std::optional<Space> fov_;
+    std::string snapshot_uri_;
 };
 
 }  // namespace
