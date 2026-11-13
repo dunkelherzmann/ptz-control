@@ -125,7 +125,18 @@ public:
     virtual Position position() = 0;
     virtual void move(const Target &target) = 0;
     virtual void stop() = 0;
+    // A still picture of the current view, JPEG or PNG bytes.
+    virtual std::string picture() = 0;
+    // Whether move_in_view() works on this camera.
+    virtual bool view_moves() const = 0;
+    // Brings the point (x, y) of the current picture to its centre: x and y run from -1 at the picture's left and
+    // bottom edges to 1 at its right and top edges. width and height are the picture's size in pixels.
+    virtual void move_in_view(double x, double y, int width, int height) = 0;
 };
+
+// ---- pictures (picture.cpp) -----------------------------------------------
+std::optional<std::pair<int, int>> picture_size(const std::string &data);  // JPEG or PNG: width, height
+std::string fetch_picture(const std::string &url, const std::string &user, const std::string &password, double timeout);
 
 std::unique_ptr<Camera> make_onvif(const CameraParams &params, const Hooks &hooks);
 std::unique_ptr<Camera> make_axis(const CameraParams &params, const Hooks &hooks);

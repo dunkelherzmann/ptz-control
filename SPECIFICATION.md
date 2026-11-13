@@ -24,7 +24,8 @@ the rest as a gap.
 ## 1. Core
 
 - **C1 One C interface.** `core/include/ptzcore.h` is the only thing the hosts call: connect, camera info, read
-  position, move, stop, find the web interface, check the link, close. All calls block. Each host runs them on one
+  position, move, stop, take a picture, move toward a point of the picture, find the web interface, check the link,
+  close. All calls block. Each host runs them on one
   worker thread or serial queue per session, never on the UI thread, so camera requests never overlap.
 - **C2 Callbacks.** While connecting, the core can ask the host to log a line, to ask the operator for text (secret or
   not) and to ask a yes/no question. The host shows these as dialogs and the core thread waits for the answer.
@@ -117,17 +118,47 @@ the rest as a gap.
 - **V5 Units in the header.** ONVIF: "ONVIF absolute coordinates (commonly pan/tilt −1…1, zoom 0…1; not degrees)".
   Axis: "Axis native coordinates: pan/tilt in degrees; zoom is an integer, not optical magnification".
 
+- **V6 Pictures.** ONVIF: the media service's `GetSnapshotUri` for the chosen profile, fetched once per connection and
+  sent through the SSH tunnel when there is one; aiming in the picture is a `RelativeMove` in the field-of-view
+  translation space (`http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov`, origin at the picture's
+  centre, (1, 1) at its upper right corner), offered only when the camera advertises that space. Axis:
+  `/axis-cgi/jpg/image.cgi?camera=1`, and aiming is `ptz.cgi` `center=x,y` in the picture's pixels with its
+  `imagewidth` and `imageheight`. Pictures are JPEG or PNG, fetched with HTTP Digest like every other request; a
+  camera that asks for Basic sign-in is refused with "turn on Digest sign-in on the camera", since Basic would send
+  the password unprotected.
+
 ## 7. Instruments
 
 - **I1 Header**: "No camera link", "Connecting to <address>…", or "<address> · <camera name>" with the units below it.
 - **I2 Status chip**: OFFLINE, LINKING, CLOSING, REQUEST (a request is running), READS PAUSED, POSITION OK or
   NO POSITION, with a green, orange or muted lamp.
-- **I3 Position plane** (pan across, tilt up), in camera units: a 10 × 10 grid, the zero axes when zero is in range,
+- **I3 Position plane** (pan across, tilt up), in camera units, in **Range** mode: a 10 × 10 grid, the zero axes when zero is in range,
   range labels, the last 120 measured positions as a trail (gaps stay gaps), the starting position as a square marked
   **S**, the target as a dashed crosshair and ring, and the current position as a solid reticle. Without ranges it
   reads "NO CAMERA LINK" or "PAN/TILT RANGE UNAVAILABLE"; with no measured position, "POSITION UNAVAILABLE".
 - **I4 Aim on the plane.** Pointing at it shows guide lines and the pan, tilt value under the pointer. Click or drag to
   aim (fills the pan and tilt targets); double-click to aim and move.
+- **I9 Range or Picture.** A switch at the right of the plane's caption, **Range | Picture** (also View ▸ Whole Range
+  ⌘1 and View ▸ Camera Picture ⌘2), picks what the plane shows; the choice is remembered. Hover text: "Range: the
+  camera's whole pan/tilt range. Click to aim, double-click to move (⌘1)" and "Picture: a still picture of what the
+  camera sees. Click a point to aim at it, double-click to move the camera there (⌘2)".
+- **I10 Camera picture.** In Picture mode the plane, captioned "Camera picture // view — click to aim, double-click to
+  move there", shows a still picture of the camera's view, as large as fits and in the picture's shape, with a view
+  grid on top: tenths of the picture, stronger centre lines, and a solid reticle at the centre, where the camera
+  points. The window grows or shrinks in height to the picture's shape, keeping its top edge and staying on the screen,
+  and gets its Range height back when switching to Range. A plate in the corner reads "PICTURE <time taken>". A picture
+  is taken on connecting, on switching to Picture, with **Refresh Picture** (⇧⌘R, or the ⟳ button beside the switch,
+  hover text "Refresh Picture: take a new picture of the camera's view now (⇧⌘R)"), and after every move or stop
+  once the camera stops (a reading taken after the move that isn't MOVING, or 3 s when the camera doesn't report its
+  motion). Until then the picture is dimmed and the plate reads "MOVING · NEW PICTURE WHEN IT STOPS". Without a
+  picture the plane reads "NO CAMERA LINK", "TAKING A PICTURE…" or "NO PICTURE" with the reason; a failed picture is
+  logged in red once.
+- **I11 Aim in the picture.** Pointing at the picture shows guide lines and the point in view units (◀/▶ and ▲/▼,
+  0 at the centre, 1 at the edges). Click to aim: a dashed crosshair and ring with a dotted line from the centre.
+  Double-click (or Move, ⌘↩) turns the camera so that point comes to the centre, logged as "Move toward the picture
+  point accepted: 0.45 right, 0.30 up of the picture (movement may still be in progress)". Typing in a target field
+  drops the point, and an absolute target takes over. A camera that can't aim from its picture (see V6) shows "THIS
+  CAMERA CAN'T AIM FROM ITS PICTURE" in the corner and ignores clicks.
 - **I5 Axis travel meters** for pan, tilt and zoom: the bar's fill is the position as a percentage of the advertised
   limits. A missing reading is hatched and reads "N/A", never an empty bar. Ticks mark the start and the target, a
   small handle marks the target, and the limits are printed at both ends.
@@ -189,7 +220,8 @@ the rest as a gap.
   Manage Logins' top row, on every platform, holds every menu, each as a submenu, and opens right-aligned under the
   button: PTZ Control (About, Hide, Hide Others, Show All, Quit), Edit (Undo, Redo, Cut, Copy, Paste, Select All),
   Camera (Connect, Disconnect, Move to Target, Return to Starting Coordinates, Stop Motion, Refresh Position, Pause
-  Auto-Refresh, Open Camera Web Interface, Manage Logins), View (Phosphor), Window (Minimize, Zoom, Close), Help
+  Auto-Refresh, Refresh Picture, Open Camera Web Interface, Manage Logins), View (Whole Range, Camera Picture,
+  Phosphor), Window (Minimize, Zoom, Close), Help
   (Coordinate Help). Camera commands are enabled only when they can act. Hover text: "Main Menu: every command of PTZ
   Control, with its shortcut"; VoiceOver reads "Main Menu". On the Mac the menu bar keeps only the app menu macOS
   always shows (About, Services, Hide, Hide Others, Show All, Quit), so on a wide screen no command needs a trip to the
@@ -213,6 +245,7 @@ What differs from the Mac version today. The `pending.md` in each folder says wh
   All, acting on the field that has the focus), Camera, View ▸ Phosphor, Window (Minimize Ctrl+M, Maximize, Close
   Ctrl+W) and Help (Coordinate Help, F1 here for ⌘?).
 - Default size 1180 × 820. The window's size and position aren't remembered.
+- No camera picture yet (I9–I11): the plane always shows the whole range.
 - The Advanced fields are always shown, without a disclosure triangle.
 - Enter in any connection field connects while nothing is connected.
 - The event buffer always scrolls to the newest line.

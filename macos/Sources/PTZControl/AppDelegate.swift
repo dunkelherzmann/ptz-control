@@ -80,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         camera.addItem(.separator())
         add(camera, "Refresh Position", #selector(refresh), "r")
         add(camera, "Pause Auto-Refresh", #selector(pause), "p")
+        add(camera, "Refresh Picture", #selector(refreshPicture), "r", [.command, .shift])
         camera.addItem(.separator())
         add(camera, "Open Camera Web Interface", #selector(web), "l")
         camera.addItem(.separator())
@@ -94,6 +95,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             item.representedObject = theme.rawValue
             item.target = self
         }
+        add(view, "Whole Range", #selector(showRange), "1")
+        add(view, "Camera Picture", #selector(showPicture), "2")
+        view.addItem(.separator())
         view.addItem(withTitle: "Phosphor", action: nil, keyEquivalent: "").submenu = phosphor
         main.addItem(withTitle: "View", action: nil, keyEquivalent: "").submenu = view
 
@@ -122,6 +126,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case #selector(pause):
             item.title = console.paused ? "Resume Auto-Refresh" : "Pause Auto-Refresh"
             return state == .connected
+        case #selector(refreshPicture): return state == .connected
+        case #selector(showRange):
+            item.state = console.planeMode == .range ? .on : .off
+            return true
+        case #selector(showPicture):
+            item.state = console.planeMode == .picture ? .on : .off
+            return true
         case #selector(chooseTheme(_:)):
             item.state = (item.representedObject as? String) == console.theme.rawValue ? .on : .off
             return true
@@ -136,6 +147,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func stop() { console.stopAction(nil) }
     @objc private func refresh() { console.refreshNow(nil) }
     @objc private func pause() { console.togglePause(nil) }
+    @objc private func refreshPicture() { console.refreshPicture(nil) }
+    @objc private func showRange() { console.setPlaneMode(.range) }
+    @objc private func showPicture() { console.setPlaneMode(.picture) }
     @objc private func web() { console.openWebInterface(nil) }
     @objc private func manageLogins() { ManageLoginsWindowController.shared.present() }
 
@@ -169,6 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         Leave a target field blank (or type x) to keep that axis unchanged.
         Click the position plane to aim, double-click to aim and move.
+        Picture (⌘2) shows a still picture of the camera's view instead: click a point to aim at it, double-click (or Move) to turn the camera so that point comes to the centre. A new picture comes once the camera stops, or with Refresh Picture (⇧⌘R). Range (⌘1) brings back the whole-range plane.
         Drag along a travel meter to aim that axis alone, double-click it to aim and move.
 
         Starting coordinates are the first reading after connecting and stay fixed. Return to Start (⌘B) sends an absolute move there.

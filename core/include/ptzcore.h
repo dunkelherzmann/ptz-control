@@ -71,6 +71,7 @@ typedef struct {
     char units[256];
     ptz_range pan, tilt, zoom;
     int zoom_integer;         /* Axis zoom accepts integers only */
+    int view_moves;           /* ptz_move_in_view() works on this camera */
 } ptz_info;
 
 typedef struct {
@@ -88,6 +89,15 @@ void ptz_info_get(ptz_session *session, ptz_info *info);
 int ptz_get_position(ptz_session *session, ptz_position *position, char *error, size_t error_size);
 int ptz_move(ptz_session *session, const ptz_target *target, char *error, size_t error_size);
 int ptz_stop(ptz_session *session, char *error, size_t error_size);
+/* A still picture of the camera's current view (JPEG or PNG bytes) and its size in
+ * pixels. Free *data with ptz_free(). */
+int ptz_picture(ptz_session *session, unsigned char **data, size_t *size, int *width, int *height,
+                char *error, size_t error_size);
+void ptz_free(void *data);
+/* Moves the camera so that the point (x, y) of the last picture comes to its centre.
+ * x and y run from -1 at the picture's left and bottom edges to 1 at its right and
+ * top edges. Needs info.view_moves and a picture taken first. */
+int ptz_move_in_view(ptz_session *session, double x, double y, char *error, size_t error_size);
 /* Probes HTTP, then HTTPS, without sending credentials. Fills a URL the host
  * may open in the browser, plus an optional notice (e.g. self-signed cert). */
 int ptz_web_url(ptz_session *session, char *url, size_t url_size,

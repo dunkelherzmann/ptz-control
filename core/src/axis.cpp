@@ -1,6 +1,7 @@
 // Axis VAPIX ptz.cgi with HTTP Digest, camera channel 1.
 #include "internal.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <sstream>
 
@@ -88,6 +89,25 @@ public:
     }
 
     void stop() override { request({{"move", "stop"}}); }
+
+    std::string picture() override {
+        return fetch_picture("http://" + bracket_host(p_.host) + ":" + std::to_string(p_.port) +
+                                 "/axis-cgi/jpg/image.cgi?camera=1",
+                             p_.user, p_.password, p_.timeout);
+    }
+
+    bool view_moves() const override { return true; }
+
+    void move_in_view(double x, double y, int width, int height) override {
+        if (width <= 0 || height <= 0) throw Error("Take a picture before aiming in it");
+        // VAPIX center= takes pixel coordinates in the picture, from its top-left corner.
+        long px = std::lround((x + 1) / 2 * width), py = std::lround((1 - y) / 2 * height);
+        px = std::clamp(px, 0L, static_cast<long>(width) - 1);
+        py = std::clamp(py, 0L, static_cast<long>(height) - 1);
+        request({{"center", std::to_string(px) + "," + std::to_string(py)},
+                 {"imagewidth", std::to_string(width)},
+                 {"imageheight", std::to_string(height)}});
+    }
 
 private:
     std::map<std::string, std::string> query(const std::string &kind) {
