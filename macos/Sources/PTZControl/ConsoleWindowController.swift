@@ -40,6 +40,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
     private let headerTitle = NSTextField(labelWithString: "No camera link")
     private let headerUnits = NSTextField(labelWithString: "Choose a route and vendor, enter the camera details, then Connect.")
     private let statusChip = StatusChip()
+    private let menuButton = InWindowMenu.makeButton()
     private let targetPan = NSTextField()
     private let targetTilt = NSTextField()
     private let targetZoom = NSTextField()
@@ -98,10 +99,11 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         titles.orientation = .vertical
         titles.alignment = .leading
         titles.spacing = 2
-        let header = NSStackView(views: [titles, NSView(), statusChip])
+        let header = NSStackView(views: [titles, NSView(), statusChip, menuButton])
         header.orientation = .horizontal
         header.alignment = .centerY
         header.distribution = .fill
+        header.setCustomSpacing(10, after: statusChip)
         titles.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         plane.onAim = { [weak self] pan, tilt in self?.aim(pan: pan, tilt: tilt) }
@@ -235,6 +237,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         root.applyThemeRecursively(theme)
         for (label, color) in themedLabels { label.textColor = color(theme) }
         statusChip.theme = theme
+        menuButton.contentTintColor = theme.text
         eventLog.theme = theme
     }
 
@@ -683,7 +686,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
             if let framePath = env["PTZ_SNAPSHOT_FRAME_PATH"], let frame = view.superview,
                let frameRep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) {
-                frame.cacheDisplay(in: frame.bounds, to: frameRep)  // title bar included, for the Main Menu button
+                frame.cacheDisplay(in: frame.bounds, to: frameRep)  // title bar included
                 try? frameRep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: framePath))
             }
             if let loginsPath = env["PTZ_SNAPSHOT_LOGINS_PATH"] {

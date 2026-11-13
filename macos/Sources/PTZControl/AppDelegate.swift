@@ -7,7 +7,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationDidFinishLaunching(_ notification: Notification) {
         console = ConsoleWindowController()
         InWindowMenu.install(full: buildMenu(), appMenu: buildAppMenu(services: true), appName: "PTZ Control")
-        InWindowMenu.attach(to: console.window!)
         if let path = ProcessInfo.processInfo.environment["PTZ_SNAPSHOT_PATH"] {
             // Test copy: render off screen, never on the desktop the user is working on.
             console.runSnapshotScript(to: path)

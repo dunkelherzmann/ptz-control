@@ -185,8 +185,9 @@ the rest as a gap.
 
 ## 13. Menus, help and About
 
-- **H1 Main Menu** (☰), beside the window controls of the main window and of Manage Logins, holds every menu, each as
-  a submenu: PTZ Control (About, Hide, Hide Others, Show All, Quit), Edit (Undo, Redo, Cut, Copy, Paste, Select All),
+- **H1 Main Menu** (☰), a framed button at the right end of the main window's header (after the status chip) and of
+  Manage Logins' top row, on every platform, holds every menu, each as a submenu, and opens right-aligned under the
+  button: PTZ Control (About, Hide, Hide Others, Show All, Quit), Edit (Undo, Redo, Cut, Copy, Paste, Select All),
   Camera (Connect, Disconnect, Move to Target, Return to Starting Coordinates, Stop Motion, Refresh Position, Pause
   Auto-Refresh, Open Camera Web Interface, Manage Logins), View (Phosphor), Window (Minimize, Zoom, Close), Help
   (Coordinate Help). Camera commands are enabled only when they can act. Hover text: "Main Menu: every command of PTZ
@@ -210,8 +211,7 @@ What differs from the Mac version today. The `pending.md` in each folder says wh
 - The ☰ Main Menu holds the Mac's menus in the Mac's order, with Ctrl for ⌘ and Alt for ⌥: PTZ Control (About,
   Quit PTZ Control Ctrl+Q; Hide, Hide Others and Show All are macOS-only), Edit (Undo, Redo, Cut, Copy, Paste, Select
   All, acting on the field that has the focus), Camera, View ▸ Phosphor, Window (Minimize Ctrl+M, Maximize, Close
-  Ctrl+W) and Help (Coordinate Help, F1 here for ⌘?). The button sits at the right end of the window's header, since
-  the desktop draws the title bar.
+  Ctrl+W) and Help (Coordinate Help, F1 here for ⌘?).
 - Default size 1180 × 820. The window's size and position aren't remembered.
 - The Advanced fields are always shown, without a disclosure triangle.
 - Enter in any connection field connects while nothing is connected.
@@ -244,7 +244,7 @@ What differs from the Mac version today. The `pending.md` in each folder says wh
   `QT_QPA_PLATFORM=wayland` forces it.
 - Settings live in `~/.var/app/org.ptzcontrol.app/config/PTZControl/PTZControl.conf`.
 - SSH uses the Flatpak runtime's OpenSSH client with the user's `~/.ssh` and ssh-agent.
-- Manage Logins has its own ☰ Main Menu, at the right of its top row, and every shortcut works there too.
+- Every shortcut works in Manage Logins too.
 
 ## 15. Build, packaging and versions
 
