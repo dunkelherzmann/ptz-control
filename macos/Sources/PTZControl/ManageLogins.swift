@@ -27,7 +27,6 @@ import AppKit
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         super.init(window: window)
-        InWindowMenu.attach(to: window)
         build()
         NotificationCenter.default.addObserver(forName: LoginVault.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.reload() }
@@ -104,7 +103,7 @@ import AppKit
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
 
-        let top = NSStackView(views: [storeControl, NSView(), newButton, editButton, deleteButton])
+        let top = NSStackView(views: [storeControl, NSView(), newButton, editButton, deleteButton, InWindowMenu.makeButton()])
         let bottom = NSStackView(views: [lockButton, adminButton, status, NSView(), doneButton])
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let stack = NSStackView(views: [top, scroll, bottom])

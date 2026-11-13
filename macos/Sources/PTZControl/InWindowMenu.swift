@@ -1,8 +1,8 @@
 import AppKit
 
 /// Every menu lives in the window, not in the macOS menu bar (§13 H1): wide screens make the trip to the top of the
-/// screen long. The menu bar keeps only the app menu macOS always shows; the full menu opens from a ☰ button beside
-/// the window controls, and its shortcuts work from any window.
+/// screen long. The menu bar keeps only the app menu macOS always shows; the full menu opens from a ☰ button at the
+/// right end of each window's header, and its shortcuts work from any window.
 @MainActor
 enum InWindowMenu {
     /// The full menu: one submenu per former menu-bar menu.
@@ -31,31 +31,29 @@ enum InWindowMenu {
         return menu.performKeyEquivalent(with: event)
     }
 
-    /// Puts the ☰ button beside the window controls.
-    static func attach(to window: NSWindow) {
-        let button = NSButton(frame: NSRect(x: 0, y: 0, width: 30, height: 22))
+    /// The ☰ button, for the right end of a window's header row (as on Linux and Windows).
+    static func makeButton() -> NSButton {
+        let button = NSButton(frame: NSRect(x: 0, y: 0, width: 34, height: 28))
         button.image = NSImage(systemSymbolName: "line.3.horizontal", accessibilityDescription: "Main Menu")
-        button.isBordered = false
-        button.bezelStyle = .accessoryBarAction
-        button.showsBorderOnlyWhileMouseInside = true
+        button.bezelStyle = .push  // framed, like the window's other buttons and the ☰ on Linux and Windows
+        button.imagePosition = .imageOnly
         button.toolTip = "Main Menu: every command of PTZ Control, with its shortcut"
         button.setAccessibilityLabel("Main Menu")
         button.setAccessibilityHelp("Opens every menu of PTZ Control")
         button.target = MenuOpener.shared
         button.action = #selector(MenuOpener.open(_:))
-        let holder = NSView(frame: NSRect(x: 0, y: 0, width: 38, height: 28))
-        button.frame.origin = NSPoint(x: 4, y: 3)
-        holder.addSubview(button)
-        let accessory = NSTitlebarAccessoryViewController()
-        accessory.view = holder
-        accessory.layoutAttribute = .leading
-        window.addTitlebarAccessoryViewController(accessory)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.widthAnchor.constraint(equalToConstant: 38).isActive = true
+        return button
     }
 
     /// The ☰ button of `window`, if it has one (for the tests).
     static func button(in window: NSWindow) -> NSButton? {
-        window.titlebarAccessoryViewControllers.lazy.compactMap { $0.view.subviews.first as? NSButton }
-            .first { $0.action == #selector(MenuOpener.open(_:)) }
+        func find(_ view: NSView) -> NSButton? {
+            if let b = view as? NSButton, b.action == #selector(MenuOpener.open(_:)) { return b }
+            return view.subviews.lazy.compactMap(find).first
+        }
+        return window.contentView.flatMap(find)
     }
 
     /// The menu tree as indented lines, for the tests.
@@ -72,6 +70,9 @@ enum InWindowMenu {
 private final class MenuOpener: NSObject {
     static let shared = MenuOpener()
     @objc func open(_ sender: NSButton) {
-        InWindowMenu.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+        // Right-aligned under the button, which sits at the window's right edge.
+        let menu = InWindowMenu.menu
+        menu.popUp(positioning: nil, at: NSPoint(x: sender.bounds.width - menu.size.width, y: sender.bounds.height + 4),
+                   in: sender)
     }
 }
