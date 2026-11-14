@@ -75,11 +75,23 @@ final class PositionPlaneView: NSView, Themed {
     var pictureStale = false { didSet { needsDisplay = true } }
     /// Shown in place of a picture: why there is none.
     var pictureNote: String? { didSet { needsDisplay = true } }
-    var viewMoves = false { didSet { needsDisplay = true } }
+    /// A point of the picture can be aimed at (the camera moves within its view, or its view can be measured).
+    var canAim = false { didSet { needsDisplay = true } }
+    /// Where the picture points and how much of the range it spans, once its view is measured: pan and tilt are then
+    /// drawn over the picture, and a click aims at absolute coordinates.
+    var overlay: (pan: Double, tilt: Double, scale: ViewScale)? { didSet { needsDisplay = true } }
+    /// The camera is turning a little and back to measure its view.
+    var measuring = false { didSet { needsDisplay = true } }
+    var current: PositionSnapshot? { didSet { needsDisplay = true } }
+    var starting: PositionSnapshot? { didSet { needsDisplay = true } }
+    var target: (pan: Double?, tilt: Double?) = (nil, nil) { didSet { needsDisplay = true } }
+    /// Without a measured view: the point of the picture aimed at, in view units.
     var pictureTarget: CGPoint? { didSet { needsDisplay = true } }
     var enabled = false { didSet { needsDisplay = true } }
     var onPictureAim: ((CGPoint) -> Void)?
     var onPictureAimAndMove: ((CGPoint) -> Void)?
+    var onAim: ((Double, Double) -> Void)?
+    var onAimAndMove: ((Double, Double) -> Void)?
 
     private var hover: CGPoint?
     private var theme = PhosphorTheme.system
@@ -113,6 +125,24 @@ final class PositionPlaneView: NSView, Themed {
         return CGPoint(x: (point.x - r.minX) / r.width * 2 - 1, y: (point.y - r.minY) / r.height * 2 - 1)
     }
 
+    /// Pan and tilt at a point of the picture (view units), with a measured view.
+    private func coordinates(inPicture p: CGPoint) -> (pan: Double, tilt: Double)? {
+        guard let overlay else { return nil }
+        return (overlay.pan + Double(p.x) * overlay.scale.panPerX, overlay.tilt + Double(p.y) * overlay.scale.tiltPerY)
+    }
+
+    /// The point of the picture (view units) showing pan and tilt, with a measured view.
+    private func picturePoint(pan: Double, tilt: Double) -> CGPoint? {
+        guard let overlay, overlay.scale.panPerX != 0, overlay.scale.tiltPerY != 0 else { return nil }
+        return CGPoint(x: (pan - overlay.pan) / overlay.scale.panPerX, y: (tilt - overlay.tilt) / overlay.scale.tiltPerY)
+    }
+
+    /// A value with as many decimals as a step of `step` needs.
+    private static func label(_ value: Double, step: Double) -> String {
+        let decimals = max(0, min(4, Int((-log10(max(abs(step), 1e-9))).rounded(.up)) + 1))
+        return String(format: "%.\(decimals)f", value)
+    }
+
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
         tracking = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow],
@@ -137,9 +167,13 @@ final class PositionPlaneView: NSView, Themed {
 
     private func aim(_ event: NSEvent, commit: Bool) {
         let p = convert(event.locationInWindow, from: nil)
-        guard enabled, picture != nil, viewMoves, pictureRect.contains(p) else { return }
+        guard enabled, picture != nil, canAim, !measuring, pictureRect.contains(p) else { return }
         let point = picturePoint(p)
-        commit ? onPictureAimAndMove?(point) : onPictureAim?(point)
+        if let (pan, tilt) = coordinates(inPicture: point) {
+            commit ? onAimAndMove?(pan, tilt) : onAim?(pan, tilt)
+        } else {
+            commit ? onPictureAimAndMove?(point) : onPictureAim?(point)
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) { drawPicture() }
@@ -200,8 +234,47 @@ final class PositionPlaneView: NSView, Themed {
         axes.lineWidth = 0.75
         axes.stroke()
 
-        // Where the camera points: the picture's centre.
-        let c = CGPoint(x: r.midX, y: r.midY)
+        // Pan and tilt over the picture, once its view is measured: pan along the top edge and tilt along the right
+        // one (the centre values named), and the
+        // starting position as a square marked S.
+        if let overlay {
+            let labelFont = Fonts.mono(9, .medium)
+            for i in stride(from: -4, through: 4, by: 2) {
+                let f = CGFloat(i) / 5
+                let pan = Self.label(overlay.pan + Double(f) * overlay.scale.panPerX, step: abs(overlay.scale.panPerX) * 0.4)
+                let tilt = Self.label(overlay.tilt + Double(f) * overlay.scale.tiltPerY,
+                                      step: abs(overlay.scale.tiltPerY) * 0.4)
+                for (text, at) in [(i == 0 ? "PAN " + pan : pan, CGPoint(x: r.midX + f * r.width / 2, y: r.maxY - 3)),
+                                   (i == 0 ? "TILT " + tilt : tilt, CGPoint(x: r.maxX - 3, y: r.midY + f * r.height / 2))] {
+                    let s = NSAttributedString(string: text, attributes: [.font: labelFont, .foregroundColor: NSColor.white])
+                    let size = s.size()
+                    let box = at.x == r.maxX - 3
+                        ? CGRect(x: at.x - size.width - 6, y: at.y - size.height / 2 - 1, width: size.width + 6, height: size.height + 2)
+                        : CGRect(x: at.x - size.width / 2 - 3, y: at.y - size.height - 2, width: size.width + 6, height: size.height + 2)
+                    NSColor.black.withAlphaComponent(0.5).setFill()
+                    NSBezierPath(roundedRect: box, xRadius: 2, yRadius: 2).fill()
+                    s.draw(at: CGPoint(x: box.minX + 3, y: box.minY + 1))
+                }
+            }
+            if let pan = starting?.pan?.value, let tilt = starting?.tilt?.value, let sp = picturePoint(pan: pan, tilt: tilt),
+               abs(sp.x) <= 1, abs(sp.y) <= 1 {
+                let p = viewPoint(inPicture: sp)
+                theme.start.setStroke()
+                let square = NSBezierPath(rect: CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10))
+                square.lineWidth = 1.5
+                square.stroke()
+                NSAttributedString(string: "S", attributes: [.font: Fonts.mono(9, .bold), .foregroundColor: theme.start])
+                    .draw(at: CGPoint(x: p.x + 7, y: p.y + 4))
+            }
+        }
+
+        // Where the camera points: the picture's centre, or with a measured view, its latest reading (it may have
+        // moved since the picture).
+        var c = CGPoint(x: r.midX, y: r.midY)
+        if let pan = current?.pan?.value, let tilt = current?.tilt?.value, let p = picturePoint(pan: pan, tilt: tilt),
+           abs(p.x) <= 1, abs(p.y) <= 1 {
+            c = viewPoint(inPicture: p)
+        }
         theme.primary.setStroke()
         let ring = NSBezierPath(ovalIn: CGRect(x: c.x - 10, y: c.y - 10, width: 20, height: 20))
         ring.lineWidth = 1.5
@@ -209,9 +282,16 @@ final class PositionPlaneView: NSView, Themed {
         theme.primary.setFill()
         NSBezierPath(ovalIn: CGRect(x: c.x - 3, y: c.y - 3, width: 6, height: 6)).fill()
 
-        // Target: dashed crosshair, with a line from the centre.
-        if let pictureTarget {
-            let p = viewPoint(inPicture: pictureTarget)
+        // Target: dashed crosshair, with a line from where the camera points. With a measured view it is the
+        // absolute target (an axis left blank keeps the current value).
+        var aimed = pictureTarget
+        if overlay != nil, target.pan != nil || target.tilt != nil,
+           let pan = target.pan ?? current?.pan?.value, let tilt = target.tilt ?? current?.tilt?.value,
+           let p = picturePoint(pan: pan, tilt: tilt), abs(p.x) <= 1, abs(p.y) <= 1 {
+            aimed = p
+        }
+        if let aimed {
+            let p = viewPoint(inPicture: aimed)
             theme.target.setStroke()
             let path = NSBezierPath()
             path.move(to: CGPoint(x: p.x - 14, y: p.y)); path.line(to: CGPoint(x: p.x + 14, y: p.y))
@@ -229,16 +309,17 @@ final class PositionPlaneView: NSView, Themed {
         }
 
         // Status plates: when the picture was taken, or that it is out of date.
-        let status = pictureStale ? "MOVING · NEW PICTURE WHEN IT STOPS"
+        let status = measuring ? "MEASURING THE VIEW · THE CAMERA TURNS A LITTLE AND BACK"
+            : pictureStale ? "MOVING · NEW PICTURE WHEN IT STOPS"
             : pictureTaken.map { "PICTURE \(Self.time.string(from: $0))" } ?? "PICTURE"
-        plate(status, at: CGPoint(x: r.minX + 6, y: r.minY + 6), color: pictureStale ? theme.warning : .white)
-        if !viewMoves {
+        plate(status, at: CGPoint(x: r.minX + 6, y: r.minY + 6), color: pictureStale || measuring ? theme.warning : .white)
+        if !canAim {
             plate("THIS CAMERA CAN'T AIM FROM ITS PICTURE", at: CGPoint(x: r.maxX - 6, y: r.minY + 6),
                   color: theme.warning, alignRight: true)
         }
 
         // Hover: guides and the point in view units.
-        if let hover, viewMoves, r.contains(hover) {
+        if let hover, canAim, r.contains(hover) {
             let guide = NSBezierPath()
             guide.move(to: CGPoint(x: hover.x, y: r.minY)); guide.line(to: CGPoint(x: hover.x, y: r.maxY))
             guide.move(to: CGPoint(x: r.minX, y: hover.y)); guide.line(to: CGPoint(x: r.maxX, y: hover.y))
@@ -246,9 +327,14 @@ final class PositionPlaneView: NSView, Themed {
             guide.lineWidth = 0.5
             guide.stroke()
             let v = picturePoint(hover)
-            let text = String(format: "%@ %.2f  %@ %.2f", v.x < 0 ? "◀" : "▶", abs(v.x), v.y < 0 ? "▼" : "▲", abs(v.y))
+            var text = String(format: "%@ %.2f  %@ %.2f", v.x < 0 ? "◀" : "▶", abs(v.x), v.y < 0 ? "▼" : "▲", abs(v.y))
+            if let (pan, tilt) = coordinates(inPicture: v), let overlay {
+                text = "PAN \(Self.label(pan, step: abs(overlay.scale.panPerX) * 0.02))  "
+                    + "TILT \(Self.label(tilt, step: abs(overlay.scale.tiltPerY) * 0.02))"
+            }
+            let width = NSAttributedString(string: text, attributes: [.font: mono(10, .medium)]).size().width + 18
             var origin = CGPoint(x: hover.x + 10, y: hover.y + 8)
-            if origin.x + 110 > r.maxX { origin.x = hover.x - 120 }
+            if origin.x + width > r.maxX { origin.x = hover.x - width - 10 }
             if origin.y + 22 > r.maxY { origin.y = hover.y - 26 }
             plate(text, at: origin)
         }
