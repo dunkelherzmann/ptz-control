@@ -55,9 +55,11 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
     private var takingPicture = false
     /// When the camera last moved and a fresh picture is wanted once it stops.
     private var pictureDue: Date?
-    /// The live video: starting, or playing with its codec ("H.264").
+    /// The live video: starting, or playing with its codec ("H.264"). Each start gets a new generation, so news from
+    /// a stream that has since been stopped or restarted is ignored.
     private var liveStarting = false
     private var liveCodec: String?
+    private var liveGeneration = 0
     private var lastRead = Date.distantPast
     private var themedLabels: [(NSTextField, (PhosphorTheme) -> NSColor)] = []
 
@@ -383,6 +385,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             self.plane.pictureTarget = nil
             self.plane.live = nil
             self.liveCodec = nil
+            self.liveGeneration += 1
             self.pictureDue = nil
             self.connection.show(message: "Disconnected.", error: false)
             self.eventLog.append("Disconnected")
@@ -557,6 +560,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         if liveCodec != nil {
             // Restart the live view, as when its picture has stopped changing.
             liveCodec = nil
+            liveGeneration += 1
             plane.live = nil
             eventLog.append("Restarting the live view")
             link.stopLive()
@@ -572,11 +576,19 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
     private func startLive() {
         guard state == .connected, !liveStarting, liveCodec == nil else { return }
         liveStarting = true
-        link.startLive(picture: { [weak self] image in self?.showLiveFrame(image) },
-                       ended: { [weak self] reason in self?.liveEnded(reason) }) { [weak self] result in
+        liveGeneration += 1
+        let generation = liveGeneration
+        link.startLive(picture: { [weak self] image, codec in
+            guard self?.liveGeneration == generation else { return }
+            self?.showLiveFrame(image, codec: codec)
+        }, ended: { [weak self] reason in
+            guard self?.liveGeneration == generation else { return }
+            self?.liveEnded(reason)
+        }) { [weak self] result in
             guard let self else { return }
             self.liveStarting = false
-            guard self.state == .connected else { return }  // disconnecting stops it
+            // Disconnecting stops it; a stream that ended before this reply was already reported.
+            guard self.state == .connected, self.liveGeneration == generation else { return }
             switch result {
             case .success(let description):
                 self.liveCodec = description.components(separatedBy: " ").first ?? description
@@ -590,7 +602,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         updateControls()
     }
 
-    private func showLiveFrame(_ image: CGImage) {
+    private func showLiveFrame(_ image: CGImage, codec: String) {
         guard state == .connected, liveStarting || liveCodec != nil else { return }
         let size = NSSize(width: image.width, height: image.height)
         let reshaped = plane.picture?.size != size
@@ -598,13 +610,14 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         plane.picture = NSImage(cgImage: image, size: size)
         plane.pictureStale = false
         plane.pictureNote = nil
-        plane.live = "\(liveCodec ?? "VIDEO") · \(image.width) × \(image.height)"
+        plane.live = "\(codec) · \(image.width) × \(image.height)"
         if reshaped { fitWindowToPicture() }
     }
 
     private func liveEnded(_ reason: String) {
         guard state == .connected, liveCodec != nil || liveStarting else { return }
         liveCodec = nil
+        liveGeneration += 1  // a start still under way is reported here, not again by its reply
         plane.live = nil
         eventLog.append("Live view stopped: \(reason). Showing still pictures.", warning: true)
         link.stopLive()

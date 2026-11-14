@@ -12,7 +12,9 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #else
+#include <fcntl.h>
 #include <netdb.h>
+#include <sys/select.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
@@ -147,6 +149,7 @@ public:
             nals_.clear();  // a lost packet spoils the frame being built
             frame_bytes_ = 0;
             fragment_.clear();
+            in_fragment_ = false;
             broken_ = true;
         }
         have_sequence_ = true;
@@ -312,6 +315,39 @@ struct RtspStream::Impl {
         if (socket != kNoSocket) close_socket(socket);
     }
 
+    // A connect that gives up after the request timeout, not the system's own (over a minute on a filtered port).
+    bool connect_within(Socket s, const sockaddr *address, int length) {
+#if defined(_WIN32)
+        u_long nonblocking = 1;
+        ioctlsocket(s, FIONBIO, &nonblocking);
+        bool started = ::connect(s, address, length) == 0 || WSAGetLastError() == WSAEWOULDBLOCK;
+#else
+        int flags = fcntl(s, F_GETFL, 0);
+        fcntl(s, F_SETFL, flags | O_NONBLOCK);
+        bool started = ::connect(s, address, static_cast<socklen_t>(length)) == 0 || errno == EINPROGRESS;
+#endif
+        if (!started) return false;
+        fd_set writable, failed;
+        FD_ZERO(&writable);
+        FD_ZERO(&failed);
+        FD_SET(s, &writable);
+        FD_SET(s, &failed);
+        timeval wait{static_cast<long>(t.timeout), static_cast<int>((t.timeout - static_cast<long>(t.timeout)) * 1e6)};
+        if (select(static_cast<int>(s) + 1, nullptr, &writable, &failed, &wait) <= 0 || FD_ISSET(s, &failed))
+            return false;
+        int error = 0;
+        socklen_t size = sizeof error;
+        getsockopt(s, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&error), &size);
+        if (error != 0) return false;
+#if defined(_WIN32)
+        nonblocking = 0;
+        ioctlsocket(s, FIONBIO, &nonblocking);
+#else
+        fcntl(s, F_SETFL, flags);
+#endif
+        return true;
+    }
+
     void connect_socket() {
         if (!sockets_ready()) throw Error("Cannot start Windows networking for the live view");
         addrinfo hints{};
@@ -323,7 +359,7 @@ struct RtspStream::Impl {
         for (addrinfo *a = found; a; a = a->ai_next) {
             Socket s = ::socket(a->ai_family, a->ai_socktype, a->ai_protocol);
             if (s == kNoSocket) continue;
-            if (::connect(s, a->ai_addr, static_cast<int>(a->ai_addrlen)) == 0) {
+            if (connect_within(s, a->ai_addr, static_cast<int>(a->ai_addrlen))) {
                 socket = s;
                 break;
             }
@@ -426,6 +462,31 @@ struct RtspStream::Impl {
         return response;
     }
 
+    // Whether a qop list ("auth,auth-int") offers plain auth.
+    static bool offers_auth(const std::string &qop) {
+        size_t start = 0;
+        while (start <= qop.size()) {
+            size_t comma = qop.find(',', start);
+            if (lower(trim(qop.substr(start, comma == std::string::npos ? std::string::npos : comma - start))) == "auth")
+                return true;
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+        return false;
+    }
+
+    // Takes a Digest challenge this client can answer: MD5 (the default), with qop auth or none.
+    bool take_challenge(const std::string &challenge) {
+        auto parameters = auth_parameters(challenge.substr(6));
+        std::string algorithm = lower(parameters["algorithm"]);
+        if (!algorithm.empty() && algorithm != "md5") return false;
+        std::string qop = parameters["qop"];
+        if (!qop.empty() && !offers_auth(qop)) return false;  // auth-int alone isn't supported
+        digest = parameters;
+        nonce_count = 0;
+        return true;
+    }
+
     std::string authorization(const std::string &method, const std::string &uri) {
         if (digest.empty()) return "";
         const std::string &realm = digest["realm"], &nonce = digest["nonce"];
@@ -433,8 +494,7 @@ struct RtspStream::Impl {
         std::string ha2 = md5_hex(method + ":" + uri);
         std::string header = "Authorization: Digest username=\"" + t.user + "\", realm=\"" + realm + "\", nonce=\"" +
                              nonce + "\", uri=\"" + uri + "\"";
-        std::string qop = lower(digest["qop"]);
-        if (qop.find("auth") != std::string::npos) {
+        if (offers_auth(digest["qop"])) {
             char nc[9];
             std::snprintf(nc, sizeof nc, "%08x", ++nonce_count);
             std::string raw = random_bytes(8), cnonce;
@@ -446,6 +506,7 @@ struct RtspStream::Impl {
             header += ", response=\"" + md5_hex(ha1 + ":" + nonce + ":" + ha2) + "\"";
         }
         if (digest.count("opaque")) header += ", opaque=\"" + digest["opaque"] + "\"";
+        if (!digest["algorithm"].empty()) header += ", algorithm=MD5";
         return header + "\r\n";
     }
 
@@ -465,9 +526,7 @@ struct RtspStream::Impl {
             bool found = false, basic = false;
             for (auto &challenge : response.headers["www-authenticate"]) {
                 std::string l = lower(challenge);
-                if (l.rfind("digest", 0) == 0) {
-                    digest = auth_parameters(challenge.substr(6));
-                    nonce_count = 0;
+                if (l.rfind("digest", 0) == 0 && take_challenge(challenge)) {
                     found = true;
                     break;
                 }
@@ -581,6 +640,20 @@ struct RtspStream::Impl {
 
     void open() {
         connect_socket();
+        try {
+            negotiate();
+        } catch (...) {
+            if (!session.empty()) {
+                try {
+                    send_all(request_text("TEARDOWN", base_uri.empty() ? t.uri : base_uri, ""));
+                } catch (...) {
+                }
+            }
+            throw;
+        }
+    }
+
+    void negotiate() {
         Response options = request("OPTIONS", t.uri);
         if (options.status == 401) throw Error(status_reason("OPTIONS", 401));
         Response describe = request("DESCRIBE", t.uri, "Accept: application/sdp\r\n");
@@ -614,7 +687,8 @@ struct RtspStream::Impl {
         auto last_data = Clock::now(), last_keepalive = Clock::now();
         double silence = std::max(10.0, t.timeout);
         while (!stop) {
-            bool got = available() > 0 || fill();
+            // Always read: what is buffered may end partway through a packet.
+            bool got = fill();
             auto now = Clock::now();
             if (std::chrono::duration<double>(now - last_keepalive).count() > session_timeout / 2) {
                 send_all(request_text(keepalive, t.uri, ""));
@@ -641,8 +715,17 @@ struct RtspStream::Impl {
                 } else if (available() >= 1) {
                     auto message = take_message();
                     if (!message) break;
-                    // A camera that doesn't know GET_PARAMETER is kept alive with OPTIONS.
+                    // A camera that doesn't know GET_PARAMETER is kept alive with OPTIONS; one whose sign-in has
+                    // expired gets the keep-alive again with its new challenge.
                     if (message->status == 405 || message->status == 501) keepalive = "OPTIONS";
+                    if (message->status == 401) {
+                        std::string old_nonce = digest["nonce"];
+                        for (auto &challenge : message->headers["www-authenticate"])
+                            if (lower(challenge).rfind("digest", 0) == 0 && take_challenge(challenge)) {
+                                if (digest["nonce"] != old_nonce) last_keepalive = Clock::time_point{};  // resend now
+                                break;
+                            }
+                    }
                 } else {
                     break;
                 }

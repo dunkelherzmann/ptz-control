@@ -420,11 +420,16 @@ class RtspHandler(socketserver.BaseRequestHandler):
                     payloads = packets(nals)
                     if key:  # parameter sets in-band too, as many cameras send them
                         payloads.insert(0, aggregate([CLIP_PARAMS[t] for t in sorted(CLIP_PARAMS)]))
+                    data = b""
                     for i, payload in enumerate(payloads):
                         marker = 0x80 if i == len(payloads) - 1 else 0
                         rtp = struct.pack(">BBHII", 0x80, marker | 96, sequence & 0xFFFF, timestamp, 0x1234) + payload
-                        self.send(struct.pack(">BBH", ord("$"), self.channel, len(rtp)) + rtp)
+                        data += struct.pack(">BBH", ord("$"), self.channel, len(rtp)) + rtp
                         sequence += 1
+                    # Sent in odd-sized pieces with pauses, so reads end partway through packets as on a real network.
+                    for at in range(0, len(data), 777):
+                        self.send(data[at:at + 777])
+                        time.sleep(0.002)
                     sent += 1
                     timestamp = (timestamp + 9000) & 0xFFFFFFFF
                     time.sleep(0.1)

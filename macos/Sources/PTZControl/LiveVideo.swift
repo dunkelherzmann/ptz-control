@@ -6,7 +6,7 @@ import VideoToolbox
 /// Decodes the camera's live video with VideoToolbox. Frames come from the core on the stream's own thread in
 /// Annex B form; the newest decoded picture is handed to the main thread, skipping any the screen can't keep up with.
 final class LiveDecoder: @unchecked Sendable {
-    private let onPicture: @MainActor (CGImage) -> Void
+    private let onPicture: @MainActor (CGImage, String) -> Void
     private let onFailure: @MainActor (String) -> Void
 
     private var codec: ptz_codec = PTZ_CODEC_H264
@@ -20,7 +20,7 @@ final class LiveDecoder: @unchecked Sendable {
     private var newest: CGImage?
     private var delivering = false
 
-    init(onPicture: @escaping @MainActor (CGImage) -> Void, onFailure: @escaping @MainActor (String) -> Void) {
+    init(onPicture: @escaping @MainActor (CGImage, String) -> Void, onFailure: @escaping @MainActor (String) -> Void) {
         self.onPicture = onPicture
         self.onFailure = onFailure
     }
@@ -74,7 +74,9 @@ final class LiveDecoder: @unchecked Sendable {
             VTCreateCGImageFromCVPixelBuffer(imageBuffer, options: nil, imageOut: &image)
             if let image { self.deliver(image) }
         }
-        if status != noErr {
+        if status == kVTInvalidSessionErr {
+            _ = makeSession()  // after sleep or a GPU change; the next key frame decodes again
+        } else if status != noErr {
             failures += 1
             if failures >= 30 { fail("The Mac can't decode the camera's video (VideoToolbox error \(status))") }
         } else {
@@ -148,7 +150,8 @@ final class LiveDecoder: @unchecked Sendable {
             self.newest = nil
             self.delivering = false
             self.lock.unlock()
-            if let image { MainActor.assumeIsolated { self.onPicture(image) } }
+            let codec = self.codec == PTZ_CODEC_H265 ? "H.265" : "H.264"
+            if let image { MainActor.assumeIsolated { self.onPicture(image, codec) } }
         }
     }
 
@@ -203,7 +206,7 @@ let liveEnded: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) 
 extension CameraLink {
     /// Starts the camera's live video. Pictures arrive on the main thread; `ended` is called when it stops by
     /// itself or can't be decoded. The completion gets a description such as "H.264 over RTSP".
-    func startLive(picture: @escaping @MainActor (CGImage) -> Void, ended: @escaping @MainActor (String) -> Void,
+    func startLive(picture: @escaping @MainActor (CGImage, String) -> Void, ended: @escaping @MainActor (String) -> Void,
                    completion: @escaping @MainActor (Result<String, LinkError>) -> Void) {
         let decoder = LiveDecoder(onPicture: picture, onFailure: ended)
         let live = LiveVideo(decoder: decoder, onEnded: ended)

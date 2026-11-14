@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <thread>
 
 struct ptz_session {
@@ -175,6 +176,7 @@ struct ptz_live {
     ptz_live_callbacks callbacks{};
     std::unique_ptr<ptz::RtspStream> stream;
     std::atomic<bool> stop{false};
+    std::mutex ending;  // ended() runs only while stop is unset, never after ptz_live_stop
     std::thread thread;
     std::string camera_password, ssh_password;  // for redacting the reason the stream ended
 
@@ -237,6 +239,7 @@ extern "C" ptz_live *ptz_live_start(ptz_session *session, const ptz_live_callbac
         } catch (...) {
             reason = "Unexpected error in the live view";
         }
+        std::lock_guard<std::mutex> lock(raw->ending);
         if (!raw->stop && raw->callbacks.ended)
             raw->callbacks.ended(raw->callbacks.context, reason.empty() ? "The live view ended" : reason.c_str());
     });
@@ -245,7 +248,10 @@ extern "C" ptz_live *ptz_live_start(ptz_session *session, const ptz_live_callbac
 
 extern "C" void ptz_live_stop(ptz_live *live) {
     if (!live) return;
-    live->stop = true;
+    {
+        std::lock_guard<std::mutex> lock(live->ending);
+        live->stop = true;
+    }
     if (live->thread.joinable()) live->thread.join();
     // TEARDOWN goes out after the reader has stopped, so the reply isn't read.
     live->stream->teardown();
