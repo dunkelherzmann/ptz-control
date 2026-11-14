@@ -937,6 +937,7 @@ private:
             plane_->state.picture_target.reset();
             plane_->state.live.clear();
             live_codec_.clear();
+            ++live_id_;
             picture_due_ = 0;
             show_message("Disconnected.", false);
             log_line("Disconnected");
@@ -1156,6 +1157,7 @@ private:
         if (!live_codec_.isEmpty()) {
             // Restart the live view, as when its picture has stopped changing.
             live_codec_.clear();
+            ++live_id_;
             plane_->state.live.clear();
             plane_->update();
             log_line("Restarting the live view");
@@ -1176,9 +1178,10 @@ private:
         link_live_start(
             link_, [this, id](QImage image) { if (id == live_id_) show_live_frame(image); },
             [this, id](QString reason) { if (id == live_id_) live_ended(reason); },
-            [this](LinkResult result, QString description) {
+            [this, id](LinkResult result, QString description) {
                 live_starting_ = false;
-                if (state_ != State::Connected) return;  // disconnecting stops it
+                // Disconnecting stops it; a stream that ended before this reply was already reported.
+                if (state_ != State::Connected || id != live_id_) return;
                 if (result.ok) {
                     live_codec_ = description.section(' ', 0, 0);
                     log_line("Live view: " + description);
@@ -1201,7 +1204,7 @@ private:
         s.picture = image;
         s.picture_stale = false;
         s.picture_note.clear();
-        s.live = (live_codec_.isEmpty() ? QString("VIDEO") : live_codec_) +
+        s.live = image.text("codec") +
                  QString(" · %1 × %2").arg(image.width()).arg(image.height());
         plane_->update();
         if (reshaped) fit_window_to_picture();
@@ -1210,6 +1213,7 @@ private:
     void live_ended(const QString &reason) {
         if (state_ != State::Connected || (live_codec_.isEmpty() && !live_starting_)) return;
         live_codec_.clear();
+        ++live_id_;  // a start still under way is reported here, not again by its reply
         plane_->state.live.clear();
         plane_->update();
         log_line("Live view stopped: " + reason + ". Showing still pictures.", true);

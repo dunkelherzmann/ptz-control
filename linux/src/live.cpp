@@ -158,6 +158,7 @@ private:
             const auto *pixels = static_cast<const uchar *>(GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
             // BGRx bytes are QImage's RGB32 on little-endian machines.
             QImage image = QImage(pixels, width, height, stride, QImage::Format_RGB32).copy();
+            image.setText("codec", codec_name_);  // the plate names the codec from the first frame on
             gst_video_frame_unmap(&frame);
             deliver(std::move(image));
         }
