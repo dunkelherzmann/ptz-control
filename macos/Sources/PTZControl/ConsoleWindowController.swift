@@ -52,11 +52,16 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
     private let footer = NSTextField(labelWithString: "")
     private var planePanel: PanelView!
     private let pictureButton = NSButton()
+    private let gridButton = NSButton()
+    /// View ▸ Show Grid: the range plane's grid, zero axes and limits over the picture. Remembered.
+    private(set) var showGrid = UserDefaults.standard.object(forKey: "ShowGrid") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(showGrid, forKey: "ShowGrid")
+            plane.showGrid = showGrid
+            gridButton.state = showGrid ? .on : .off
+        }
+    }
     private var takingPicture = false
-    /// The reading the current picture was taken at, and the last view measured (with the zoom it was measured at).
-    private var pictureAt: PositionSnapshot?
-    private var measured: (zoom: Double?, scale: ViewScale)?
-    var measuring: Bool { plane.measuring }
     /// When the camera last moved and a fresh picture is wanted once it stops.
     private var pictureDue: Date?
     /// The live video: starting, or playing with its codec ("H.264"). Each start gets a new generation, so news from
@@ -121,15 +126,10 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         header.setCustomSpacing(10, after: statusChip)
         titles.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        planePanel = PanelView(caption: "Camera picture // view — click to aim, double-click to move there", content: plane)
+        planePanel = PanelView(caption: "Camera picture // pan/tilt range — click to aim, double-click to move there", content: plane)
         plane.onAim = { [weak self] pan, tilt in self?.aim(pan: pan, tilt: tilt) }
         plane.onAimAndMove = { [weak self] pan, tilt in
             self?.aim(pan: pan, tilt: tilt)
-            self?.sendMove()
-        }
-        plane.onPictureAim = { [weak self] point in self?.aimInPicture(point) }
-        plane.onPictureAimAndMove = { [weak self] point in
-            self?.aimInPicture(point)
             self?.sendMove()
         }
         pictureButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh Picture")
@@ -141,7 +141,21 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         pictureButton.setAccessibilityLabel("Refresh Picture")
         pictureButton.target = self
         pictureButton.action = #selector(refreshPicture(_:))
-        planePanel.setAccessory(pictureButton)
+        gridButton.image = NSImage(systemSymbolName: "grid", accessibilityDescription: "Show Grid")
+        gridButton.setButtonType(.pushOnPushOff)
+        gridButton.bezelStyle = .accessoryBarAction
+        gridButton.isBordered = false
+        gridButton.showsBorderOnlyWhileMouseInside = true
+        gridButton.controlSize = .small
+        gridButton.toolTip = "Show Grid: show or hide the pan/tilt grid, zero axes and range limits over the picture (⌘')"
+        gridButton.setAccessibilityLabel("Show Grid")
+        gridButton.target = self
+        gridButton.action = #selector(toggleGrid(_:))
+        gridButton.state = showGrid ? .on : .off
+        plane.showGrid = showGrid
+        let accessories = NSStackView(views: [gridButton, pictureButton])
+        accessories.spacing = 2
+        planePanel.setAccessory(accessories)
 
         for (meter, field) in [(panMeter, targetPan), (tiltMeter, targetTilt), (zoomMeter, targetZoom)] {
             meter.onAim = { [weak self] value in
@@ -318,13 +332,11 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
                 self.current = nil
                 self.failures = 0
                 self.paused = false
-                self.plane.canAim = info.viewMoves || (info.pan != nil && info.tilt != nil)
-                self.plane.overlay = nil
-                self.measured = nil
-                self.pictureAt = nil
+                self.plane.panRange = info.pan
+                self.plane.tiltRange = info.tilt
+                self.plane.resetTrail()
                 self.plane.picture = nil
                 self.plane.pictureNote = nil
-                self.plane.pictureTarget = nil
                 self.pictureDue = nil
                 self.takePicture()
                 self.startLive()
@@ -394,12 +406,11 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             self.current = nil
             self.starting = nil
             self.plane.picture = nil
-            self.plane.pictureTarget = nil
+            self.plane.panRange = nil
+            self.plane.tiltRange = nil
             self.plane.live = nil
             self.liveCodec = nil
             self.liveGeneration += 1
-            self.plane.overlay = nil
-            self.plane.measuring = false
             self.pictureDue = nil
             self.connection.show(message: "Disconnected.", error: false)
             self.eventLog.append("Disconnected")
@@ -425,9 +436,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             let stopped = lastRead > due.addingTimeInterval(0.8) && current?.moveStatus != nil && current?.moveStatus != "MOVING"
             if stopped || (age >= 3 && (current?.moveStatus == nil || paused)) || age >= 30 {
                 pictureDue = nil
-                if plane.live != nil {
-                    plane.pictureTarget = nil  // the live view has shown the move; the aimed point is reached
-                } else {
+                if plane.live == nil {
                     takePicture()
                     return
                 }
@@ -468,7 +477,6 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
                 }
                 if snapshot != self.current, self.current != nil { self.eventLog.append("Current coordinates: \(Self.describe(snapshot))") }
                 self.current = snapshot
-                self.updateOverlay()
             case .failure(let error):
                 if error.linkLost { self.linkLost(error.message); return }
                 self.failures += 1
@@ -515,10 +523,6 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
 
     private func sendMove() {
         guard state == .connected else { return }
-        if let point = plane.pictureTarget {
-            if info?.viewMoves == true { sendPictureMove(point) } else { measureThenMove(point) }
-            return
-        }
         do {
             let target = try parseTarget()
             if target.isEmpty { eventLog.append("All axes unchanged; no move sent."); return }
@@ -587,6 +591,8 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         startLive()
     }
 
+    @objc func toggleGrid(_ sender: Any?) { showGrid.toggle() }
+
     // MARK: Live view
 
     private func startLive() {
@@ -629,7 +635,6 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         plane.pictureNote = nil
         plane.live = "\(codec) · \(image.width) × \(image.height)"
         if reshaped { fitWindowToPicture() }
-        if first { updateOverlay() }
     }
 
     private func liveEnded(_ reason: String) {
@@ -654,15 +659,12 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             case .success(let image):
                 if self.plane.live != nil { break }  // the live view is already showing
                 let reshaped = self.plane.picture?.size != image.size
-                if self.plane.pictureStale { self.plane.pictureTarget = nil }  // the camera has moved since
-                self.pictureAt = self.current
                 self.plane.picture = image
                 self.plane.pictureTaken = Date()
                 self.plane.pictureStale = false
                 self.plane.pictureNote = nil
                 if reshaped {
-                    self.eventLog.append("Camera picture: \(Int(image.size.width)) × \(Int(image.size.height))"
-                                         + (self.plane.canAim ? "" : "; this camera can't aim from its picture"))
+                    self.eventLog.append("Camera picture: \(Int(image.size.width)) × \(Int(image.size.height))")
                     self.fitWindowToPicture()
                 }
             case .failure(let error):
@@ -671,125 +673,22 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
                 self.plane.pictureNote = error.message
                 self.plane.pictureStale = false
             }
-            self.updateOverlay()
             self.updateControls()
-        }
-    }
-
-    /// Pan and tilt over the picture once its view is measured at the picture's zoom, and while the camera hasn't moved
-    /// since.
-    private func updateOverlay() {
-        // The live view shows where the camera points now.
-        if plane.live != nil { pictureAt = current }
-        // The first picture comes before the first reading; while the camera hasn't moved, that reading is the picture's.
-        if plane.picture != nil, !plane.pictureStale, pictureAt?.pan == nil || pictureAt?.tilt == nil { pictureAt = current }
-        guard plane.picture != nil, !plane.pictureStale, let at = pictureAt, let pan = at.pan?.value,
-              let tilt = at.tilt?.value else {
-            if plane.pictureStale || plane.picture == nil { plane.overlay = nil }
-            return
-        }
-        var scale = current?.zoom?.value == at.zoom?.value ? current?.viewScale : nil
-        if scale == nil, let measured, measured.zoom == at.zoom?.value { scale = measured.scale }
-        if let scale {
-            plane.overlay = (pan, tilt, scale)
-            plane.pictureTarget = nil  // aiming is in coordinates now
-        } else {
-            plane.overlay = nil
         }
     }
 
     private func aim(pan: Double, tilt: Double) {
         func clamp(_ v: Double, _ range: AxisRange?) -> Double { range.map { min(max(v, $0.min), $0.max) } ?? v }
-        plane.pictureTarget = nil
         targetPan.stringValue = format(clamp(pan, info?.pan))
         targetTilt.stringValue = format(clamp(tilt, info?.tilt))
         updateTargetMarkers()
     }
 
-    /// Camera ▸ Measure View: turns the camera a little on each axis and back, to learn how much of its range the
-    /// picture spans at this zoom; then pan and tilt show over the picture and clicks aim at coordinates.
-    @objc func measureViewAction(_ sender: Any?) { measureView(then: nil) }
-
-    var canMeasureView: Bool {
-        state == .connected && !measuring && info?.pan != nil && info?.tilt != nil
-    }
-
-    private func measureView(then: ((ViewScale) -> Void)?) {
-        guard canMeasureView else { return }
-        plane.measuring = true
-        let zoom = current?.zoom?.value
-        eventLog.append("Measuring the camera's view: it turns a little on each axis and back (a few seconds)…")
-        link.measureView { [weak self] result in
-            guard let self else { return }
-            self.plane.measuring = false
-            guard self.state == .connected else { return }
-            switch result {
-            case .success(let scale):
-                self.measured = (zoom, scale)
-                self.eventLog.append("View measured: the picture spans ±\(format(abs(scale.panPerX))) pan and ±"
-                                     + "\(format(abs(scale.tiltPerY))) tilt from its centre"
-                                     + (zoom.map { " at zoom \(format($0))" } ?? ""))
-                self.nextRefresh = .distantPast
-                self.updateOverlay()
-                then?(scale)
-            case .failure(let error):
-                if error.linkLost { self.linkLost(error.message); return }
-                self.eventLog.append("Measuring the view failed: \(error.message)", warning: true)
-            }
-            self.updateControls()
-        }
-        updateControls()
-    }
-
-    /// A camera that can't move within its view: measure the view, then aim at the point's coordinates.
-    private func measureThenMove(_ point: CGPoint) {
-        guard let pan = pictureAt?.pan?.value, let tilt = pictureAt?.tilt?.value else {
-            eventLog.append("This camera can't aim from its picture without pan and tilt readings; use the target fields.",
-                            warning: true)
-            return
-        }
-        measureView { [weak self] scale in
-            guard let self else { return }
-            self.aim(pan: pan + Double(point.x) * scale.panPerX, tilt: tilt + Double(point.y) * scale.tiltPerY)
-            self.sendMove()
-        }
-    }
-
-    private func aimInPicture(_ point: CGPoint) {
-        plane.pictureTarget = CGPoint(x: min(max(point.x, -1), 1), y: min(max(point.y, -1), 1))
-    }
-
-    private func sendPictureMove(_ point: CGPoint) {
-        guard info?.viewMoves == true else {
-            eventLog.append("This camera can't aim from its picture; use the target fields or the travel meters.", warning: true)
-            return
-        }
-        let describe = String(format: "%.2f %@, %.2f %@ of the picture", abs(point.x), point.x < 0 ? "left" : "right",
-                              abs(point.y), point.y < 0 ? "down" : "up")
-        link.moveInView(x: Double(point.x), y: Double(point.y)) { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success:
-                self.eventLog.append("Move toward the picture point accepted: \(describe) (movement may still be in progress)")
-                self.nextRefresh = .distantPast
-                self.cameraMoved()
-            case .failure(let error):
-                if error.linkLost { self.linkLost(error.message); return }
-                self.eventLog.append("Move toward the picture point failed: \(error.message)", warning: true)
-            }
-            self.updateControls()
-        }
-        updateControls()
-    }
-
     /// The picture is out of date once the camera moves; a new one is taken when it stops. The live view shows the
-    /// move itself, and the aimed point is cleared once the camera stops.
+    /// move itself.
     private func cameraMoved() {
-        guard plane.picture != nil else { return }
-        if plane.live == nil {
-            plane.pictureStale = true
-            plane.overlay = nil
-        }
+        guard plane.picture != nil, plane.live == nil else { return }
+        plane.pictureStale = true
         pictureDue = Date()
     }
 
@@ -1010,9 +909,10 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
 }
 
 extension ConsoleWindowController {
-    /// Test copy, PTZ_SNAPSHOT_PICTURE: aim at a point of the picture (a picture of that is saved to
+    /// Test copy, PTZ_SNAPSHOT_PICTURE: aim at pan 0.45, tilt 0.3 on the range plane (a picture of that is saved to
     /// PTZ_SNAPSHOT_AIM_PATH), move there, and save the window once the new picture has come; PTZ_SNAPSHOT_LIVE_PATH
-    /// gets the live view's plate ("H.264 · 320 × 180") or "no live view".
+    /// gets the live view's plate ("H.264 · 320 × 180") or "no live view". PTZ_SNAPSHOT_HIDE_GRID turns the grid off
+    /// with View ▸ Show Grid first.
     fileprivate func runPictureScript(to path: String, env: [String: String]) {
         connect()
         func save(_ file: String) {
@@ -1020,8 +920,9 @@ extension ConsoleWindowController {
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: file))
         }
+        if env["PTZ_SNAPSHOT_HIDE_GRID"] != nil { toggleGrid(nil) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            self.plane.onPictureAim?(CGPoint(x: 0.45, y: 0.3))
+            self.plane.onAim?(0.45, 0.3)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.4) {
             if let aimPath = env["PTZ_SNAPSHOT_AIM_PATH"] { save(aimPath) }
@@ -1030,8 +931,7 @@ extension ConsoleWindowController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.4) {
             if let movingPath = env["PTZ_SNAPSHOT_MOVING_PATH"] { save(movingPath) }
         }
-        // PTZ_SNAPSHOT_WAIT: seconds before the last picture (a camera whose view is measured first takes longer).
-        DispatchQueue.main.asyncAfter(deadline: .now() + (Double(env["PTZ_SNAPSHOT_WAIT"] ?? "") ?? 10)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
             save(path)
             if let livePath = env["PTZ_SNAPSHOT_LIVE_PATH"] {
                 try? (self.plane.live ?? "no live view").write(toFile: livePath, atomically: true, encoding: .utf8)
@@ -1058,7 +958,6 @@ extension ConsoleWindowController {
 
 extension ConsoleWindowController: NSTextFieldDelegate {
     func controlTextDidChange(_ obj: Notification) {
-        plane.pictureTarget = nil  // an absolute target takes over from a point of the picture
         updateTargetMarkers()
     }
 }

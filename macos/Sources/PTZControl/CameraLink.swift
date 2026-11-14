@@ -1,5 +1,4 @@
 import AppKit
-import ImageIO
 import PTZCore
 
 struct AxisRange: Equatable {
@@ -21,7 +20,6 @@ struct CameraInfo {
     let tilt: AxisRange?
     let zoom: AxisRange?
     let zoomInteger: Bool
-    let viewMoves: Bool  // a point of the picture can be brought to its centre
 }
 
 /// A measured value; `nil` readings mean unavailable, never zero.
@@ -30,20 +28,11 @@ struct Reading: Equatable {
     let text: String
 }
 
-/// How much of the pan/tilt range the picture spans: the turn that brings a point at the picture's right (top) edge
-/// to its centre. A point (x, y) of the picture, −1…1 with up positive, lies at pan + x·panPerX, tilt + y·tiltPerY.
-struct ViewScale: Equatable {
-    let panPerX: Double
-    let tiltPerY: Double
-}
-
 struct PositionSnapshot: Equatable {
     var pan: Reading?
     var tilt: Reading?
     var zoom: Reading?
     var moveStatus: String?
-    /// The view measured at this reading's zoom, when there is one.
-    var viewScale: ViewScale?
 
     var isEmpty: Bool { pan == nil && tilt == nil && zoom == nil }
 
@@ -199,7 +188,7 @@ final class CameraLink: @unchecked Sendable {
                 name: withUnsafeBytes(of: info.name) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) },
                 units: withUnsafeBytes(of: info.units) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) },
                 pan: range(info.pan), tilt: range(info.tilt), zoom: range(info.zoom),
-                zoomInteger: info.zoom_integer != 0, viewMoves: info.view_moves != 0))
+                zoomInteger: info.zoom_integer != 0))
         }, completion: completion)
     }
 
@@ -223,13 +212,9 @@ final class CameraLink: @unchecked Sendable {
                 let status = withUnsafeBytes(of: position.move_status) {
                     String(cString: $0.bindMemory(to: CChar.self).baseAddress!)
                 }
-                var scale = ptz_view_scale()
-                let known = ptz_view_scale_at(session, &position, &scale) != 0
                 return .success(PositionSnapshot(pan: reading(position.pan), tilt: reading(position.tilt),
                                                  zoom: reading(position.zoom),
-                                                 moveStatus: status.isEmpty ? nil : status,
-                                                 viewScale: known ? ViewScale(panPerX: scale.pan_per_x,
-                                                                              tiltPerY: scale.tilt_per_y) : nil))
+                                                 moveStatus: status.isEmpty ? nil : status))
             }
         }, completion: completion)
     }
@@ -275,48 +260,6 @@ final class CameraLink: @unchecked Sendable {
                 return .success(image)
             })
         })
-    }
-
-    /// Measures how much of the pan/tilt range the picture spans at the current zoom: the camera turns a little on
-    /// each axis and back. Takes several seconds.
-    func measureView(completion: @escaping @MainActor (Result<ViewScale, LinkError>) -> Void) {
-        run({
-            switch self.requireSession() {
-            case .failure(let e): return .failure(e)
-            case .success(let session):
-                // The core compares small grey pictures; decoding them is the host's part.
-                let grey: ptz_grey_fn = { _, data, size, out, width, height in
-                    guard let data, let out,
-                          let source = CGImageSourceCreateWithData(Data(bytes: data, count: size) as CFData, nil),
-                          let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
-                          let context = CGContext(data: out, width: Int(width), height: Int(height), bitsPerComponent: 8,
-                                                  bytesPerRow: Int(width), space: CGColorSpaceCreateDeviceGray(),
-                                                  bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return 0 }
-                    context.interpolationQuality = .medium
-                    context.draw(image, in: CGRect(x: 0, y: 0, width: Int(width), height: Int(height)))
-                    return 1
-                }
-                var scale = ptz_view_scale()
-                var error = [CChar](repeating: 0, count: 1024)
-                guard ptz_measure_view(session, grey, nil, &scale, &error, error.count) != 0 else {
-                    return self.failure(error, session: session)
-                }
-                return .success(ViewScale(panPerX: scale.pan_per_x, tiltPerY: scale.tilt_per_y))
-            }
-        }, completion: completion)
-    }
-
-    /// Brings the point (x, y) of the last picture to its centre; x and y run from −1 to 1, up positive.
-    func moveInView(x: Double, y: Double, completion: @escaping @MainActor (Result<Void, LinkError>) -> Void) {
-        run({
-            switch self.requireSession() {
-            case .failure(let e): return .failure(e)
-            case .success(let session):
-                var error = [CChar](repeating: 0, count: 1024)
-                return ptz_move_in_view(session, x, y, &error, error.count) != 0
-                    ? .success(()) : self.failure(error, session: session)
-            }
-        }, completion: completion)
     }
 
     func stop(completion: @escaping @MainActor (Result<Void, LinkError>) -> Void) {

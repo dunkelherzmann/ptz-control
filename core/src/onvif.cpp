@@ -14,7 +14,6 @@ constexpr const char *kMediaNs = "http://www.onvif.org/ver10/media/wsdl";
 constexpr const char *kPtzNs = "http://www.onvif.org/ver20/ptz/wsdl";
 constexpr const char *kSchemaNs = "http://www.onvif.org/ver10/schema";
 // ONVIF PTZ spec, Annex A.3.2: origin at the picture's centre, (1,1) at its upper right corner.
-constexpr const char *kFovSpace = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov";
 
 struct Space {
     std::string uri;
@@ -104,8 +103,6 @@ public:
         pan_tilt_ = choose_space(spaces_of(*spaces, "AbsolutePanTiltPositionSpace"), default_pan_tilt, "pan/tilt");
         pan_range = pan_tilt_.x;
         tilt_range = pan_tilt_.y;
-        for (const auto &space : spaces_of(*spaces, "RelativePanTiltTranslationSpace"))
-            if (space.uri == kFovSpace) fov_ = space;
         auto zooms = spaces_of(*spaces, "AbsoluteZoomPositionSpace");
         if (!zooms.empty()) {
             zoom_ = choose_space(zooms, default_zoom, "zoom");
@@ -213,20 +210,6 @@ public:
         std::string text = trim(uri->text);
         if (lower(text).rfind("rtsp://", 0) != 0) throw Error("Camera gave a video address that isn't RTSP");
         return text;
-    }
-
-    bool view_moves() const override { return fov_.has_value(); }
-
-    void move_in_view(double x, double y, int, int) override {
-        if (!fov_) throw Error("This camera can't aim from its picture: it doesn't offer ONVIF moves within the view");
-        auto clamp = [](double v, const Range &r) { return r.available ? std::min(std::max(v, r.min), r.max) : v; };
-        x = clamp(x, fov_->x);
-        y = clamp(y, fov_->y);
-        call(ptz_, kPtzNs, "http://www.onvif.org/ver20/ptz/wsdl/RelativeMove",
-             "<tptz:RelativeMove><tptz:ProfileToken>" + xml_escape(profile_token_) +
-                 "</tptz:ProfileToken><tptz:Translation><tt:PanTilt x=\"" + format_number(x) + "\" y=\"" +
-                 format_number(y) + "\" space=\"" + kFovSpace + "\"/></tptz:Translation></tptz:RelativeMove>",
-             "tptz");
     }
 
 private:
@@ -376,7 +359,6 @@ private:
     bool http_digest_ = false;
     Space pan_tilt_;
     std::optional<Space> zoom_;
-    std::optional<Space> fov_;
     std::string snapshot_uri_;
 };
 

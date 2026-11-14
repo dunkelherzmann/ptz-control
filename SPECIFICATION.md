@@ -24,9 +24,7 @@ the rest as a gap.
 ## 1. Core
 
 - **C1 One C interface.** `core/include/ptzcore.h` is the only thing the hosts call: connect, camera info, read
-  position, move, stop, take a picture, move toward a point of the picture, measure the picture's view, find the web
-  interface, check the link,
-  close. All calls block. Each host runs them on one
+  position, move, stop, take a picture, play the live video, find the web interface, check the link, close. All calls block. Each host runs them on one
   worker thread or serial queue per session, never on the UI thread, so camera requests never overlap.
 - **C2 Callbacks.** While connecting, the core can ask the host to log a line, to ask the operator for text (secret or
   not) and to ask a yes/no question. The host shows these as dialogs and the core thread waits for the answer.
@@ -122,11 +120,7 @@ the rest as a gap.
   Axis: "Axis native coordinates: pan/tilt in degrees; zoom is an integer, not optical magnification".
 
 - **V6 Pictures.** ONVIF: the media service's `GetSnapshotUri` for the chosen profile, fetched once per connection and
-  sent through the SSH tunnel when there is one; aiming in the picture is a `RelativeMove` in the field-of-view
-  translation space (`http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov`, origin at the picture's
-  centre, (1, 1) at its upper right corner), offered only when the camera advertises that space. Axis:
-  `/axis-cgi/jpg/image.cgi?camera=1`, and aiming is `ptz.cgi` `center=x,y` in the picture's pixels with its
-  `imagewidth` and `imageheight`. Pictures are JPEG or PNG, fetched with HTTP Digest like every other request; a
+  sent through the SSH tunnel when there is one. Axis: `/axis-cgi/jpg/image.cgi?camera=1`. Pictures are JPEG or PNG, fetched with HTTP Digest like every other request; a
   camera that asks for Basic sign-in is refused with "turn on Digest sign-in on the camera", since Basic would send
   the password unprotected.
 - **V7 Live video.** ONVIF: the media service's `GetStreamUri` (RTP unicast over RTSP) for the chosen profile. Axis:
@@ -143,15 +137,14 @@ the rest as a gap.
 - **I1 Header**: "No camera link", "Connecting to <address>…", or "<address> · <camera name>" with the units below it.
 - **I2 Status chip**: OFFLINE, LINKING, CLOSING, REQUEST (a request is running), READS PAUSED, POSITION OK or
   NO POSITION, with a green, orange or muted lamp.
-- **I3 Camera picture.** The plane, captioned "Camera picture // view — click to aim, double-click to move there",
-  shows the camera's live video, or a still picture of its view when there's no video, as large as fits and in the
-  picture's shape, with a view grid on top: tenths of the picture, stronger centre lines, and a solid reticle at the
-  centre, where the camera points. The window grows or shrinks in height to the picture's shape, keeping its top edge
-  and staying on the screen.
+- **I3 Camera picture.** The plane, captioned "Camera picture // pan/tilt range — click to aim, double-click to move
+  there", shows the camera's live video, or a still picture of its view when there's no video, as large as fits and in
+  the picture's shape, with the camera's whole pan/tilt range drawn on top (I4). The window grows or shrinks in height
+  to the picture's shape, keeping its top edge and staying on the screen.
   - **Live view.** On connecting, a still picture is taken, then the live video (V7) starts and replaces it once its
     first frame is decoded, logged as "Live view: H.264 over RTSP" and "Live view playing: 1920 × 1080". The plate in
     the corner reads "● LIVE · H.264 · 1920 × 1080". Only the newest frame is shown; frames the screen can't keep up
-    with are skipped. Moves show in the video, and an aimed point (I4) is cleared once the camera stops.
+    with are skipped. Moves show in the video.
   - **Still pictures** take over when the video can't start ("No live view: <reason>. Showing still pictures.", in
     red) or stops ("Live view stopped: <reason>. Showing still pictures."). The plate then reads "PICTURE <time
     taken>". A picture is taken after every move or stop once the camera stops (a reading taken after the move that
@@ -162,28 +155,18 @@ the rest as a gap.
     new picture of the camera's view now, or restart the live view (⇧⌘R)") restarts the live view while it plays
     ("Restarting the live view"); otherwise it takes a new picture and tries the live view again.
   - Disconnecting stops the video before the session closes.
-- **I4 Aim in the picture.** Pointing at the picture shows guide lines and the point in view units (◀/▶ and ▲/▼,
-  0 at the centre, 1 at the edges). Click to aim: a dashed crosshair and ring with a dotted line from the centre.
-  Double-click (or Move, ⌘↩) turns the camera so that point comes to the centre, logged as "Move toward the picture
-  point accepted: 0.45 right, 0.30 up of the picture (movement may still be in progress)". Typing in a target field
-  drops the point, and an absolute target takes over. A camera that can't move within its view by itself (see V6) has
-  its view measured first (I12), then gets an absolute move to the point's pan and tilt. A camera without pan and tilt
-  ranges shows "THIS CAMERA CAN'T AIM FROM ITS PICTURE" in the corner and ignores clicks.
-- **I12 Measure View** (Camera ▸ Measure View, ⇧⌘M; enabled when connected to a camera with pan and tilt ranges)
-  learns how much of the pan/tilt range the picture spans at the current zoom: the camera turns about 1% of its range
-  on one axis, the app compares the pictures before and after to find how far the scene moved, then turns by a larger
-  amount that should move the scene about 0.4 of the half picture and matches it near where that lands (so a repeating
-  scene can't match a whole period away), then returns; the same for the other axis. It takes several seconds, the
-  plate reads "MEASURING THE VIEW · THE CAMERA TURNS A LITTLE AND BACK" and clicks are ignored meanwhile. The log reads
-  "Measuring the camera's view: it turns a little on each axis and back (a few seconds)…", then "View measured: the
-  picture spans ±0.251 pan and ±0.1421 tilt from its centre at zoom 0" or "Measuring the view failed: <reason>" in
-  red. The result is kept per zoom for the connection; at another zoom the view is unmeasured again.
-- **I13 Coordinates over the picture.** While the picture's view is measured and the camera hasn't moved since it was
-  taken, pan values label the top edge and tilt values the right edge at every other grid line (the centre ones named
-  "PAN …" and "TILT …", with as many decimals as the step needs), the starting position shows as a square marked
-  **S**, the reticle follows the latest reading, the absolute target (from the target fields, a blank axis keeping its
-  current value) shows as the dashed crosshair, and the hover readout gives PAN and TILT. A click then fills the pan and
-  tilt target fields (within the ranges) and a double-click also moves there.
+- **I4 Range plane over the picture.** The advertised pan range spans the picture from left to right and the tilt
+  range from bottom to top, in camera units. On it: a 10 × 10 grid, the zero axes when zero is in range, and the
+  limits on plates ("PAN −1" and "1" along the top edge, "TILT 1" and "−1" down the right one); the last 120 measured
+  positions as a trail (gaps stay gaps); the starting position as a square marked **S**; the target (from the target
+  fields, a blank axis keeping its current value) as a dashed crosshair and ring, with a dotted line from the current
+  position; and the current measured position as a solid reticle. The markers have a dark halo, so they read on any
+  picture. Pointing shows guide lines and "PAN … TILT …" under the pointer. Click or drag to aim (fills the pan and
+  tilt targets, within the ranges); double-click (or Move, ⌘↩) to aim and move. Without ranges a plate reads
+  "PAN/TILT RANGE UNAVAILABLE" and clicks are ignored; with no measured position, "POSITION UNAVAILABLE".
+- **I12 Show Grid** (View ▸ Show Grid, ⌘', and the grid button left of ⟳ in the plane's caption, hover text "Show Grid:
+  show or hide the pan/tilt grid, zero axes and range limits over the picture (⌘')") shows or hides the grid, the zero
+  axes and the limit plates; the markers always show. On by default, ticked in the menu while on, and remembered.
 - **I5 Axis travel meters** for pan, tilt and zoom: the bar's fill is the position as a percentage of the advertised
   limits. A missing reading is hatched and reads "N/A", never an empty bar. Ticks mark the start and the target, a
   small handle marks the target, and the limits are printed at both ends.
@@ -245,13 +228,13 @@ the rest as a gap.
   Manage Logins' top row, on every platform, holds every menu, each as a submenu, and opens right-aligned under the
   button: PTZ Control (About, Hide, Hide Others, Show All, Quit), Edit (Undo, Redo, Cut, Copy, Paste, Select All),
   Camera (Connect, Disconnect, Move to Target, Return to Starting Coordinates, Stop Motion, Refresh Position, Pause
-  Auto-Refresh, Refresh Picture, Measure View, Open Camera Web Interface, Manage Logins), View (Phosphor), Window (Minimize, Zoom, Close), Help
+  Auto-Refresh, Refresh Picture, Open Camera Web Interface, Manage Logins), View (Show Grid, Phosphor), Window (Minimize, Zoom, Close), Help
   (Coordinate Help). Camera commands are enabled only when they can act. Hover text: "Main Menu: every command of PTZ
   Control, with its shortcut"; VoiceOver reads "Main Menu". On the Mac the menu bar keeps only the app menu macOS
   always shows (About, Services, Hide, Hide Others, Show All, Quit), so on a wide screen no command needs a trip to the
   top of the screen. Every shortcut works from any window, Cut, Copy and Paste in text fields included.
-- **H2 Coordinate Help** (⌘?) explains absolute targets, the units per vendor, blank or `x`, aiming in the picture and
-  meters, starting coordinates, the 2 s refresh, Stop and the web interface.
+- **H2 Coordinate Help** (⌘?) explains absolute targets, the units per vendor, blank or `x`, the range plane over the
+  picture and aiming on it and on the meters, starting coordinates, the 2 s refresh, Stop and the web interface.
 - **H3 About** shows the name, the version, "PTZ Coordinates Controller", "ONVIF · Axis VAPIX · Local or SSH",
   "By dunkelherzmann" and a link to the project on GitHub.
 
@@ -350,8 +333,9 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
   and vault file, off screen and out of the Dock) against the mock camera twice: first it ticks Save login and checks
   the camera login reached the vault, then it starts from a wrong username, fills the fields from the saved login and
   checks that the camera moved. Then, against a mock camera without video, it checks the still pictures: one on
-  connecting, an aimed move, and a new picture once the camera stops. Last, it checks the live view plays the mock
-  camera's H.264 video and that aiming in it moves the camera. It saves pictures of the window, of Manage Logins, of
+  connecting, a move to the pan and tilt aimed at on the range plane, and a new picture once the camera stops. Last, it
+  checks the live view plays the mock camera's H.264 video, that aiming on the plane over it moves the camera, and that
+  Show Grid turned off is remembered. It saves pictures of the window, of Manage Logins, of
   the Edit form and of the live view. `linux/scripts/test.sh` does the same with the installed Flatpak (T5).
 - **T7 Windows test.** `windows\scripts\test.ps1` builds and runs `tests/vault-smoke.c` with MSVC, then runs
   `dist\PTZControl.exe` twice as the Mac test does, with its own registry key (`PTZ_SETTINGS_KEY`) and vault file,
