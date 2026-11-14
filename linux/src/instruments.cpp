@@ -57,6 +57,23 @@ QRectF PlaneView::picture_rect() const {
     return QRectF(std::round(area.center().x() - w / 2), std::round(area.center().y() - h / 2), w, h);
 }
 
+QPointF PlaneView::widget_point(QPointF v) const {
+    QRectF r = picture_rect();
+    return QPointF(r.x() + (v.x() + 1) / 2 * r.width(), r.y() + (1 - v.y()) / 2 * r.height());
+}
+
+std::optional<QPointF> PlaneView::view_point(double pan, double tilt) const {
+    const auto &o = state.overlay;
+    if (!o || o->scale.pan_per_x == 0 || o->scale.tilt_per_y == 0) return std::nullopt;
+    return QPointF((pan - o->pan) / o->scale.pan_per_x, (tilt - o->tilt) / o->scale.tilt_per_y);
+}
+
+// A value with as many decimals as a step of `step` needs.
+static QString label_value(double value, double step) {
+    int decimals = std::clamp(static_cast<int>(std::ceil(-std::log10(std::max(std::abs(step), 1e-9)))) + 1, 0, 4);
+    return QString::number(value, 'f', decimals);
+}
+
 QPointF PlaneView::picture_point(QPointF at) const {
     QRectF r = picture_rect();
     return QPointF((at.x() - r.x()) / r.width() * 2 - 1, 1 - (at.y() - r.y()) / r.height() * 2);
@@ -126,7 +143,48 @@ void PlaneView::paintEvent(QPaintEvent *) {
     p.drawLine(QPointF(c.x(), r.y()), QPointF(c.x(), r.bottom()));
     p.drawLine(QPointF(r.x(), c.y()), QPointF(r.right(), c.y()));
 
-    // Where the camera points: the picture's centre.
+    // Pan and tilt over the picture, once its view is measured: pan along the top edge and tilt along the right one
+    // (the centre values named), and the starting position as a square marked S.
+    auto inside = [](const std::optional<QPointF> &v) { return v && std::abs(v->x()) <= 1 && std::abs(v->y()) <= 1; };
+    if (const auto &o = s.overlay) {
+        QFont font = mono_font(9, true);
+        QFontMetricsF m(font);
+        for (int i = -4; i <= 4; i += 2) {
+            double f = i / 5.0;
+            QString pan = label_value(o->pan + f * o->scale.pan_per_x, std::abs(o->scale.pan_per_x) * 0.4);
+            QString tilt = label_value(o->tilt + f * o->scale.tilt_per_y, std::abs(o->scale.tilt_per_y) * 0.4);
+            if (i == 0) pan = "PAN " + pan, tilt = "TILT " + tilt;
+            for (int which = 0; which < 2; ++which) {
+                const QString &text = which ? tilt : pan;
+                double w = m.horizontalAdvance(text) + 6, h = m.height() + 2;
+                QRectF box = which ? QRectF(r.right() - 3 - w, c.y() - f * r.height() / 2 - h / 2, w, h)
+                                   : QRectF(c.x() + f * r.width() / 2 - w / 2, r.y() + 3, w, h);
+                p.setPen(Qt::NoPen);
+                p.setBrush(QColor(0, 0, 0, 128));
+                p.drawRoundedRect(box, 2, 2);
+                p.setBrush(Qt::NoBrush);
+                p.setFont(font);
+                p.setPen(white);
+                p.drawText(QPointF(box.x() + 3, box.y() + 1 + m.ascent()), text);
+            }
+        }
+        if (s.starting && s.starting->pan && s.starting->tilt) {
+            auto v = view_point(s.starting->pan->value, s.starting->tilt->value);
+            if (inside(v)) {
+                QPointF sp = widget_point(*v);
+                p.setPen(pen(g_theme.start, 1.5));
+                p.drawRect(QRectF(sp.x() - 5, sp.y() - 5, 10, 10));
+                draw_text(p, "S", sp.x() + 7, sp.y() - 16, 9, g_theme.start, true);
+            }
+        }
+    }
+
+    // Where the camera points: the picture's centre, or with a measured view, its latest reading (it may have moved
+    // since the picture).
+    if (s.current && s.current->pan && s.current->tilt) {
+        auto v = view_point(s.current->pan->value, s.current->tilt->value);
+        if (inside(v)) c = widget_point(*v);
+    }
     p.setPen(pen(g_theme.primary, 1.5));
     p.drawEllipse(c, 10, 10);
     p.setPen(Qt::NoPen);
@@ -134,9 +192,20 @@ void PlaneView::paintEvent(QPaintEvent *) {
     p.drawEllipse(c, 3, 3);
     p.setBrush(Qt::NoBrush);
 
-    // Target: dashed crosshair, with a line from the centre.
-    if (s.picture_target) {
-        QPointF t(r.x() + (s.picture_target->x() + 1) / 2 * r.width(), r.y() + (1 - s.picture_target->y()) / 2 * r.height());
+    // Target: dashed crosshair, with a line from where the camera points. With a measured view it is the absolute
+    // target (an axis left blank keeps the current value).
+    std::optional<QPointF> aimed = s.picture_target;
+    if (s.overlay && (s.target_pan || s.target_tilt)) {
+        std::optional<double> pan = s.target_pan, tilt = s.target_tilt;
+        if (!pan && s.current && s.current->pan) pan = s.current->pan->value;
+        if (!tilt && s.current && s.current->tilt) tilt = s.current->tilt->value;
+        if (pan && tilt) {
+            auto v = view_point(*pan, *tilt);
+            if (inside(v)) aimed = v;
+        }
+    }
+    if (aimed) {
+        QPointF t = widget_point(*aimed);
         QPen dashed = pen(g_theme.target, 1.5);
         dashed.setDashPattern({4 / 1.5, 2 / 1.5});
         p.setPen(dashed);
@@ -150,15 +219,16 @@ void PlaneView::paintEvent(QPaintEvent *) {
     }
 
     // Status plates: when the picture was taken, or that it is out of date.
-    QString status = s.picture_stale ? "MOVING · NEW PICTURE WHEN IT STOPS"
+    QString status = s.measuring ? "MEASURING THE VIEW · THE CAMERA TURNS A LITTLE AND BACK"
+                     : s.picture_stale ? "MOVING · NEW PICTURE WHEN IT STOPS"
                      : s.picture_taken.isValid() ? "PICTURE " + s.picture_taken.toString("HH:mm:ss") : QString("PICTURE");
     double plate_h = QFontMetricsF(mono_font(10, true)).height() + 4;
-    plate(status, QPointF(r.x() + 6, r.bottom() - 6 - plate_h), s.picture_stale ? g_theme.warning : white);
-    if (!s.view_moves)
+    plate(status, QPointF(r.x() + 6, r.bottom() - 6 - plate_h), s.picture_stale || s.measuring ? g_theme.warning : white);
+    if (!s.can_aim)
         plate("THIS CAMERA CAN'T AIM FROM ITS PICTURE", QPointF(r.right() - 6, r.bottom() - 6 - plate_h), g_theme.warning, true);
 
     // Hover: guides and the point in view units.
-    if (hover_ && s.view_moves && r.contains(*hover_)) {
+    if (hover_ && s.can_aim && r.contains(*hover_)) {
         QPointF h = *hover_;
         p.setPen(pen(alpha(white, 89), 0.5));
         p.drawLine(QPointF(h.x(), r.y()), QPointF(h.x(), r.bottom()));
@@ -166,16 +236,29 @@ void PlaneView::paintEvent(QPaintEvent *) {
         QPointF v = picture_point(h);
         QString text = QString::asprintf("%s %.2f  %s %.2f", v.x() < 0 ? "◀" : "▶", std::abs(v.x()), v.y() < 0 ? "▼" : "▲",
                                          std::abs(v.y()));
+        if (const auto &o = s.overlay)
+            text = "PAN " + label_value(o->pan + v.x() * o->scale.pan_per_x, std::abs(o->scale.pan_per_x) * 0.02) + "  TILT " +
+                   label_value(o->tilt + v.y() * o->scale.tilt_per_y, std::abs(o->scale.tilt_per_y) * 0.02);
+        double width = QFontMetricsF(mono_font(10, true)).horizontalAdvance(text) + 18;
         QPointF at(h.x() + 10, h.y() - 8 - plate_h);
-        if (at.x() + 110 > r.right()) at.setX(h.x() - 120);
+        if (at.x() + width > r.right()) at.setX(h.x() - width - 10);
         if (at.y() < r.y()) at.setY(h.y() + 8);
         plate(text, at, white);
     }
 }
 
 void PlaneView::aim(QPointF at, bool commit) {
-    if (!state.enabled || state.picture.isNull() || !state.view_moves || !picture_rect().contains(at)) return;
+    if (!state.enabled || state.picture.isNull() || !state.can_aim || state.measuring || !picture_rect().contains(at)) return;
     QPointF point = picture_point(at);
+    if (const auto &o = state.overlay) {
+        double pan = o->pan + point.x() * o->scale.pan_per_x, tilt = o->tilt + point.y() * o->scale.tilt_per_y;
+        if (commit) {
+            if (state.on_aim_and_move) state.on_aim_and_move(pan, tilt);
+        } else if (state.on_aim) {
+            state.on_aim(pan, tilt);
+        }
+        return;
+    }
     if (commit) {
         if (state.on_picture_aim_and_move) state.on_picture_aim_and_move(point);
     } else if (state.on_picture_aim) {

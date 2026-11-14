@@ -66,11 +66,18 @@ struct Reading {
     std::wstring text;
 };
 
+// How much of the pan/tilt range the picture spans: the turn that brings a point at the picture's right (top) edge
+// to its centre. A point (x, y) of the picture, -1..1 with up positive, lies at pan + x * pan_per_x, tilt + y * tilt_per_y.
+struct ViewScale {
+    double pan_per_x = 0, tilt_per_y = 0;
+};
+
 struct Snapshot {
     std::optional<Reading> pan, tilt, zoom;
     std::wstring move_status;
+    std::optional<ViewScale> view_scale;  // the view measured at this reading's zoom
     bool empty() const { return !pan && !tilt && !zoom; }
-    bool operator==(const Snapshot &o) const;
+    bool operator==(const Snapshot &o) const;  // the readings only
 };
 
 struct CameraInfo {
@@ -111,6 +118,8 @@ void link_stop(CameraLink *link, std::function<void(LinkResult)> done);
 // A still picture of the camera's current view (JPEG or PNG bytes).
 void link_picture(CameraLink *link, std::function<void(LinkResult, std::string bytes)> done);
 // Brings the point (x, y) of the last picture to its centre; x and y run from -1 to 1, up positive.
+// Turns the camera a little on each axis and back to measure how much of its range the picture spans.
+void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done);
 void link_move_in_view(CameraLink *link, double x, double y, std::function<void(LinkResult)> done);
 void link_web_url(CameraLink *link, std::function<void(LinkResult, std::wstring url, std::wstring notice)> done);
 void link_disconnect(CameraLink *link, std::function<void()> done);
@@ -129,10 +138,21 @@ struct PlaneState {
     std::wstring picture_taken;  // HH:MM:SS
     bool picture_stale = false;  // the camera has moved since the picture was taken
     std::wstring picture_note;   // shown in place of a picture: why there is none
-    bool view_moves = false;
-    std::optional<std::pair<float, float>> picture_target;  // view units
+    bool can_aim = false;        // the camera moves within its view, or its view can be measured
+    // Where the picture points and how much of the range it spans, once its view is measured: pan and tilt are then
+    // drawn over the picture, and a click aims at absolute coordinates.
+    struct Overlay {
+        double pan, tilt;
+        ViewScale scale;
+    };
+    std::optional<Overlay> overlay;
+    bool measuring = false;      // the camera is turning a little and back to measure its view
+    std::optional<Snapshot> current, starting;
+    std::optional<double> target_pan, target_tilt;
+    std::optional<std::pair<float, float>> picture_target;  // without a measured view: the point aimed at, view units
     bool enabled = false;
     std::function<void(float, float)> on_picture_aim, on_picture_aim_and_move;
+    std::function<void(double, double)> on_aim, on_aim_and_move;
 };
 PlaneState &plane_state(HWND plane);
 bool plane_set_picture(HWND plane, const std::string &bytes);  // JPEG or PNG; false when it can't be read

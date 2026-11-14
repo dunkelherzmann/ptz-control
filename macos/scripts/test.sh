@@ -13,7 +13,7 @@ WORK="$(mktemp -d "$ROOT/.build/test-XXXXXX")"
 TEST_ID=com.herbertcisneros.PTZControl.test
 COPY="$WORK/PTZ Control Test.app"
 mkdir -p "$OUT"
-trap 'kill "$MOCK" 2>/dev/null || true; defaults delete "$TEST_ID" >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
+trap 'kill "$MOCK" "$MOCK2" 2>/dev/null || true; defaults delete "$TEST_ID" >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
 
 ditto "$APP" "$COPY"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $TEST_ID" "$COPY/Contents/Info.plist"
@@ -23,10 +23,14 @@ BIN="$COPY/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutabl
 PORT=18081
 python3 -u "$ROOT/tools/mock-camera.py" --port "$PORT" >"$WORK/mock.log" 2>&1 &
 MOCK=$!
+# A second camera without ONVIF's field-of-view moves: its view is measured from its pictures (run 4).
+PORT2=18084
+python3 -u "$ROOT/tools/mock-camera.py" --port "$PORT2" --no-fov >"$WORK/mock-no-fov.log" 2>&1 &
+MOCK2=$!
 sleep 1
 
-settings() {  # camera username
-    printf '{"route":0,"vendor":0,"cameraHost":"127.0.0.1","cameraPort":%s,"cameraUser":"%s","httpsPort":443,"profile":0,"timeout":15,"sshHost":"","sshUser":"","sshPort":22,"sshIdentity":""}' "$PORT" "$1" \
+settings() {  # camera username [port]
+    printf '{"route":0,"vendor":0,"cameraHost":"127.0.0.1","cameraPort":%s,"cameraUser":"%s","httpsPort":443,"profile":0,"timeout":15,"sshHost":"","sshUser":"","sshPort":22,"sshIdentity":""}' "${2:-$PORT}" "$1" \
         | xxd -p | tr -d '\n'
 }
 FAIL=0
@@ -79,9 +83,21 @@ check "run 3 moved toward the aimed point (right and up)" \
     "$(grep -E '^mock: onvif view move to pan=0\.[0-9]+ tilt=0\.[0-9]+' "$WORK/mock.log" >/dev/null && echo 0 || echo 1)"
 check "camera-picture pictures saved" "$([ -s "$OUT/macos-picture.png" ] && [ -s "$OUT/macos-picture-aim.png" ] && echo 0 || echo 1)"
 
+# Run 4: a camera that can't move within its view. Moving toward the same point first measures its view (it turns a
+# little on each axis and back), then sends an absolute move to the point's coordinates: 0.45 × 0.25 pan and
+# 0.3 × 0.140625 tilt from where the mock starts.
+defaults write "$TEST_ID" ConnectionSettings -data "$(settings admin "$PORT2")"
+rm -f "$OUT/macos-measured.png"
+PTZ_VAULT_PATH="$VAULT" PTZ_PASSWORD=secret PTZ_SNAPSHOT_PICTURE=1 PTZ_SNAPSHOT_PATH="$OUT/macos-measured.png" \
+    PTZ_SNAPSHOT_WAIT=40 "$BIN" >"$WORK/app4.log" 2>&1 || true
+LAST="$(grep '^mock: onvif absolute move to' "$WORK/mock-no-fov.log" | tail -1)"
+check "run 4 measured the view and moved to the point's coordinates ($LAST)" "$(printf '%s\n' "$LAST" | awk -F'[= ]' \
+    '{ d1 = $7 - 0.1125; d2 = $9 - 0.0422; exit !(d1 < 0.02 && d1 > -0.02 && d2 < 0.012 && d2 > -0.012) }' && echo 0 || echo 1)"
+check "measured-view picture saved" "$([ -s "$OUT/macos-measured.png" ] && echo 0 || echo 1)"
+
 if [ "$FAIL" = 0 ]; then
     printf 'PASS PTZ Control %s (test copy): pictures in %s\n' "$(defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString)" "$OUT"
 else
-    cat "$WORK/app1.log" "$WORK/app2.log" "$WORK/app3.log" "$WORK/mock.log"
+    cat "$WORK/app1.log" "$WORK/app2.log" "$WORK/app3.log" "$WORK/app4.log" "$WORK/mock.log" "$WORK/mock-no-fov.log"
     exit 1
 fi

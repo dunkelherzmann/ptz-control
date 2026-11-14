@@ -46,17 +46,22 @@ $KeyName = 'Software\PTZControl.Test'
 $mockLog = Join-Path $Work 'mock.log'
 $mock = Start-Process python -ArgumentList @('-u', "`"$Root\tools\mock-camera.py`"", '--port', $Port) -PassThru `
     -WindowStyle Hidden -RedirectStandardOutput $mockLog -RedirectStandardError (Join-Path $Work 'mock.err')
+# A second camera without ONVIF's field-of-view moves: its view is measured from its pictures (run 4).
+$Port2 = 18086
+$mockLog2 = Join-Path $Work 'mock-no-fov.log'
+$mock2 = Start-Process python -ArgumentList @('-u', "`"$Root\tools\mock-camera.py`"", '--port', $Port2, '--no-fov') -PassThru `
+    -WindowStyle Hidden -RedirectStandardOutput $mockLog2 -RedirectStandardError (Join-Path $Work 'mock-no-fov.err')
 Start-Sleep -Seconds 1
 $vault = Join-Path $Work 'logins.vault'
 [IO.File]::WriteAllText($vault, "PTZ Control logins 1`nplain`n")
 
-function Settings($user) {
+function Settings($user, $port = $Port) {
     $key = "HKCU:\$KeyName"
     New-Item -Path $key -Force | Out-Null
     Set-ItemProperty $key Route 0 -Type DWord
     Set-ItemProperty $key Vendor 0 -Type DWord
     Set-ItemProperty $key CameraHost '127.0.0.1'
-    Set-ItemProperty $key CameraPort $Port -Type DWord
+    Set-ItemProperty $key CameraPort $port -Type DWord
     Set-ItemProperty $key CameraUser $user
 }
 # A picture counts only when something was drawn: many colors, not one flat fill.
@@ -86,14 +91,14 @@ function RunApp($vars) {
     if ((Test-Path $Observer) -and -not $env:PTZ_NO_OBSERVE) {
         # Its verdict comes on stderr, which Windows PowerShell turns into errors that 'Stop' would throw.
         $ErrorActionPreference = 'Continue'
-        $verdict = @(& python $Observer run --out (Join-Path $Out 'observer') --name "run $script:Runs" --timeout 60 `
+        $verdict = @(& python $Observer run --out (Join-Path $Out 'observer') --name "run $script:Runs" --timeout 90 `
             --allow $Work --allow $Out --guard 'HKCU\Software\PTZControl' --guard "$env:APPDATA\PTZControl" -- $exe 2>&1 | ForEach-Object { "$_" })
         $problems = @($verdict | Where-Object { $_ -like 'observer: PROBLEM*' })
         Check "run $($script:Runs): no crash, hang or change to the real app's data (master-control)" ($problems.Count -eq 0)
         $problems | ForEach-Object { Write-Output "     $_" }
     } else {
         $p = Start-Process $exe -PassThru
-        if (-not $p.WaitForExit(60000)) { $p.Kill() }
+        if (-not $p.WaitForExit(90000)) { $p.Kill() }
     }
     foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
 }
@@ -137,8 +142,24 @@ try {
     Check 'run 3 moved toward the aimed point (right and up)' `
         (@(Select-String -Path $mockLog -Pattern '^mock: onvif view move to pan=0\.[0-9]+ tilt=0\.[0-9]+' -ErrorAction SilentlyContinue).Count -ge 1)
     Check 'camera-picture pictures drawn' ((Drawn $picture) -and (Drawn $aim))
+
+    # Run 4: a camera that can't move within its view. Moving toward the same point first measures its view (it turns
+    # a little on each axis and back), then sends an absolute move to the point's coordinates: 0.45 x 0.25 pan and
+    # 0.3 x 0.140625 tilt from where the mock starts.
+    Settings 'admin' $Port2
+    $measured = Join-Path $Out 'windows-measured.png'
+    Remove-Item $measured -ErrorAction SilentlyContinue
+    RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PICTURE = '1'; PTZ_SNAPSHOT_PATH = $measured; PTZ_SNAPSHOT_WAIT = '40'
+              PTZ_SNAPSHOT_AIM_PATH = $null; PTZ_SNAPSHOT_MOVING_PATH = $null }
+    $last = @(Select-String -Path $mockLog2 -Pattern '^mock: onvif absolute move to pan=(\S+) tilt=(\S+)' -ErrorAction SilentlyContinue) |
+        Select-Object -Last 1
+    $near = $last -and [Math]::Abs([double]$last.Matches[0].Groups[1].Value - 0.1125) -lt 0.02 -and
+        [Math]::Abs([double]$last.Matches[0].Groups[2].Value - 0.0422) -lt 0.012
+    Check "run 4 measured the view and moved to the point's coordinates ($($last.Line))" $near
+    Check 'measured-view picture drawn' (Drawn $measured)
 } finally {
     Stop-Process -Id $mock.Id -ErrorAction SilentlyContinue
+    Stop-Process -Id $mock2.Id -ErrorAction SilentlyContinue
     Remove-Item -Path "HKCU:\$KeyName" -Recurse -ErrorAction SilentlyContinue
 }
 

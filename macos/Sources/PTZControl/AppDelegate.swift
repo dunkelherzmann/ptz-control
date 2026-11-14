@@ -81,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         add(camera, "Refresh Position", #selector(refresh), "r")
         add(camera, "Pause Auto-Refresh", #selector(pause), "p")
         add(camera, "Refresh Picture", #selector(refreshPicture), "r", [.command, .shift])
+        add(camera, "Measure View", #selector(measureView), "m", [.command, .shift])
         camera.addItem(.separator())
         add(camera, "Open Camera Web Interface", #selector(web), "l")
         camera.addItem(.separator())
@@ -124,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             item.title = console.paused ? "Resume Auto-Refresh" : "Pause Auto-Refresh"
             return state == .connected
         case #selector(refreshPicture): return state == .connected
+        case #selector(measureView): return console.canMeasureView
         case #selector(chooseTheme(_:)):
             item.state = (item.representedObject as? String) == console.theme.rawValue ? .on : .off
             return true
@@ -139,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func refresh() { console.refreshNow(nil) }
     @objc private func pause() { console.togglePause(nil) }
     @objc private func refreshPicture() { console.refreshPicture(nil) }
+    @objc private func measureView() { console.measureViewAction(nil) }
     @objc private func web() { console.openWebInterface(nil) }
     @objc private func manageLogins() { ManageLoginsWindowController.shared.present() }
 
@@ -172,6 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         Leave a target field blank (or type x) to keep that axis unchanged.
         The camera picture shows what the camera sees: click a point to aim at it, double-click (or Move) to turn the camera so that point comes to the centre. A new picture comes once the camera stops, or with Refresh Picture (⇧⌘R).
+        Measure View (⇧⌘M) turns the camera a little on each axis and back to learn how much of its range the picture spans at this zoom; then pan and tilt show over the picture and a click fills the target fields. A camera that can't move within its view by itself is measured the first time you move toward a point of its picture.
         Drag along a travel meter to aim that axis alone, double-click it to aim and move.
 
         Starting coordinates are the first reading after connecting and stay fixed. Return to Start (⌘B) sends an absolute move there.
