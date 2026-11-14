@@ -48,7 +48,7 @@ PlaneView::PlaneView(QWidget *parent) : QWidget(parent) {
     setMinimumHeight(140);
 }
 
-// The picture's frame, which the range plane spans: as large as fits, in the picture's shape (16:9 until there is
+// The picture's frame: as large as fits, in the picture's shape (16:9 until there is
 // one), centred.
 QRectF PlaneView::plot_rect() const {
     QRectF area = QRectF(rect()).adjusted(1, 1, -1, -1);
@@ -58,16 +58,27 @@ QRectF PlaneView::plot_rect() const {
     return QRectF(std::round(area.center().x() - w / 2), std::round(area.center().y() - h / 2), w, h);
 }
 
+// Where the whole range lies: the picture's size, shifted so the current position is at the picture's centre (the
+// picture itself until there is a position).
+QRectF PlaneView::range_rect() const {
+    QRectF r = plot_rect();
+    const auto &c = state.current;
+    if (!c || !c->pan || !c->tilt) return r;
+    auto fx = state.pan.fraction(c->pan->value), fy = state.tilt.fraction(c->tilt->value);
+    if (!fx || !fy) return r;
+    return QRectF(r.center().x() - r.width() * *fx, r.center().y() + r.height() * *fy - r.height(), r.width(), r.height());
+}
+
 std::optional<QPointF> PlaneView::view_point(double pan, double tilt) const {
     auto fx = state.pan.fraction(pan), fy = state.tilt.fraction(tilt);
     if (!fx || !fy) return std::nullopt;
-    QRectF r = plot_rect();
+    QRectF r = range_rect();
     return QPointF(r.x() + r.width() * *fx, r.bottom() - r.height() * *fy);
 }
 
 std::optional<QPointF> PlaneView::camera_point(QPointF at) const {
     if (!state.pan.available || !state.tilt.available) return std::nullopt;
-    QRectF r = plot_rect();
+    QRectF r = range_rect();
     return QPointF(state.pan.value_at((at.x() - r.x()) / r.width()), state.tilt.value_at((r.bottom() - at.y()) / r.height()));
 }
 
@@ -146,23 +157,49 @@ void PlaneView::paintEvent(QPaintEvent *) {
         return;
     }
 
-    // The range plane's grid: tenths of the range, the zero axes when zero is in range, and the limits.
+    // Everything on the plane stays inside the picture.
+    p.save();
+    p.setClipRect(r);
+    const QRectF range = range_rect();
+
+    // Beyond the range's edges the camera can't point: shaded.
+    QPainterPath outside;
+    outside.setFillRule(Qt::OddEvenFill);
+    outside.addRect(r);
+    outside.addRect(range);
+    p.fillPath(outside, QColor(0, 0, 0, 102));
+
+    // The range plane's grid: tenths of the range, its edges, the zero axes when zero is in range, and the limits.
     if (s.show_grid) {
         p.setPen(pen(alpha(white, 46), 0.5));
         for (int i = 1; i <= 9; ++i) {
-            double x = r.x() + r.width() * i / 10, y = r.y() + r.height() * i / 10;
-            p.drawLine(QPointF(x, r.y()), QPointF(x, r.bottom()));
-            p.drawLine(QPointF(r.x(), y), QPointF(r.right(), y));
+            double x = range.x() + range.width() * i / 10, y = range.y() + range.height() * i / 10;
+            p.drawLine(QPointF(x, range.y()), QPointF(x, range.bottom()));
+            p.drawLine(QPointF(range.x(), y), QPointF(range.right(), y));
         }
         p.setPen(pen(alpha(white, 115), 1));
-        if (auto zero = view_point(0, s.tilt.min)) p.drawLine(QPointF(zero->x(), r.y()), QPointF(zero->x(), r.bottom()));
-        if (auto zero = view_point(s.pan.min, 0)) p.drawLine(QPointF(r.x(), zero->y()), QPointF(r.right(), zero->y()));
-        // Pan limits along the top edge, tilt limits down the right one.
-        double top = r.y() + 4;
-        plate("PAN " + format_value(s.pan.min), QPointF(r.x() + 4, top), white, false, 9);
-        plate(format_value(s.pan.max), QPointF(r.right() - 4, top), white, true, 9);
-        plate("TILT " + format_value(s.tilt.max), QPointF(r.right() - 4, top + 20), white, true, 9);
-        plate(format_value(s.tilt.min), QPointF(r.right() - 4, r.bottom() - 30 - plate_height(9)), white, true, 9);
+        if (auto zero = view_point(0, s.tilt.min)) p.drawLine(QPointF(zero->x(), range.y()), QPointF(zero->x(), range.bottom()));
+        if (auto zero = view_point(s.pan.min, 0)) p.drawLine(QPointF(range.x(), zero->y()), QPointF(range.right(), zero->y()));
+        p.setPen(pen(alpha(white, 153), 1));
+        p.drawRect(range.adjusted(0.5, 0.5, -0.5, -0.5));
+    }
+    p.restore();
+    if (s.show_grid) {
+        // The limits at the range's edges, where they show: pan along the top, tilt down the right side.
+        auto width = [](const QString &text) { return QFontMetricsF(mono_font(9, true)).horizontalAdvance(text) + 8; };
+        auto visible = [](double edge, double low, double high) { return edge >= low - 1 && edge <= high + 1; };
+        const double h = plate_height(9), top = r.y() + 4;
+        const QString low = "PAN " + format_value(s.pan.min), high = "PAN " + format_value(s.pan.max);
+        if (visible(range.left(), r.left(), r.right()))
+            plate(low, QPointF(std::min(range.left() + 4, r.right() - 4 - width(low)), top), white, false, 9);
+        if (visible(range.right(), r.left(), r.right()))
+            plate(high, QPointF(std::max(range.right() - 4 - width(high), r.left() + 4), top), white, false, 9);
+        if (visible(range.top(), r.top(), r.bottom()))
+            plate("TILT " + format_value(s.tilt.max),
+                  QPointF(r.right() - 4, std::min(std::max(range.top() + 4, r.top() + 24), r.bottom() - 26 - h)), white, true, 9);
+        if (visible(range.bottom(), r.top(), r.bottom()))
+            plate("TILT " + format_value(s.tilt.min),
+                  QPointF(r.right() - 4, std::max(std::min(range.bottom() - 4 - h, r.bottom() - 26 - h), r.top() + 24)), white, true, 9);
     }
 
     // A dark halo under each marker keeps it readable on any picture.
@@ -180,6 +217,8 @@ void PlaneView::paintEvent(QPaintEvent *) {
     };
 
     // Recent measured path; gaps stay gaps.
+    p.save();
+    p.setClipRect(r);
     QPainterPath trail;
     bool pen_down = false;
     for (const auto &sample : trail_) {
@@ -249,7 +288,9 @@ void PlaneView::paintEvent(QPaintEvent *) {
         dot.addEllipse(*current, 4.5, 4.5);
         p.strokePath(dot, QPen(QColor(0, 0, 0, 110), 2));
         p.fillPath(dot, g_theme.primary);
-    } else if (s.current) {
+    }
+    p.restore();
+    if (!current && s.current) {
         plate("POSITION UNAVAILABLE", QPointF(r.right() - 6, r.bottom() - 6 - plate_height()), g_theme.warning, true);
     }
 
@@ -274,7 +315,8 @@ void PlaneView::paintEvent(QPaintEvent *) {
 
 void PlaneView::aim(QPointF at, bool commit) {
     if (!state.enabled) return;
-    QRectF r = plot_rect();
+    QRectF r = plot_rect().intersected(range_rect());
+    if (r.isEmpty()) return;
     at = QPointF(std::clamp(at.x(), r.left(), r.right()), std::clamp(at.y(), r.top(), r.bottom()));
     auto camera = camera_point(at);
     if (!camera) return;
@@ -287,7 +329,7 @@ void PlaneView::aim(QPointF at, bool commit) {
 
 void PlaneView::mouseMoveEvent(QMouseEvent *e) {
     QPointF at = e->position();
-    hover_ = state.enabled && plot_rect().contains(at) ? std::optional<QPointF>(at) : std::nullopt;
+    hover_ = state.enabled && plot_rect().intersected(range_rect()).contains(at) ? std::optional<QPointF>(at) : std::nullopt;
     if (dragging_) aim(at, false);
     update();
 }
