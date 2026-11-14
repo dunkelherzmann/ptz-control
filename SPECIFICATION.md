@@ -158,7 +158,10 @@ the rest as a gap.
 - **I4 Range plane over the picture.** The camera's whole pan/tilt range, in camera units, is drawn the size of the
   picture (pan across, tilt up) and centred on where the camera points: the current position stays at the picture's
   centre, where its width and height meet, as a crosshair, and the plane moves under it as the camera moves, while
-  pan 0, tilt 0 stays a fixed point of the range. Beyond the range's edges the picture is shaded. On the plane: a
+  pan 0, tilt 0 stays a fixed point of the range. When a move is accepted the plane centres on its target at once (an
+  axis left unchanged keeps its reading), without waiting for the camera's readings, and the reticle, which shows the
+  readings, closes in on the centre as the camera turns; once the camera stops (as for a new picture, I3) or Stop is
+  accepted, the plane centres on the readings again, which corrects a move that stopped short. Beyond the range's edges the picture is shaded. On the plane: a
   10 × 10 grid, the range's edges, the zero axes when zero is in range, and the limits on plates at the edges where
   they show ("PAN −1" and "PAN 1" along the top, "TILT 1" and "TILT −1" down the right side); until there is a
   position the range spans the picture; the last 120 measured
