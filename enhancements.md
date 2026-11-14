@@ -54,10 +54,10 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [x] Mac (#5)
   - [x] Linux (#5)
   - [x] Windows (#5)
-- [ ] **Live view of the camera's video** (asked 2026-11-14, all platforms), if possible, in place of the still picture. Built as real video: the camera's H.264 or H.265 RTSP stream, played by the core and decoded with each system's own decoder, with still pictures when there's no video.
-  - [ ] Mac
-  - [ ] Linux
-  - [ ] Windows
+- [x] **Live view of the camera's video** (asked 2026-11-14, all platforms), if possible, in place of the still picture. Built as real video: the camera's H.264 or H.265 RTSP stream, played by the core and decoded with each system's own decoder, with still pictures when there's no video.
+  - [x] Mac (#7)
+  - [x] Linux (#7)
+  - [x] Windows (#7)
 - [x] **Aim from the picture on every camera, with the coordinates drawn over it** (asked 2026-11-14, all platforms). A camera without ONVIF's field-of-view move can't aim from its picture today; measure its field of view (turn it a known amount and compare the pictures) so a point of the picture becomes a pan/tilt target, and draw the pan/tilt grid, start, target and trail over the picture. Built as Camera ▸ Measure View, measured on its own the first time such a camera moves toward a point of its picture; pan and tilt label the picture's edges and the start, target and current position show on it. The trail of past positions is left out, since the picture itself shows where the camera has been looking.
   - [x] Mac (#6)
   - [x] Linux (#6)
