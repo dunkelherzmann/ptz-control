@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFontDatabase>
 #include <QGuiApplication>
+#include <QImage>
 #include <QPalette>
 #include <QProcess>
 #include <QSettings>
@@ -394,6 +395,7 @@ void link_connect(CameraLink *link, const Settings &s, const QString &camera_pas
             info.tilt = range(raw.tilt);
             info.zoom = range(raw.zoom);
             info.zoom_integer = raw.zoom_integer != 0;
+            info.view_moves = raw.view_moves != 0;
             result.ok = true;
         }
         return [done, result, info] { done(result, info); };
@@ -454,6 +456,44 @@ void link_stop(CameraLink *link, std::function<void(LinkResult)> done) {
         } else {
             char error[1024] = {};
             if (ptz_stop(link->session_, error, sizeof error)) result.ok = true;
+            else result = failure(link->session_, error);
+        }
+        return [done, result] { done(result); };
+    });
+}
+
+void link_picture(CameraLink *link, std::function<void(LinkResult, QImage)> done) {
+    link->run([=]() -> std::function<void()> {
+        LinkResult result;
+        QImage image;
+        if (!link->session_) {
+            result.error = "Not connected";
+        } else {
+            unsigned char *data = nullptr;
+            size_t size = 0;
+            int width = 0, height = 0;
+            char error[1024] = {};
+            if (!ptz_picture(link->session_, &data, &size, &width, &height, error, sizeof error) || !data) {
+                result = failure(link->session_, error);
+            } else {
+                image = QImage::fromData(data, static_cast<int>(size));
+                ptz_free(data);
+                if (image.isNull()) result.error = "The camera's picture could not be read";
+                else result.ok = true;
+            }
+        }
+        return [done, result, image] { done(result, image); };
+    });
+}
+
+void link_move_in_view(CameraLink *link, double x, double y, std::function<void(LinkResult)> done) {
+    link->run([=]() -> std::function<void()> {
+        LinkResult result;
+        if (!link->session_) {
+            result.error = "Not connected";
+        } else {
+            char error[1024] = {};
+            if (ptz_move_in_view(link->session_, x, y, error, sizeof error)) result.ok = true;
             else result = failure(link->session_, error);
         }
         return [done, result] { done(result); };

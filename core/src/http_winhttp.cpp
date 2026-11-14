@@ -6,7 +6,10 @@
 #if defined(_WIN32)
 
 #include <windows.h>
+#include <bcrypt.h>
 #include <winhttp.h>
+
+#include <map>
 
 namespace ptz {
 
@@ -62,6 +65,117 @@ std::string friendly(DWORD code) {
     }
 }
 
+// MD5 or SHA-256 of `text` as lowercase hex, through Windows' CNG.
+std::string hex_hash(const wchar_t *algorithm, const std::string &text) {
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    if (BCryptOpenAlgorithmProvider(&alg, algorithm, nullptr, 0) != 0) return {};
+    unsigned char digest[32] = {};
+    ULONG size = wcscmp(algorithm, BCRYPT_MD5_ALGORITHM) == 0 ? 16 : 32;
+    NTSTATUS status = BCryptHash(alg, nullptr, 0, reinterpret_cast<PUCHAR>(const_cast<char *>(text.data())),
+                                 static_cast<ULONG>(text.size()), digest, size);
+    BCryptCloseAlgorithmProvider(alg, 0);
+    if (status != 0) return {};
+    static const char *digits = "0123456789abcdef";
+    std::string hex;
+    for (ULONG i = 0; i < size; ++i) {
+        hex += digits[digest[i] >> 4];
+        hex += digits[digest[i] & 15];
+    }
+    return hex;
+}
+
+// The fields of a "Digest ..." challenge (RFC 7616), keys in lower case.
+std::map<std::string, std::string> digest_fields(const std::string &challenge) {
+    std::map<std::string, std::string> fields;
+    size_t at = 6;  // after "Digest"
+    while (at < challenge.size()) {
+        while (at < challenge.size() && (challenge[at] == ' ' || challenge[at] == ',')) ++at;
+        size_t eq = challenge.find('=', at);
+        if (eq == std::string::npos) break;
+        std::string key = lower(trim(challenge.substr(at, eq - at)));
+        at = eq + 1;
+        std::string value;
+        if (at < challenge.size() && challenge[at] == '"') {
+            for (++at; at < challenge.size() && challenge[at] != '"'; ++at) {
+                if (challenge[at] == '\\' && at + 1 < challenge.size()) ++at;
+                value += challenge[at];
+            }
+            ++at;
+        } else {
+            size_t end = challenge.find(',', at);
+            value = trim(challenge.substr(at, end == std::string::npos ? std::string::npos : end - at));
+            at = end == std::string::npos ? challenge.size() : end;
+        }
+        fields[key] = value;
+    }
+    return fields;
+}
+
+std::string quoted(const std::string &text) {
+    std::string out = "\"";
+    for (char c : text) {
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
+    }
+    return out + "\"";
+}
+
+// The Authorization header answering a Digest challenge, or empty when the challenge asks for something unsupported.
+// WinHTTP's own Digest support is not used: on current Windows it accepts the credentials but sends no answer.
+std::string digest_authorization(const std::string &challenge, const std::string &method, const std::string &uri,
+                                 const std::string &user, const std::string &password) {
+    auto f = digest_fields(challenge);
+    std::string algorithm = f.count("algorithm") ? f["algorithm"] : "MD5";
+    const wchar_t *hash = lower(algorithm) == "md5" ? BCRYPT_MD5_ALGORITHM
+                          : lower(algorithm) == "sha-256" ? BCRYPT_SHA256_ALGORITHM
+                                                          : nullptr;
+    if (!hash || !f.count("nonce") || !f.count("realm")) return {};
+    bool qop = false;
+    if (f.count("qop")) {
+        std::string options = f["qop"];
+        for (size_t start = 0; start <= options.size();) {  // "auth", "auth-int" or both, comma-separated
+            size_t end = options.find(',', start);
+            if (end == std::string::npos) end = options.size();
+            if (lower(trim(options.substr(start, end - start))) == "auth") qop = true;
+            start = end + 1;
+        }
+        if (!qop) return {};
+    }
+    std::string ha1 = hex_hash(hash, user + ":" + f["realm"] + ":" + password);
+    std::string ha2 = hex_hash(hash, method + ":" + uri);
+    std::string random = random_bytes(12), cnonce;
+    for (unsigned char c : random) cnonce += "0123456789abcdef"[c >> 4], cnonce += "0123456789abcdef"[c & 15];
+    std::string response = qop ? hex_hash(hash, ha1 + ":" + f["nonce"] + ":00000001:" + cnonce + ":auth:" + ha2)
+                               : hex_hash(hash, ha1 + ":" + f["nonce"] + ":" + ha2);
+    if (ha1.empty() || response.empty()) return {};
+    std::string header = "Digest username=" + quoted(user) + ", realm=" + quoted(f["realm"]) + ", nonce=" +
+                         quoted(f["nonce"]) + ", uri=" + quoted(uri) + ", algorithm=" + algorithm + ", response=\"" +
+                         response + "\"";
+    if (qop) header += ", qop=auth, nc=00000001, cnonce=\"" + cnonce + "\"";
+    if (f.count("opaque")) header += ", opaque=" + quoted(f["opaque"]);
+    return header;
+}
+
+// The Digest challenge among the response's WWW-Authenticate headers, if any.
+std::string digest_challenge(HINTERNET request) {
+    for (DWORD index = 0;;) {
+        DWORD size = 0;
+        DWORD current = index;
+        WinHttpQueryHeaders(request, WINHTTP_QUERY_WWW_AUTHENTICATE, WINHTTP_HEADER_NAME_BY_INDEX, nullptr, &size, &current);
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || !size) return {};
+        std::wstring value(size / sizeof(wchar_t), L'\0');
+        current = index;
+        if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_WWW_AUTHENTICATE, WINHTTP_HEADER_NAME_BY_INDEX, value.data(), &size,
+                                 &current))
+            return {};
+        value.resize(size / sizeof(wchar_t));
+        std::string text = trim(narrow(value));
+        if (lower(text.substr(0, 7)) == "digest ") return text;
+        if (current == index) return {};
+        index = current;
+    }
+}
+
 }  // namespace
 
 void http_global_init() {}
@@ -113,7 +227,6 @@ HttpResponse http_perform(const HttpRequest &request) {
 
     std::wstring headers;
     for (const auto &h : request.headers) headers += widen(h) + L"\r\n";
-    std::wstring user = widen(request.user), password = widen(request.password);
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         BOOL sent = WinHttpSendRequest(req.h, headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
@@ -128,13 +241,17 @@ HttpResponse http_perform(const HttpRequest &request) {
                             &status, &size, WINHTTP_NO_HEADER_INDEX);
         response.status = static_cast<long>(status);
         if (status == 401 && request.digest_auth && attempt == 0) {
-            DWORD supported = 0, first = 0, target = 0;
-            if (WinHttpQueryAuthSchemes(req.h, &supported, &first, &target) && (supported & WINHTTP_AUTH_SCHEME_DIGEST) &&
-                WinHttpSetCredentials(req.h, target, WINHTTP_AUTH_SCHEME_DIGEST, user.c_str(), password.c_str(), nullptr)) {
-                // Drain the challenge body, then resend with Digest.
+            std::string answer = digest_authorization(digest_challenge(req.h), request.method, narrow(object),
+                                                      request.user, request.password);
+            if (!answer.empty()) {
+                // Drain the challenge body, then resend with the Digest answer.
                 char discard[4096];
                 DWORD got = 0;
                 while (WinHttpReadData(req.h, discard, sizeof discard, &got) && got) {}
+                std::wstring line = L"Authorization: " + widen(answer);
+                WinHttpAddRequestHeaders(req.h, line.c_str(), static_cast<DWORD>(-1L),
+                                         WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
+                SecureZeroMemory(line.data(), line.size() * sizeof(wchar_t));
                 continue;
             }
         }

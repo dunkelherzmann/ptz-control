@@ -85,10 +85,9 @@ someone else needs its quarantine flag removed once (see [Installing](#installin
 
 | Action | How |
 | --- | --- |
-| Aim | click the position plane, drag a travel meter, or type pan/tilt/zoom targets |
-| Move | Return in a target field, **Move**, ⌘↩, or double-click the plane or a meter |
-| Aim in the camera's picture | View ▸ Camera Picture (⌘2) or **Picture** above the plane, then click a point; double-click to move there (macOS) |
-| New picture / whole range again | ⇧⌘R / ⌘1 |
+| Aim | click a point of the camera picture, drag a travel meter, or type pan/tilt/zoom targets |
+| Move | Return in a target field, **Move**, ⌘↩, or double-click the picture or a meter |
+| New picture | ⇧⌘R, or ⟳ above the picture |
 | Keep an axis | leave its field blank (or `x`) |
 | Return to starting coordinates | ⌘B |
 | Stop motion | ⌘. |

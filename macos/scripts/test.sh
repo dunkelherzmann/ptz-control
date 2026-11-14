@@ -65,8 +65,8 @@ check "run 2 connected with the saved login and moved" "$([ "$(moves)" -gt "$BEF
 check "Manage Logins picture saved" "$([ -s "$OUT/macos-logins.png" ] && echo 0 || echo 1)"
 check "still one camera login" "$([ "$(grep -c '^camera' "$VAULT")" = 1 ] && echo 0 || echo 1)"
 
-# Run 3: Picture mode. A picture comes on connect, a point of it is aimed at, the camera moves toward it, and a
-# new picture comes once it stops. The test copy's settings return to Range afterwards.
+# Run 3: the camera picture. A picture comes on connect, a point of it is aimed at, the camera moves toward it, and
+# a new picture comes once it stops.
 defaults write "$TEST_ID" ConnectionSettings -data "$(settings admin)"
 rm -f "$OUT/macos-picture.png" "$OUT/macos-picture-aim.png"
 PICTURES_BEFORE="$(grep -c '^mock: picture' "$WORK/mock.log" || true)"
@@ -77,8 +77,7 @@ check "run 3 took a picture, then a new one after the move" \
     "$([ $(( $(grep -c '^mock: picture' "$WORK/mock.log" || true) - PICTURES_BEFORE )) -ge 2 ] && echo 0 || echo 1)"
 check "run 3 moved toward the aimed point (right and up)" \
     "$(grep -E '^mock: onvif view move to pan=0\.[0-9]+ tilt=0\.[0-9]+' "$WORK/mock.log" >/dev/null && echo 0 || echo 1)"
-check "Picture mode remembered" "$([ "$(defaults read "$TEST_ID" PlaneMode 2>/dev/null)" = picture ] && echo 0 || echo 1)"
-check "picture-mode pictures saved" "$([ -s "$OUT/macos-picture.png" ] && [ -s "$OUT/macos-picture-aim.png" ] && echo 0 || echo 1)"
+check "camera-picture pictures saved" "$([ -s "$OUT/macos-picture.png" ] && [ -s "$OUT/macos-picture-aim.png" ] && echo 0 || echo 1)"
 
 if [ "$FAIL" = 0 ]; then
     printf 'PASS PTZ Control %s (test copy): pictures in %s\n' "$(defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString)" "$OUT"

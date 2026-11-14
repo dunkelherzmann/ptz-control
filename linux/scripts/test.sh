@@ -1,7 +1,7 @@
 #!/bin/sh
 # Drives the installed Flatpak (org.ptzcontrol.app) against the mock camera, off screen, and saves screenshots.
 # Run 1 types a login, ticks Save login and connects; run 2 starts with a wrong username and fills the camera
-# fields from the saved login. It uses its own settings folder and vault file and never touches the user's PTZ
+# fields from the saved login; run 3 aims and moves in the camera's picture. It uses its own settings folder and vault file and never touches the user's PTZ
 # Control settings, saved logins or windows.
 # Usage: linux/scripts/test.sh [screenshot.png]   (default: .build/test/flatpak.png)
 set -eu
@@ -88,6 +88,21 @@ observed 2
 check "Manage Logins and form pictures saved" \
     "$([ -s "$LOGINS" ] && [ -s "$SHOTS/flatpak-logins-form.png" ] && echo 0 || echo 1)"
 check "still one camera login" "$([ "$(grep -c '^camera' "$VAULT")" = 1 ] && echo 0 || echo 1)"
+
+# Run 3: the camera picture. A picture comes on connect, a point of it is aimed at, the camera moves toward it, and
+# a new picture comes once it stops.
+settings admin
+PICTURE="$SHOTS/flatpak-picture.png"
+rm -f "$PICTURE" "$SHOTS/flatpak-picture-aim.png" "$SHOTS/flatpak-picture-moving.png"
+PICTURES_BEFORE="$(grep -c '^mock: picture' "$WORK/mock.log" || true)"
+run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PICTURE=1 --env=PTZ_SNAPSHOT_PATH="$PICTURE" \
+    --env=PTZ_SNAPSHOT_AIM_PATH="$SHOTS/flatpak-picture-aim.png" --env=PTZ_SNAPSHOT_MOVING_PATH="$SHOTS/flatpak-picture-moving.png"
+check "run 3 took a picture, then a new one after the move" \
+    "$([ $(( $(grep -c '^mock: picture' "$WORK/mock.log" || true) - PICTURES_BEFORE )) -ge 2 ] && echo 0 || echo 1)"
+check "run 3 moved toward the aimed point (right and up)" \
+    "$(grep -E '^mock: onvif view move to pan=0\.[0-9]+ tilt=0\.[0-9]+' "$WORK/mock.log" >/dev/null && echo 0 || echo 1)"
+check "camera-picture pictures saved" "$([ -s "$PICTURE" ] && [ -s "$SHOTS/flatpak-picture-aim.png" ] && echo 0 || echo 1)"
+observed 3
 
 if [ "$FAIL" = 0 ]; then
     printf 'PASS %s %s: pictures in %s\n' "$ID" "$(flatpak info "$ID" | sed -n 's/^ *Version: //p')" "$SHOTS"

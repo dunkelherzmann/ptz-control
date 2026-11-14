@@ -3,6 +3,7 @@
 #include "app.h"
 #include "instruments.h"
 
+#include <QAbstractButton>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -24,6 +25,7 @@
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScreen>
 #include <QScrollBar>
 #include <QShortcut>
 #include <QTimer>
@@ -31,6 +33,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <cmath>
 #include <deque>
 #include <QPointer>
 #include <QTextEdit>
@@ -51,12 +54,28 @@ QString describe(const Snapshot &s) {
 
 QString css(const QColor &c) { return c.name(QColor::HexRgb); }
 
-// A rounded instrument panel with a small monospaced caption.
+// A rounded instrument panel with a small monospaced caption, and optional controls at the caption row's right end.
 class Panel : public QWidget {
 public:
     Panel(const QString &caption, QWidget *parent = nullptr) : QWidget(parent), caption_(caption) {}
+    void set_caption(const QString &caption) {
+        caption_ = caption;
+        update();
+    }
+    void set_accessory(QWidget *accessory) {
+        accessory_ = accessory;
+        accessory->setParent(this);
+        place_accessory();
+    }
 
 protected:
+    void resizeEvent(QResizeEvent *) override { place_accessory(); }
+    void place_accessory() {
+        if (!accessory_) return;
+        accessory_->adjustSize();
+        accessory_->move(width() - accessory_->width() - 8, 4);
+    }
+
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
@@ -66,11 +85,49 @@ protected:
         p.setFont(mono_font(10, true));
         p.setPen(g_theme.secondary);
         QFontMetrics m(p.font());
-        p.drawText(QPoint(12, 8 + m.ascent()), m.elidedText(caption_, Qt::ElideRight, width() - 24));
+        int room = width() - 24 - (accessory_ ? accessory_->width() + 10 : 0);
+        p.drawText(QPoint(12, 8 + m.ascent()), m.elidedText(caption_, Qt::ElideRight, room));
     }
 
 private:
     QString caption_;
+    QWidget *accessory_ = nullptr;
+};
+
+// The ⟳ Refresh Picture button: a circular arrow, framed only while the pointer is over it.
+class RefreshButton : public QAbstractButton {
+public:
+    RefreshButton(QWidget *parent = nullptr) : QAbstractButton(parent) {
+        setFixedSize(24, 20);
+        setCursor(Qt::PointingHandCursor);
+        setFocusPolicy(Qt::NoFocus);
+        setAttribute(Qt::WA_Hover);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        QColor ink = isEnabled() ? g_theme.text : blend(g_theme.panel, g_theme.text, 0.4);
+        if (isEnabled() && underMouse()) {
+            p.setPen(QPen(g_theme.border, 1));
+            p.setBrush(isDown() ? blend(g_theme.panel, g_theme.text, 0.12) : g_theme.button);
+            p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 4, 4);
+        }
+        QPointF c = QRectF(rect()).center();
+        double radius = 5.5;
+        QPen pen(ink, 1.6);
+        pen.setCapStyle(Qt::RoundCap);
+        p.setPen(pen);
+        p.setBrush(Qt::NoBrush);
+        // Clockwise arc from the top, open at the upper right, with the arrowhead at its end.
+        p.drawArc(QRectF(c.x() - radius, c.y() - radius, 2 * radius, 2 * radius), 60 * 16, 300 * 16);
+        QPointF tip(c.x() + radius * 0.5, c.y() - radius * 0.8660254);  // the arc's end, at 60 degrees
+        QPointF along(0.8660254, 0.5), across(-0.5, 0.8660254);         // clockwise there, and square to it
+        p.setPen(Qt::NoPen);
+        p.setBrush(ink);
+        p.drawPolygon(QPolygonF({tip + along * 3.2, tip - along * 1.2 + across * 3, tip - along * 1.2 - across * 3}));
+    }
 };
 
 // Status pill in the header.
@@ -168,6 +225,10 @@ public:
     }
 
 protected:
+    void showEvent(QShowEvent *) override {
+        QTimer::singleShot(0, this, [this] { fit_window_to_picture(); });
+    }
+
     void closeEvent(QCloseEvent *e) override {
         if (state_ == State::Connected || state_ == State::Connecting) {
             e->ignore();
@@ -380,8 +441,12 @@ private:
         middle->setSpacing(12);
         auto *instruments = new QVBoxLayout;
         instruments->setSpacing(12);
-        auto *plane_panel = new Panel("POSITION PLANE // XY — CLICK TO AIM, DOUBLE-CLICK TO MOVE");
+        auto *plane_panel = new Panel("CAMERA PICTURE // VIEW — CLICK TO AIM, DOUBLE-CLICK TO MOVE THERE");
         plane_ = new PlaneView;
+        refresh_picture_ = new RefreshButton;
+        refresh_picture_->setToolTip("Refresh Picture: take a new picture of the camera's view now (Ctrl+Shift+R)");
+        refresh_picture_->setAccessibleName("Refresh Picture");
+        plane_panel->set_accessory(refresh_picture_);
         (new QVBoxLayout(plane_panel))->addWidget(plane_);
         instruments->addWidget(plane_panel, 1);
         auto *meters_panel = new Panel("AXIS TRAVEL // % OF ADVERTISED LIMITS — DRAG TO AIM, DOUBLE-CLICK TO MOVE");
@@ -450,6 +515,7 @@ private:
         connect(start_, &QPushButton::clicked, this, [this] { return_to_start(); });
         connect(stop_, &QPushButton::clicked, this, [this] { stop_motion(); });
         connect(web_, &QPushButton::clicked, this, [this] { open_web(); });
+        connect(refresh_picture_, &QAbstractButton::clicked, this, [this] { take_picture(); });
         for (QLineEdit *f : fields_)
             connect(f, &QLineEdit::returnPressed, this, [this] {
                 if (state_ == State::Idle) connect_camera();
@@ -464,16 +530,16 @@ private:
         vault_subscribe(this, [this] { reload_logins(); });
         for (QLineEdit *f : {target_pan_, target_tilt_, target_zoom_}) {
             connect(f, &QLineEdit::textChanged, this, [this] { update_target_markers(); });
+            connect(f, &QLineEdit::textEdited, this, [this] {  // an absolute target takes over from a point of the picture
+                plane_->state.picture_target.reset();
+                plane_->update();
+            });
             connect(f, &QLineEdit::returnPressed, this, [this] { send_move(); });
         }
 
-        plane_->state.on_aim = [this](double pan, double tilt) {
-            target_pan_->setText(format_value(pan));
-            target_tilt_->setText(format_value(tilt));
-        };
-        plane_->state.on_aim_and_move = [this](double pan, double tilt) {
-            target_pan_->setText(format_value(pan));
-            target_tilt_->setText(format_value(tilt));
+        plane_->state.on_picture_aim = [this](QPointF point) { aim_in_picture(point); };
+        plane_->state.on_picture_aim_and_move = [this](QPointF point) {
+            aim_in_picture(point);
             send_move();
         };
         for (auto [meter, field] : {std::pair{meter_pan_, target_pan_}, std::pair{meter_tilt_, target_tilt_},
@@ -552,12 +618,10 @@ private:
 
     void update_target_markers() {
         Target t = parse_target(nullptr);
-        plane_->state.target_pan = t.pan;
-        plane_->state.target_tilt = t.tilt;
         meter_pan_->state.target = t.pan;
         meter_tilt_->state.target = t.tilt;
         meter_zoom_->state.target = t.zoom;
-        for (QWidget *w : std::initializer_list<QWidget *>{plane_, meter_pan_, meter_tilt_, meter_zoom_}) w->update();
+        for (QWidget *w : std::initializer_list<QWidget *>{meter_pan_, meter_tilt_, meter_zoom_}) w->update();
     }
 
     void update_controls() {
@@ -584,10 +648,7 @@ private:
         const CameraInfo empty_info;
         const CameraInfo &info = info_ ? *info_ : empty_info;
         plane_->state.enabled = connected;
-        plane_->state.pan = info.pan;
-        plane_->state.tilt = info.tilt;
-        plane_->state.current = connected ? current_ : std::nullopt;
-        plane_->state.starting = connected ? starting_ : std::nullopt;
+        refresh_picture_->setEnabled(connected && !taking_picture_);
         struct M { MeterView *w; AxisRange r; std::optional<Reading> Snapshot::*axis; };
         for (auto [w, range, axis] : {M{meter_pan_, info.pan, &Snapshot::pan}, M{meter_tilt_, info.tilt, &Snapshot::tilt},
                                       M{meter_zoom_, info.zoom, &Snapshot::zoom}}) {
@@ -832,7 +893,12 @@ private:
                 current_.reset();
                 failures_ = 0;
                 paused_ = false;
-                plane_->reset_trail();
+                plane_->state.view_moves = info.view_moves;
+                plane_->state.picture = QImage();
+                plane_->state.picture_note.clear();
+                plane_->state.picture_target.reset();
+                picture_due_ = 0;
+                take_picture();
                 show_message("Connected. No movement has been sent.", false);
                 log_line("Connected: " + info.name);
                 log_line(info.units);
@@ -866,6 +932,9 @@ private:
             info_.reset();
             current_.reset();
             starting_.reset();
+            plane_->state.picture = QImage();
+            plane_->state.picture_target.reset();
+            picture_due_ = 0;
             show_message("Disconnected.", false);
             log_line("Disconnected");
             update_controls();
@@ -899,14 +968,13 @@ private:
             next_refresh_ = QDateTime::currentMSecsSinceEpoch() + 2000;
             if (result.ok) {
                 failures_ = 0;
+                last_read_ = QDateTime::currentMSecsSinceEpoch();
                 if (!starting_) {
                     starting_ = snapshot;
                     log_line("Starting coordinates: " + describe(snapshot));
                 }
                 if (current_ && !(snapshot == *current_)) log_line("Current coordinates: " + describe(snapshot));
                 current_ = snapshot;
-                plane_->state.current = snapshot;
-                plane_->record();
             } else {
                 if (result.link_lost) {
                     link_lost(result.error);
@@ -926,8 +994,21 @@ private:
     }
 
     void tick() {
-        if (state_ == State::Connected && !paused_ && !link_busy(link_) && QDateTime::currentMSecsSinceEpoch() >= next_refresh_)
-            refresh();
+        if (state_ != State::Connected || link_busy(link_)) return;
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (picture_due_) {
+            // A fresh picture once the camera has stopped: a reading taken after the move that says it isn't moving,
+            // or, when the camera doesn't say, three seconds.
+            qint64 age = now - picture_due_;
+            bool reported = current_ && !current_->move_status.isEmpty();
+            bool stopped = last_read_ > picture_due_ + 800 && reported && current_->move_status != "MOVING";
+            if (stopped || (age >= 3000 && (!reported || paused_)) || age >= 30000) {
+                picture_due_ = 0;
+                take_picture();
+                return;
+            }
+        }
+        if (!paused_ && now >= next_refresh_) refresh();
     }
 
     void refresh_now() {
@@ -956,6 +1037,7 @@ private:
             if (result.ok) {
                 log_line(what + " accepted: " + summary + " (movement may still be in progress)");
                 next_refresh_ = 0;
+                camera_moved();
             } else if (result.link_lost) {
                 link_lost(result.error);
                 return;
@@ -969,6 +1051,10 @@ private:
 
     void send_move() {
         if (state_ != State::Connected) return;
+        if (plane_->state.picture_target) {
+            send_picture_move(*plane_->state.picture_target);
+            return;
+        }
         QString error;
         Target t = parse_target(&error);
         if (!error.isEmpty()) {
@@ -1011,11 +1097,108 @@ private:
     void stop_motion() {
         if (state_ != State::Connected) return;
         link_stop(link_, [this](LinkResult result) {
-            if (result.ok) log_line("Stop accepted");
-            else if (result.link_lost) { link_lost(result.error); return; }
+            if (result.ok) {
+                log_line("Stop accepted");
+                camera_moved();
+            } else if (result.link_lost) { link_lost(result.error); return; }
             else log_line("Stop failed: " + result.error, true);
             next_refresh_ = 0;
         });
+    }
+
+    // ---- picture (spec I9-I11) -------------------------------------------------------
+
+    void take_picture() {
+        if (state_ != State::Connected || taking_picture_) return;
+        taking_picture_ = true;
+        link_picture(link_, [this](LinkResult result, QImage image) {
+            taking_picture_ = false;
+            if (state_ != State::Connected) return;
+            PlaneState &s = plane_->state;
+            if (result.ok) {
+                bool reshaped = s.picture.size() != image.size();
+                if (s.picture_stale) s.picture_target.reset();  // the camera has moved since
+                s.picture = image;
+                s.picture_taken = QDateTime::currentDateTime();
+                s.picture_stale = false;
+                s.picture_note.clear();
+                if (reshaped) {
+                    log_line(QString("Camera picture: %1 × %2").arg(image.width()).arg(image.height()) +
+                             (info_ && info_->view_moves ? "" : "; this camera can't aim from its picture"));
+                    fit_window_to_picture();
+                }
+            } else if (result.link_lost) {
+                link_lost(result.error);
+                return;
+            } else {
+                if (s.picture_note != result.error) log_line("Picture failed: " + result.error, true);
+                s.picture_note = result.error;
+                s.picture_stale = false;
+            }
+            plane_->update();
+            update_controls();
+        });
+        update_controls();
+    }
+
+    void aim_in_picture(QPointF point) {
+        plane_->state.picture_target = QPointF(std::clamp(point.x(), -1.0, 1.0), std::clamp(point.y(), -1.0, 1.0));
+        plane_->update();
+    }
+
+    void send_picture_move(QPointF point) {
+        if (!info_ || !info_->view_moves) {
+            log_line("This camera can't aim from its picture; use the target fields or the travel meters.", true);
+            return;
+        }
+        QString describe = QString::asprintf("%.2f %s, %.2f %s of the picture", std::abs(point.x()), point.x() < 0 ? "left" : "right",
+                                             std::abs(point.y()), point.y() < 0 ? "down" : "up");
+        link_move_in_view(link_, point.x(), point.y(), [this, describe](LinkResult result) {
+            if (result.ok) {
+                log_line("Move toward the picture point accepted: " + describe + " (movement may still be in progress)");
+                next_refresh_ = 0;
+                camera_moved();
+            } else if (result.link_lost) {
+                link_lost(result.error);
+                return;
+            } else {
+                log_line("Move toward the picture point failed: " + result.error, true);
+            }
+            update_controls();
+        });
+        update_controls();
+    }
+
+    // The picture is out of date once the camera moves; a new one is taken when it stops.
+    void camera_moved() {
+        if (plane_->state.picture.isNull()) return;
+        plane_->state.picture_stale = true;
+        picture_due_ = QDateTime::currentMSecsSinceEpoch();
+        plane_->update();
+    }
+
+    // The plane takes the picture's shape: the window grows or shrinks in height, keeping its top
+    // edge, within the screen.
+    void fit_window_to_picture() {
+        if (!isVisible() || isMaximized() || isFullScreen()) return;
+        layout()->activate();
+        const QImage &picture = plane_->state.picture;
+        double pw = picture.isNull() ? 16 : picture.width(), ph = picture.isNull() ? 9 : picture.height();
+        if (pw <= 0 || plane_->width() <= 0) return;
+        int wanted = static_cast<int>(std::round((plane_->width() - 2) * ph / pw + 2));
+        int delta = wanted - plane_->height();
+        if (std::abs(delta) < 2) return;
+        QRect frame = frameGeometry(), inner = geometry();
+        int height = inner.height() + delta, top = frame.top();
+        if (QScreen *screen = this->screen()) {
+            QRect area = screen->availableGeometry();
+            int chrome = frame.height() - inner.height();
+            height = std::min(height, area.height() - chrome);
+            if (top + chrome + height > area.bottom() + 1) top = area.bottom() + 1 - chrome - height;
+            top = std::max(top, area.top());
+        }
+        resize(width(), height);
+        if (top != frame.top()) move(frame.left(), top);
     }
 
     void open_web() {
@@ -1044,7 +1227,9 @@ private:
             "• ONVIF: the camera's advertised absolute space (commonly pan/tilt −1…1, zoom 0…1; not degrees).\n"
             "• Axis: pan/tilt in degrees; zoom is an integer in the native range.\n\n"
             "Leave a target field blank (or type x) to keep that axis unchanged.\n"
-            "Click the position plane to aim, double-click to aim and move.\n"
+            "The camera picture shows what the camera sees: click a point to aim at it, double-click (or Move) to turn the "
+            "camera so that point comes to the centre. A new picture comes once the camera stops, or with Refresh Picture "
+            "(Ctrl+Shift+R).\n"
             "Drag along a travel meter to aim that axis alone, double-click it to aim and move.\n\n"
             "Starting coordinates are the first reading after connecting and stay fixed. "
             "Return to Start (Ctrl+B) sends an absolute move there.\n"
@@ -1092,6 +1277,7 @@ public:
         key(QKeySequence("Ctrl+."), [this] { stop_motion(); });
         key(QKeySequence("Ctrl+R"), [this] { refresh_now(); });
         key(QKeySequence("Ctrl+P"), [this] { toggle_pause(); });
+        key(QKeySequence("Ctrl+Shift+R"), [this] { take_picture(); });
         key(QKeySequence("Ctrl+L"), [this] { open_web(); });
         key(QKeySequence("Ctrl+Q"), [this] { close(); });
         key(QKeySequence("Ctrl+M"), [window] { window->showMinimized(); });
@@ -1142,6 +1328,7 @@ public:
         camera->addSeparator();
         item(camera, "Refresh Position", "Ctrl+R", connected, [this] { refresh_now(); });
         item(camera, paused_ ? "Resume Auto-Refresh" : "Pause Auto-Refresh", "Ctrl+P", connected, [this] { toggle_pause(); });
+        item(camera, "Refresh Picture", "Ctrl+Shift+R", connected, [this] { take_picture(); });
         camera->addSeparator();
         item(camera, "Open Camera Web Interface", "Ctrl+L", connected, [this] { open_web(); });
         camera->addSeparator();
@@ -1319,6 +1506,10 @@ private:
         if (QString path = qEnvironmentVariable("PTZ_MENU_REPORT"); !path.isEmpty()) write_menu_report(path);
         if (qEnvironmentVariableIsSet("PTZ_SNAPSHOT_SAVE_LOGIN")) save_cam_->setChecked(true);
         if (qEnvironmentVariableIsSet("PTZ_SNAPSHOT_USE_LOGIN")) choose_saved_login(LoginStore::Camera, 0);
+        if (qEnvironmentVariableIsSet("PTZ_SNAPSHOT_PICTURE")) {
+            run_picture_script();
+            return;
+        }
         connect_camera();
         QTimer::singleShot(3000, this, [this] {
             target_pan_->setText("0.55");
@@ -1344,6 +1535,24 @@ private:
         });
     }
 
+    // PTZ_SNAPSHOT_PICTURE: Picture mode, aim at a point of the picture (a picture of that is saved to
+    // PTZ_SNAPSHOT_AIM_PATH), move there, and save the window once the new picture has come.
+    void run_picture_script() {
+        connect_camera();
+        QTimer::singleShot(3000, this, [this] { if (plane_->state.on_picture_aim) plane_->state.on_picture_aim(QPointF(0.45, 0.3)); });
+        QTimer::singleShot(3400, this, [this] {
+            if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_AIM_PATH"); !path.isEmpty()) grab().save(path);
+            send_move();
+        });
+        QTimer::singleShot(4400, this, [this] {
+            if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_MOVING_PATH"); !path.isEmpty()) grab().save(path);
+        });
+        QTimer::singleShot(10000, this, [this] {
+            grab().save(qEnvironmentVariable("PTZ_SNAPSHOT_PATH"));
+            close();
+        });
+    }
+
     // ---- state ------------------------------------------------------------------------
 
     Settings settings_;
@@ -1355,7 +1564,8 @@ private:
     int failures_ = 0;
     bool paused_ = false;
     qint64 next_refresh_ = 0;
-    bool web_pending_ = false, closing_ = false, message_error_ = false;
+    bool web_pending_ = false, closing_ = false, message_error_ = false, taking_picture_ = false;
+    qint64 picture_due_ = 0, last_read_ = 0;  // when the camera last moved (a fresh picture is due), the last reading
     int route_ = 0, vendor_ = 0;
     std::deque<std::pair<QString, bool>> log_lines_;
 
@@ -1370,6 +1580,7 @@ private:
     Chip *chip_;
     QToolButton *menu_button_;
     PlaneView *plane_;
+    RefreshButton *refresh_picture_;
     MeterView *meter_pan_, *meter_tilt_, *meter_zoom_;
     Readouts *readouts_;
     QPlainTextEdit *log_;

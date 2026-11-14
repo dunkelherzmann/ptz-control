@@ -11,6 +11,7 @@
 #include <uxtheme.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <functional>
 #include <memory>
@@ -22,14 +23,14 @@ namespace {
 
 enum : int {
     ID_ROUTE_LOCAL = 100, ID_ROUTE_SSH, ID_VENDOR_ONVIF, ID_VENDOR_AXIS, ID_CONNECT, ID_MOVE, ID_START, ID_STOP, ID_WEB,
-    ID_MENU,
+    ID_MENU, ID_REFRESH_PICTURE,
     ID_SSH_HOST = 200, ID_SSH_USER, ID_SSH_PASSWORD, ID_SSH_PORT, ID_SSH_KEY, ID_CAM_HOST, ID_CAM_PORT, ID_CAM_USER,
     ID_CAM_PASSWORD, ID_HTTPS_PORT, ID_PROFILE, ID_TIMEOUT, ID_TARGET_PAN, ID_TARGET_TILT, ID_TARGET_ZOOM, ID_LOG,
     ID_PLANE, ID_METER_PAN, ID_METER_TILT, ID_METER_ZOOM,
     ID_SSH_LOGIN = 260, ID_CAM_LOGIN, ID_SAVE_SSH, ID_SAVE_CAM,
     CMD_CONNECT = 400, CMD_DISCONNECT, CMD_MOVE, CMD_RETURN, CMD_STOP, CMD_REFRESH, CMD_PAUSE, CMD_WEB, CMD_HELP, CMD_ABOUT,
     CMD_LOGINS, CMD_QUIT, CMD_UNDO, CMD_REDO, CMD_CUT, CMD_COPY, CMD_PASTE, CMD_SELECT_ALL, CMD_MINIMIZE, CMD_MAXIMIZE,
-    CMD_CLOSE,
+    CMD_CLOSE, CMD_REFRESH_PICTURE,
     CMD_THEME = 450,  // + Phosphor index; keep clear of the commands above
 };
 
@@ -61,11 +62,13 @@ struct Console {
     ULONGLONG next_refresh = 0;
     bool web_pending = false;
     bool closing = false;
+    bool taking_picture = false;
+    ULONGLONG picture_due = 0, last_read = 0;  // when the camera last moved (a fresh picture is due), the last reading
     int route = 0, vendor = 0;
     std::wstring message;
     bool message_error = false;
 
-    HWND route_local, route_ssh, vendor_onvif, vendor_axis, connect, move, start, stop, web, menu;
+    HWND route_local, route_ssh, vendor_onvif, vendor_axis, connect, move, start, stop, web, menu, refresh_picture;
     HWND ssh_host, ssh_user, ssh_password, ssh_port, ssh_key, cam_host, cam_port, cam_user, cam_password;
     HWND https_port, profile, timeout, target_pan, target_tilt, target_zoom, log, plane, meter_pan, meter_tilt,
         meter_zoom;
@@ -267,13 +270,10 @@ Target parse_target(std::wstring *error) {
 
 void update_target_markers() {
     Target t = parse_target(nullptr);
-    PlaneState &plane = plane_state(g->plane);
-    plane.target_pan = t.pan;
-    plane.target_tilt = t.tilt;
     meter_state(g->meter_pan).target = t.pan;
     meter_state(g->meter_tilt).target = t.tilt;
     meter_state(g->meter_zoom).target = t.zoom;
-    for (HWND w : {g->plane, g->meter_pan, g->meter_tilt, g->meter_zoom}) InvalidateRect(w, nullptr, FALSE);
+    for (HWND w : {g->meter_pan, g->meter_tilt, g->meter_zoom}) InvalidateRect(w, nullptr, FALSE);
 }
 
 void layout();
@@ -294,10 +294,8 @@ void update_controls() {
     const CameraInfo &info = g->info ? *g->info : empty_info;
     PlaneState &plane = plane_state(g->plane);
     plane.enabled = connected;
-    plane.pan = info.pan;
-    plane.tilt = info.tilt;
-    plane.current = connected ? g->current : std::nullopt;
-    plane.starting = connected ? g->starting : std::nullopt;
+    InvalidateRect(g->plane, nullptr, FALSE);
+    EnableWindow(g->refresh_picture, connected && !g->taking_picture);
     struct M { HWND w; AxisRange r; std::optional<Reading> Snapshot::*axis; };
     for (auto [w, range, axis] : {M{g->meter_pan, info.pan, &Snapshot::pan}, M{g->meter_tilt, info.tilt, &Snapshot::tilt},
                                   M{g->meter_zoom, info.zoom, &Snapshot::zoom}}) {
@@ -310,7 +308,7 @@ void update_controls() {
     meter_state(g->meter_zoom).integer = info.zoom_integer;
     update_target_markers();
     InvalidateRect(g->hwnd, nullptr, FALSE);
-    for (HWND b : {g->connect, g->move, g->start, g->stop, g->web}) InvalidateRect(b, nullptr, FALSE);
+    for (HWND b : {g->connect, g->move, g->start, g->stop, g->web, g->refresh_picture}) InvalidateRect(b, nullptr, FALSE);
 }
 
 void show_message(const std::wstring &text, bool error) {
@@ -371,6 +369,7 @@ std::optional<Settings> read_settings(std::wstring &error) {
 
 void refresh();
 void disconnect(std::function<void()> then = nullptr);
+void take_picture();
 
 // ---- saved logins ---------------------------------------------------------------------
 
@@ -513,7 +512,15 @@ void connect() {
             g->current.reset();
             g->failures = 0;
             g->paused = false;
-            plane_reset_trail(g->plane);
+            {
+                PlaneState &plane = plane_state(g->plane);
+                plane.view_moves = info.view_moves;
+                plane.picture.reset();
+                plane.picture_note.clear();
+                plane.picture_target.reset();
+            }
+            g->picture_due = 0;
+            take_picture();
             show_message(L"Connected. No movement has been sent.", false);
             log_line(L"Connected: " + info.name);
             log_line(info.units);
@@ -547,6 +554,9 @@ void disconnect(std::function<void()> then) {
         g->info.reset();
         g->current.reset();
         g->starting.reset();
+        plane_state(g->plane).picture.reset();
+        plane_state(g->plane).picture_target.reset();
+        g->picture_due = 0;
         show_message(L"Disconnected.", false);
         log_line(L"Disconnected");
         update_controls();
@@ -580,14 +590,13 @@ void refresh() {
         g->next_refresh = GetTickCount64() + 2000;
         if (result.ok) {
             g->failures = 0;
+            g->last_read = GetTickCount64();
             if (!g->starting) {
                 g->starting = snapshot;
                 log_line(L"Starting coordinates: " + describe(snapshot));
             }
             if (g->current && !(snapshot == *g->current)) log_line(L"Current coordinates: " + describe(snapshot));
             g->current = snapshot;
-            plane_state(g->plane).current = snapshot;
-            plane_record(g->plane);
         } else {
             if (result.link_lost) {
                 link_lost(result.error);
@@ -607,7 +616,21 @@ void refresh() {
 }
 
 void tick() {
-    if (g->state == State::Connected && !g->paused && !link_busy(g->link) && GetTickCount64() >= g->next_refresh) refresh();
+    if (g->state != State::Connected || link_busy(g->link)) return;
+    ULONGLONG now = GetTickCount64();
+    if (g->picture_due) {
+        // A fresh picture once the camera has stopped: a reading taken after the move that says it isn't moving,
+        // or, when the camera doesn't say, three seconds.
+        ULONGLONG age = now - g->picture_due;
+        bool reported = g->current && !g->current->move_status.empty();
+        bool stopped = g->last_read > g->picture_due + 800 && reported && g->current->move_status != L"MOVING";
+        if (stopped || (age >= 3000 && (!reported || g->paused)) || age >= 30000) {
+            g->picture_due = 0;
+            take_picture();
+            return;
+        }
+    }
+    if (!g->paused && now >= g->next_refresh) refresh();
 }
 
 void refresh_now() {
@@ -627,6 +650,117 @@ void toggle_pause() {
     update_controls();
 }
 
+// ---- picture (spec I10-I11) ---------------------------------------------------------
+
+// The plane takes the picture's shape: the window grows or shrinks in height, keeping its top edge, within the screen.
+void fit_window_to_picture() {
+    if (!IsWindowVisible(g->hwnd) || IsZoomed(g->hwnd) || IsIconic(g->hwnd)) return;
+    const PlaneState &s = plane_state(g->plane);
+    double pw = s.picture ? s.picture_width : 16, ph = s.picture ? s.picture_height : 9;
+    RECT pc;
+    GetClientRect(g->plane, &pc);
+    if (pw <= 0 || pc.right <= 0) return;
+    int wanted = static_cast<int>(std::lround((pc.right - 2) * ph / pw + 2));
+    int delta = wanted - pc.bottom;
+    if (std::abs(delta) < 2) return;
+    RECT wr;
+    GetWindowRect(g->hwnd, &wr);
+    int height = wr.bottom - wr.top + delta, top = wr.top;
+    MONITORINFO mi{sizeof mi};
+    if (GetMonitorInfoW(MonitorFromWindow(g->hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+        height = std::min<int>(height, mi.rcWork.bottom - mi.rcWork.top);
+        if (top + height > mi.rcWork.bottom) top = mi.rcWork.bottom - height;
+        top = std::max<int>(top, mi.rcWork.top);
+    }
+    SetWindowPos(g->hwnd, nullptr, wr.left, top, wr.right - wr.left, height, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+std::wstring clock_now() {
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    wchar_t text[16];
+    swprintf(text, 16, L"%02d:%02d:%02d", t.wHour, t.wMinute, t.wSecond);
+    return text;
+}
+
+void take_picture() {
+    if (g->state != State::Connected || g->taking_picture) return;
+    g->taking_picture = true;
+    link_picture(g->link, [](LinkResult result, std::string bytes) {
+        g->taking_picture = false;
+        if (g->state != State::Connected) return;
+        PlaneState &s = plane_state(g->plane);
+        if (result.ok) {
+            int old_w = s.picture ? s.picture_width : 0, old_h = s.picture ? s.picture_height : 0;
+            bool stale = s.picture_stale;
+            if (!plane_set_picture(g->plane, bytes)) {
+                result.ok = false;
+                result.error = L"The camera's picture could not be read";
+            } else {
+                if (stale) s.picture_target.reset();  // the camera has moved since
+                s.picture_taken = clock_now();
+                s.picture_stale = false;
+                s.picture_note.clear();
+                if (s.picture_width != old_w || s.picture_height != old_h) {
+                    log_line(L"Camera picture: " + std::to_wstring(s.picture_width) + L" \u00d7 " + std::to_wstring(s.picture_height) +
+                             (g->info && g->info->view_moves ? L"" : L"; this camera can't aim from its picture"));
+                    fit_window_to_picture();
+                }
+            }
+        } else if (result.link_lost) {
+            link_lost(result.error);
+            return;
+        }
+        if (!result.ok) {
+            if (s.picture_note != result.error) log_line(L"Picture failed: " + result.error, true);
+            s.picture_note = result.error;
+            s.picture_stale = false;
+        }
+        InvalidateRect(g->plane, nullptr, FALSE);
+        update_controls();
+    });
+    update_controls();
+}
+
+// The picture is out of date once the camera moves; a new one is taken when it stops.
+void camera_moved() {
+    PlaneState &s = plane_state(g->plane);
+    if (!s.picture) return;
+    s.picture_stale = true;
+    g->picture_due = GetTickCount64();
+    InvalidateRect(g->plane, nullptr, FALSE);
+}
+
+void aim_in_picture(float x, float y) {
+    plane_state(g->plane).picture_target = std::make_pair(std::clamp(x, -1.0f, 1.0f), std::clamp(y, -1.0f, 1.0f));
+    InvalidateRect(g->plane, nullptr, FALSE);
+}
+
+void send_picture_move(std::pair<float, float> point) {
+    if (!g->info || !g->info->view_moves) {
+        log_line(L"This camera can't aim from its picture; use the target fields or the travel meters.", true);
+        return;
+    }
+    wchar_t text[96];
+    swprintf(text, 96, L"%.2f %s, %.2f %s of the picture", std::fabs(point.first), point.first < 0 ? L"left" : L"right",
+             std::fabs(point.second), point.second < 0 ? L"down" : L"up");
+    std::wstring describe = text;
+    link_move_in_view(g->link, point.first, point.second, [describe](LinkResult result) {
+        if (result.ok) {
+            log_line(L"Move toward the picture point accepted: " + describe + L" (movement may still be in progress)");
+            g->next_refresh = 0;
+            camera_moved();
+        } else if (result.link_lost) {
+            link_lost(result.error);
+            return;
+        } else {
+            log_line(L"Move toward the picture point failed: " + result.error, true);
+        }
+        update_controls();
+    });
+    update_controls();
+}
+
 void send(const Target &t, const std::wstring &what) {
     if (link_busy(g->link)) log_line(L"Request in progress; move queued behind it");
     std::wstring summary;
@@ -636,6 +770,7 @@ void send(const Target &t, const std::wstring &what) {
         if (result.ok) {
             log_line(what + L" accepted: " + summary + L" (movement may still be in progress)");
             g->next_refresh = 0;
+            camera_moved();
         } else if (result.link_lost) {
             link_lost(result.error);
             return;
@@ -649,6 +784,10 @@ void send(const Target &t, const std::wstring &what) {
 
 void send_move() {
     if (g->state != State::Connected) return;
+    if (auto point = plane_state(g->plane).picture_target) {
+        send_picture_move(*point);
+        return;
+    }
     std::wstring error;
     Target t = parse_target(&error);
     if (!error.empty()) {
@@ -689,8 +828,10 @@ void return_to_start() {
 void stop_motion() {
     if (g->state != State::Connected) return;
     link_stop(g->link, [](LinkResult result) {
-        if (result.ok) log_line(L"Stop accepted");
-        else if (result.link_lost) { link_lost(result.error); return; }
+        if (result.ok) {
+            log_line(L"Stop accepted");
+            camera_moved();
+        } else if (result.link_lost) { link_lost(result.error); return; }
         else log_line(L"Stop failed: " + result.error, true);
         g->next_refresh = 0;
     });
@@ -721,7 +862,9 @@ void show_help() {
                 L"\u2022 ONVIF: the camera's advertised absolute space (commonly pan/tilt \u22121\u20261, zoom 0\u20261; not degrees).\n"
                 L"\u2022 Axis: pan/tilt in degrees; zoom is an integer in the native range.\n\n"
                 L"Leave a target field blank (or type x) to keep that axis unchanged.\n"
-                L"Click the position plane to aim, double-click to aim and move.\n"
+                L"The camera picture shows what the camera sees: click a point to aim at it, double-click (or Move) to turn "
+                L"the camera so that point comes to the centre. A new picture comes once the camera stops, or with Refresh "
+                L"Picture (Ctrl+Shift+R).\n"
                 L"Drag along a travel meter to aim that axis alone, double-click it to aim and move.\n\n"
                 L"Starting coordinates are the first reading after connecting and stay fixed. "
                 L"Return to Start (Ctrl+B) sends an absolute move there.\n"
@@ -851,6 +994,7 @@ void layout() {
     auto inner = [&](const RECT &p) { return RECT{p.left + S(12), p.top + S(28), p.right - S(12), p.bottom - S(10)}; };
     RECT pi = inner(g->plane_panel);
     move(g->plane, pi.left, pi.top, pi.right - pi.left, pi.bottom - pi.top);
+    move(g->refresh_picture, g->plane_panel.right - S(8) - S(24), g->plane_panel.top + S(4), S(24), S(20));
     RECT mi = inner(g->meters_panel);
     int mh = (mi.bottom - mi.top) / 3;
     move(g->meter_pan, mi.left, mi.top, mi.right - mi.left, mh);
@@ -985,7 +1129,7 @@ void paint(HDC dc, const RECT &rc) {
         text(gr, label, RectF(f.X, f.Y + SF(4), f.Width, f.Height), 11, chip_color, true, FontStyleBold, StringAlignmentCenter);
     }
 
-    panel(gr, g->plane_panel, L"POSITION PLANE // XY \u2014 CLICK TO AIM, DOUBLE-CLICK TO MOVE");
+    panel(gr, g->plane_panel, L"CAMERA PICTURE // VIEW \u2014 CLICK TO AIM, DOUBLE-CLICK TO MOVE THERE");
     panel(gr, g->meters_panel, L"AXIS TRAVEL // % OF ADVERTISED LIMITS \u2014 DRAG TO AIM, DOUBLE-CLICK TO MOVE");
     panel(gr, g->readout_panel, L"CURRENT COORDINATES");
     panel(gr, g->target_panel, L"TARGET // ABSOLUTE MOVE");
@@ -1050,6 +1194,37 @@ void draw_button(const DRAWITEMSTRUCT &d) {
     bool check = id == ID_SAVE_SSH || id == ID_SAVE_CAM;
 
     RECT r = d.rcItem;
+    if (id == ID_REFRESH_PICTURE) {  // a circular arrow, framed while pressed
+        HDC mem = CreateCompatibleDC(d.hDC);
+        HBITMAP bitmap = CreateCompatibleBitmap(d.hDC, r.right, r.bottom);
+        HGDIOBJ old = SelectObject(mem, bitmap);
+        {
+            Graphics gr(mem);
+            gr.SetSmoothingMode(SmoothingModeAntiAlias);
+            gr.Clear(C(t.panel));
+            if (pressed) {
+                RECT inset = {0, 0, r.right - 1, r.bottom - 1};
+                rounded(gr, inset, SF(4), blend(t.panel, t.text, 0.12), t.border);
+            }
+            COLORREF ink = disabled ? blend(t.panel, t.text, 0.4) : t.text;
+            float cx = r.right / 2.0f, cy = r.bottom / 2.0f, radius = SF(5.5f);
+            Pen pen(C(ink), SF(1.6f));
+            pen.SetStartCap(LineCapRound);
+            pen.SetEndCap(LineCapRound);
+            // GDI+ angles run clockwise from 3 o'clock: from the arrow's end at -60 degrees, back round to 0 degrees.
+            gr.DrawArc(&pen, cx - radius, cy - radius, 2 * radius, 2 * radius, -60, -300);
+            PointF tip(cx + radius * 0.5f, cy - radius * 0.8660254f), along(0.8660254f, 0.5f), across(-0.5f, 0.8660254f);
+            auto at = [&](float a, float b) { return PointF(tip.X + along.X * a + across.X * b, tip.Y + along.Y * a + across.Y * b); };
+            PointF head[] = {at(SF(3.2f), 0), at(-SF(1.2f), SF(3)), at(-SF(1.2f), -SF(3))};
+            SolidBrush brush(C(ink));
+            gr.FillPolygon(&brush, head, 3);
+        }
+        BitBlt(d.hDC, 0, 0, r.right, r.bottom, mem, 0, 0, SRCCOPY);
+        SelectObject(mem, old);
+        DeleteObject(bitmap);
+        DeleteDC(mem);
+        return;
+    }
     if (check) {
         bool on = id == ID_SAVE_SSH ? g->save_ssh_on : g->save_cam_on;
         HDC mem = CreateCompatibleDC(d.hDC);
@@ -1170,6 +1345,7 @@ HMENU build_menu() {
     AppendMenuW(camera, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(camera, connected ? on : off, CMD_REFRESH, L"Refresh Position\tCtrl+R");
     AppendMenuW(camera, connected ? on : off, CMD_PAUSE, g->paused ? L"Resume Auto-Refresh\tCtrl+P" : L"Pause Auto-Refresh\tCtrl+P");
+    AppendMenuW(camera, connected ? on : off, CMD_REFRESH_PICTURE, L"Refresh Picture\tCtrl+Shift+R");
     AppendMenuW(camera, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(camera, connected ? on : off, CMD_WEB, L"Open Camera Web Interface\tCtrl+L");
     AppendMenuW(camera, MF_SEPARATOR, 0, nullptr);
@@ -1266,6 +1442,7 @@ void command(int id) {
             InvalidateRect(id == ID_SAVE_SSH ? g->save_ssh : g->save_cam, nullptr, FALSE);
             return;
         case CMD_PAUSE: toggle_pause(); return;
+        case ID_REFRESH_PICTURE: case CMD_REFRESH_PICTURE: take_picture(); return;
         case CMD_QUIT: case CMD_CLOSE: PostMessageW(g->hwnd, WM_CLOSE, 0, 0); return;
         case CMD_MINIMIZE: ShowWindow(g->hwnd, SW_MINIMIZE); return;
         case CMD_MAXIMIZE: ShowWindow(g->hwnd, IsZoomed(g->hwnd) ? SW_RESTORE : SW_MAXIMIZE); return;
@@ -1388,15 +1565,11 @@ void create_children() {
                              WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 0, 0, 10,
                              10, g->hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_LOG)), g->instance, nullptr);
 
+    g->refresh_picture = make_button(L"Refresh Picture", ID_REFRESH_PICTURE);
     PlaneState &plane = plane_state(g->plane);
-    plane.on_aim = [](double pan, double tilt) {
-        SetWindowTextW(g->target_pan, format_value(pan).c_str());
-        SetWindowTextW(g->target_tilt, format_value(tilt).c_str());
-        update_target_markers();
-    };
-    plane.on_aim_and_move = [](double pan, double tilt) {
-        SetWindowTextW(g->target_pan, format_value(pan).c_str());
-        SetWindowTextW(g->target_tilt, format_value(tilt).c_str());
+    plane.on_picture_aim = [](float x, float y) { aim_in_picture(x, y); };
+    plane.on_picture_aim_and_move = [](float x, float y) {
+        aim_in_picture(x, y);
         send_move();
     };
     for (auto [meter, field] : {std::pair{g->meter_pan, g->target_pan}, std::pair{g->meter_tilt, g->target_tilt},
@@ -1418,7 +1591,7 @@ void create_children() {
         {FCONTROL | FSHIFT | FVIRTKEY, 'L', CMD_LOGINS},
         {FCONTROL | FVIRTKEY, VK_RETURN, CMD_MOVE}, {FCONTROL | FVIRTKEY, 'B', CMD_RETURN},
         {FCONTROL | FVIRTKEY, VK_OEM_PERIOD, CMD_STOP}, {FCONTROL | FVIRTKEY, 'R', CMD_REFRESH},
-        {FCONTROL | FVIRTKEY, 'P', CMD_PAUSE}, {FCONTROL | FVIRTKEY, 'L', CMD_WEB}, {FVIRTKEY, VK_F1, CMD_HELP},
+        {FCONTROL | FVIRTKEY, 'P', CMD_PAUSE}, {FCONTROL | FSHIFT | FVIRTKEY, 'R', CMD_REFRESH_PICTURE}, {FCONTROL | FVIRTKEY, 'L', CMD_WEB}, {FVIRTKEY, VK_F1, CMD_HELP},
         {FCONTROL | FALT | FVIRTKEY, '1', CMD_THEME + 0}, {FCONTROL | FALT | FVIRTKEY, '2', CMD_THEME + 1},
         {FCONTROL | FALT | FVIRTKEY, '3', CMD_THEME + 2}, {FCONTROL | FALT | FVIRTKEY, '4', CMD_THEME + 3},
         {FCONTROL | FALT | FVIRTKEY, '5', CMD_THEME + 4},
@@ -1435,6 +1608,7 @@ void create_children() {
                 L"Logins (Ctrl+Shift+L).");
     add_tooltip(g->tips, g->save_ssh,
                 L"Save login \u2014 Once connected, save this SSH username and password to the saved SSH logins.");
+    add_tooltip(g->tips, g->refresh_picture, L"Refresh Picture: take a new picture of the camera's view now (Ctrl+Shift+R)");
     add_tooltip(g->tips, g->save_cam,
                 L"Save login \u2014 Once connected, save this camera username and password to the saved camera logins.");
     reload_logins();
@@ -1455,7 +1629,7 @@ void create_children() {
 // PTZ_SNAPSHOT_USE_LOGIN fills the camera fields from the first saved camera login, and
 // PTZ_SNAPSHOT_LOGINS_PATH also saves a picture of Manage Logins. The window never takes focus.
 
-enum : int { kSnapStart = 50, kSnapMove, kSnapAim, kSnapCapture };
+enum : int { kSnapStart = 50, kSnapMove, kSnapAim, kSnapCapture, kPicAim, kPicMove, kPicMoving, kPicCapture };
 
 bool save_png(HWND window, const std::wstring &path) {
     RECT r;
@@ -1495,7 +1669,26 @@ void snapshot_step(int step) {
             if (_wgetenv(L"PTZ_SNAPSHOT_SAVE_LOGIN")) g->save_cam_on = true;
             if (_wgetenv(L"PTZ_SNAPSHOT_USE_LOGIN")) choose_saved_login(LoginStore::Camera, 0);
             connect();
-            SetTimer(g->hwnd, kSnapMove, 3000, nullptr);
+            // PTZ_SNAPSHOT_PICTURE: aim at a point of the picture (a picture of that is saved to PTZ_SNAPSHOT_AIM_PATH),
+            // move there, and save the window once the new picture has come.
+            SetTimer(g->hwnd, _wgetenv(L"PTZ_SNAPSHOT_PICTURE") ? kPicAim : kSnapMove, 3000, nullptr);
+            return;
+        case kPicAim:
+            if (plane_state(g->plane).on_picture_aim) plane_state(g->plane).on_picture_aim(0.45f, 0.3f);
+            SetTimer(g->hwnd, kPicMove, 400, nullptr);
+            return;
+        case kPicMove:
+            if (const wchar_t *path = _wgetenv(L"PTZ_SNAPSHOT_AIM_PATH")) save_png(g->hwnd, path);
+            send_move();
+            SetTimer(g->hwnd, kPicMoving, 1000, nullptr);
+            return;
+        case kPicMoving:
+            if (const wchar_t *path = _wgetenv(L"PTZ_SNAPSHOT_MOVING_PATH")) save_png(g->hwnd, path);
+            SetTimer(g->hwnd, kPicCapture, 5600, nullptr);
+            return;
+        case kPicCapture:
+            save_png(g->hwnd, _wgetenv(L"PTZ_SNAPSHOT_PATH"));
+            PostMessageW(g->hwnd, WM_CLOSE, 0, 0);
             return;
         case kSnapMove:
             SetWindowTextW(g->target_pan, L"0.55");
@@ -1559,7 +1752,7 @@ LRESULT CALLBACK console_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             (*reinterpret_cast<std::function<void()> *>(lp))();
             return 0;
         case WM_TIMER:
-            if (wp >= kSnapStart && wp <= kSnapCapture) {
+            if (wp >= kSnapStart && wp <= kPicCapture) {
                 KillTimer(hwnd, wp);
                 snapshot_step(static_cast<int>(wp));
                 return 0;
@@ -1630,8 +1823,14 @@ LRESULT CALLBACK console_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (HIWORD(wp) == EN_CHANGE) {
                 HWND from = reinterpret_cast<HWND>(lp);
-                if (std::find(g->target_fields.begin(), g->target_fields.end(), from) != g->target_fields.end())
+                if (std::find(g->target_fields.begin(), g->target_fields.end(), from) != g->target_fields.end()) {
                     update_target_markers();
+                    // Typing an absolute target takes over from a point of the picture.
+                    if (GetFocus() == from && plane_state(g->plane).picture_target) {
+                        plane_state(g->plane).picture_target.reset();
+                        InvalidateRect(g->plane, nullptr, FALSE);
+                    }
+                }
                 // Typing a username or password means it's no longer the saved login.
                 if (!g->filling && (from == g->ssh_user || from == g->ssh_password)) SendMessageW(g->ssh_login, CB_SETCURSEL, 0, 0);
                 if (!g->filling && (from == g->cam_user || from == g->cam_password)) SendMessageW(g->cam_login, CB_SETCURSEL, 0, 0);
@@ -1692,6 +1891,7 @@ HWND create_console(HINSTANCE instance, int show) {
                                 nullptr, instance, nullptr);
     // A snapshot test copy never takes focus from the desktop the user is working on.
     ShowWindow(hwnd, _wgetenv(L"PTZ_SNAPSHOT_PATH") ? SW_SHOWNOACTIVATE : show);
+    fit_window_to_picture();
     UpdateWindow(hwnd);
     return hwnd;
 }
