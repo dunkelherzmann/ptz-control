@@ -27,6 +27,9 @@ struct PlaneState {
     AxisRange pan, tilt;
     std::optional<Snapshot> current, starting;
     std::optional<double> target_pan, target_tilt;
+    // The target of a move under way: the plane is centred on it until the camera stops, so it doesn't wait for the
+    // readings; the crosshair still shows the readings, closing in on the centre.
+    std::optional<QPointF> heading;  // pan, tilt
     bool enabled = false;
     std::function<void(double, double)> on_aim, on_aim_and_move;
 };
@@ -48,7 +51,7 @@ protected:
 
 private:
     QRectF plot_rect() const;   // the picture's frame
-    QRectF range_rect() const;  // where the whole range lies: the picture's size, centred on the current position
+    QRectF range_rect() const;  // where the whole range lies: the picture's size, centred on the heading or current position
     std::optional<QPointF> view_point(double pan, double tilt) const;    // camera units -> widget pixels
     std::optional<QPointF> camera_point(QPointF at) const;               // widget pixels -> pan, tilt
     void aim(QPointF at, bool commit);

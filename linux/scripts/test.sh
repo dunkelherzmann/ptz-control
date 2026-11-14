@@ -101,11 +101,13 @@ PICTURE="$SHOTS/flatpak-picture.png"
 rm -f "$PICTURE" "$SHOTS/flatpak-picture-aim.png" "$SHOTS/flatpak-picture-moving.png"
 run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PICTURE=1 --env=PTZ_SNAPSHOT_PATH="$PICTURE" \
     --env=PTZ_SNAPSHOT_AIM_PATH="$SHOTS/flatpak-picture-aim.png" --env=PTZ_SNAPSHOT_MOVING_PATH="$SHOTS/flatpak-picture-moving.png" \
-    --env=PTZ_SNAPSHOT_LIVE_PATH="$WORK/live3.txt"
+    --env=PTZ_SNAPSHOT_LIVE_PATH="$WORK/live3.txt" --env=PTZ_SNAPSHOT_HEADING_PATH="$WORK/heading3.txt"
 check "run 3 took a picture, then a new one after the move" \
     "$([ "$(grep -c '^mock: picture' "$WORK/mock-still.log" || true)" -ge 2 ] && echo 0 || echo 1)"
 check "run 3 moved to the pan and tilt aimed at on the range plane" \
     "$(grep -q '^mock: onvif absolute move to pan=0.4500 tilt=0.3000' "$WORK/mock-still.log" && echo 0 || echo 1)"
+check "run 3 centred the plane on the target while the camera moved ($(cat "$WORK/heading3.txt" 2>/dev/null))" \
+    "$(grep -qx '0.45 0.3' "$WORK/heading3.txt" 2>/dev/null; echo $?)"
 check "run 3 fell back to still pictures" "$(grep -qx 'no live view' "$WORK/live3.txt" 2>/dev/null && echo 0 || echo 1)"
 check "camera-picture pictures saved" "$([ -s "$PICTURE" ] && [ -s "$SHOTS/flatpak-picture-aim.png" ] && echo 0 || echo 1)"
 observed 3

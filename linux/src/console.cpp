@@ -33,6 +33,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <cmath>
 #include <deque>
 #include <QPointer>
@@ -988,6 +989,8 @@ private:
             live_codec_.clear();
             ++live_id_;
             picture_due_ = 0;
+            heading_since_ = 0;
+            plane_->state.heading.reset();
             show_message("Disconnected.", false);
             log_line("Disconnected");
             update_controls();
@@ -1046,21 +1049,29 @@ private:
         update_controls();
     }
 
+    // Whether the camera has stopped since `since`: a reading taken after it that says it isn't moving, or, when the
+    // camera doesn't say, three seconds (or 30 at most).
+    bool stopped_since(qint64 since) const {
+        qint64 age = QDateTime::currentMSecsSinceEpoch() - since;
+        bool reported = current_ && !current_->move_status.isEmpty();
+        bool stopped = last_read_ > since + 800 && reported && current_->move_status != "MOVING";
+        return stopped || (age >= 3000 && (!reported || paused_)) || age >= 30000;
+    }
+
     void tick() {
         if (state_ != State::Connected || link_busy(link_)) return;
         qint64 now = QDateTime::currentMSecsSinceEpoch();
-        if (picture_due_) {
-            // A fresh picture once the camera has stopped: a reading taken after the move that says it isn't moving,
-            // or, when the camera doesn't say, three seconds.
-            qint64 age = now - picture_due_;
-            bool reported = current_ && !current_->move_status.isEmpty();
-            bool stopped = last_read_ > picture_due_ + 800 && reported && current_->move_status != "MOVING";
-            if (stopped || (age >= 3000 && (!reported || paused_)) || age >= 30000) {
-                picture_due_ = 0;
-                if (plane_->state.live.isEmpty()) {
-                    take_picture();
-                    return;
-                }
+        if (heading_since_ && stopped_since(heading_since_)) {
+            // The camera has arrived: centre on where it says it is, which corrects a move that stopped short.
+            heading_since_ = 0;
+            plane_->state.heading.reset();
+            plane_->update();
+        }
+        if (picture_due_ && stopped_since(picture_due_)) {
+            picture_due_ = 0;  // a fresh still picture once the camera has stopped
+            if (plane_->state.live.isEmpty()) {
+                take_picture();
+                return;
             }
         }
         if (!paused_ && now >= next_refresh_) refresh();
@@ -1088,10 +1099,11 @@ private:
         QString summary;
         for (auto [name, v] : {std::pair{"pan", t.pan}, std::pair{"tilt", t.tilt}, std::pair{"zoom", t.zoom}})
             if (v) summary += (summary.isEmpty() ? "" : ", ") + QString(name) + "=" + format_value(*v);
-        link_move(link_, t.pan, t.tilt, t.zoom, [this, what, summary](LinkResult result) {
+        link_move(link_, t.pan, t.tilt, t.zoom, [this, t, what, summary](LinkResult result) {
             if (result.ok) {
                 log_line(what + " accepted: " + summary + " (movement may still be in progress)");
                 next_refresh_ = 0;
+                head_to(t);
                 camera_moved();
             } else if (result.link_lost) {
                 link_lost(result.error);
@@ -1102,6 +1114,19 @@ private:
             update_controls();
         });
         update_controls();
+    }
+
+    // Centres the plane on a move's target at once (an axis left unchanged keeps its reading), without waiting for the
+    // camera's readings; they take over again once it stops.
+    void head_to(const Target &t) {
+        auto clamp = [](double v, const AxisRange &r) { return r.available && r.max > r.min ? std::clamp(v, r.min, r.max) : v; };
+        std::optional<double> pan = t.pan, tilt = t.tilt;
+        if (!pan && current_ && current_->pan) pan = current_->pan->value;
+        if (!tilt && current_ && current_->tilt) tilt = current_->tilt->value;
+        if (!pan || !tilt || !info_) return;
+        plane_->state.heading = QPointF(clamp(*pan, info_->pan), clamp(*tilt, info_->tilt));
+        heading_since_ = QDateTime::currentMSecsSinceEpoch();
+        plane_->update();
     }
 
     void send_move() {
@@ -1150,6 +1175,9 @@ private:
         link_stop(link_, [this](LinkResult result) {
             if (result.ok) {
                 log_line("Stop accepted");
+                heading_since_ = 0;
+                plane_->state.heading.reset();  // centre on where the camera stopped
+                plane_->update();
                 camera_moved();
             } else if (result.link_lost) { link_lost(result.error); return; }
             else log_line("Stop failed: " + result.error, true);
@@ -1668,6 +1696,13 @@ private:
         });
         QTimer::singleShot(4400, this, [this] {
             if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_MOVING_PATH"); !path.isEmpty()) grab().save(path);
+            if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_HEADING_PATH"); !path.isEmpty()) {
+                // where the plane is centred while it moves
+                const auto &h = plane_->state.heading;
+                QFile file(path);
+                if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                    file.write((h ? format_value(h->x()) + " " + format_value(h->y()) : QString("none")).toUtf8());
+            }
         });
         QTimer::singleShot(10000, this, [this] {
             grab().save(qEnvironmentVariable("PTZ_SNAPSHOT_PATH"));
@@ -1695,6 +1730,7 @@ private:
     bool live_starting_ = false;  // the live video: starting, or playing with its codec ("H.264")
     QString live_codec_;
     int live_id_ = 0;
+    qint64 heading_since_ = 0;  // when a move was accepted: the plane is centred on its target until the camera stops
     qint64 picture_due_ = 0, last_read_ = 0;  // when the camera last moved (a fresh picture is due), the last reading
     int route_ = 0, vendor_ = 0;
     std::deque<std::pair<QString, bool>> log_lines_;
