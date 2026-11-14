@@ -94,11 +94,19 @@ RectF picture_rect(const PlaneState &s, float w, float h) {
     return RectF(std::round(area.X + (area.Width - pw2) / 2), std::round(area.Y + (area.Height - ph2) / 2), pw2, ph2);
 }
 
-// Where the whole range lies: the picture's size, shifted so the current position is at the picture's centre (the
-// picture itself until there is a position inside the range).
+// Where the whole range lies: the picture's size, shifted so the target of a move under way, or else the current
+// position, is at the picture's centre (the picture itself until there is a position inside the range).
 RectF range_rect(const PlaneState &s, const RectF &r) {
-    if (!s.current || !s.current->pan || !s.current->tilt) return r;
-    auto fx = s.pan_range.fraction(s.current->pan->value), fy = s.tilt_range.fraction(s.current->tilt->value);
+    std::optional<double> pan, tilt;
+    if (s.heading) {
+        pan = s.heading->first;
+        tilt = s.heading->second;
+    } else if (s.current && s.current->pan && s.current->tilt) {
+        pan = s.current->pan->value;
+        tilt = s.current->tilt->value;
+    }
+    if (!pan || !tilt) return r;
+    auto fx = s.pan_range.fraction(*pan), fy = s.tilt_range.fraction(*tilt);
     if (!fx || !fy) return r;
     float x = r.X + r.Width / 2 - r.Width * static_cast<float>(*fx);
     float bottom = r.Y + r.Height / 2 + r.Height * static_cast<float>(*fy);
