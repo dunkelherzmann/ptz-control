@@ -12,28 +12,21 @@
 
 void instruments_set_theme(const Theme &theme);
 
-// The camera's live video, or a still picture of its view, with a view grid on top. The centre is where the camera points, and a point of the
-// picture is aimed at in view units (-1..1 from edge to edge, up positive).
+// The camera's live video, or a still picture of its view, with the pan/tilt range plane on top: the whole range spans
+// the picture (pan across, tilt up), with its grid, zero axes and limits (hidden with Show Grid off), the trail of
+// recent positions, the starting position, the target and the current position. Click or drag to aim at a pan and
+// tilt; double-click to aim and move. Only measured positions are drawn: no reading, no marker.
 struct PlaneState {
     QImage picture;
     QDateTime picture_taken;
     QString live;                // set while the picture is the camera's live video, e.g. "H.264 · 1920 × 1080"
     bool picture_stale = false;  // the camera has moved since the picture was taken
     QString picture_note;        // shown in place of a picture: why there is none
-    bool can_aim = false;        // the camera moves within its view, or its view can be measured
-    // Where the picture points and how much of the range it spans, once its view is measured: pan and tilt are then
-    // drawn over the picture, and a click aims at absolute coordinates.
-    struct Overlay {
-        double pan, tilt;
-        ViewScale scale;
-    };
-    std::optional<Overlay> overlay;
-    bool measuring = false;      // the camera is turning a little and back to measure its view
+    bool show_grid = true;
+    AxisRange pan, tilt;
     std::optional<Snapshot> current, starting;
     std::optional<double> target_pan, target_tilt;
-    std::optional<QPointF> picture_target;  // without a measured view: the point aimed at, in view units
     bool enabled = false;
-    std::function<void(QPointF)> on_picture_aim, on_picture_aim_and_move;
     std::function<void(double, double)> on_aim, on_aim_and_move;
 };
 
@@ -41,6 +34,8 @@ class PlaneView : public QWidget {
 public:
     explicit PlaneView(QWidget *parent = nullptr);
     PlaneState state;
+    void reset_trail() { trail_.clear(); }
+    void record();  // append the current measurement (or a gap) to the trail
 
 protected:
     void paintEvent(QPaintEvent *) override;
@@ -51,13 +46,13 @@ protected:
     void leaveEvent(QEvent *) override;
 
 private:
-    QRectF picture_rect() const;
-    QPointF picture_point(QPointF at) const;  // widget pixels -> view units
-    QPointF widget_point(QPointF view) const;  // view units -> widget pixels
-    std::optional<QPointF> view_point(double pan, double tilt) const;  // with a measured view
+    QRectF plot_rect() const;  // the picture's frame, which the range plane spans
+    std::optional<QPointF> view_point(double pan, double tilt) const;    // camera units -> widget pixels
+    std::optional<QPointF> camera_point(QPointF at) const;               // widget pixels -> pan, tilt
     void aim(QPointF at, bool commit);
 
-    std::optional<QPointF> hover_;  // widget pixels
+    std::vector<std::optional<QPointF>> trail_;  // camera units; nullopt marks a gap
+    std::optional<QPointF> hover_;               // widget pixels
     bool dragging_ = false;
 };
 

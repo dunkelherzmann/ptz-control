@@ -45,6 +45,7 @@ struct Settings {
     std::wstring ssh_host, ssh_user, ssh_identity;
     int ssh_port = 22;
     int theme = 0;
+    bool show_grid = true;  // View > Show Grid
 
     static Settings load();
     void save() const;
@@ -66,16 +67,9 @@ struct Reading {
     std::wstring text;
 };
 
-// How much of the pan/tilt range the picture spans: the turn that brings a point at the picture's right (top) edge
-// to its centre. A point (x, y) of the picture, -1..1 with up positive, lies at pan + x * pan_per_x, tilt + y * tilt_per_y.
-struct ViewScale {
-    double pan_per_x = 0, tilt_per_y = 0;
-};
-
 struct Snapshot {
     std::optional<Reading> pan, tilt, zoom;
     std::wstring move_status;
-    std::optional<ViewScale> view_scale;  // the view measured at this reading's zoom
     bool empty() const { return !pan && !tilt && !zoom; }
     bool operator==(const Snapshot &o) const;  // the readings only
 };
@@ -84,7 +78,6 @@ struct CameraInfo {
     std::wstring name, units;
     AxisRange pan, tilt, zoom;
     bool zoom_integer = false;
-    bool view_moves = false;  // a point of the picture can be brought to its centre
 };
 
 struct LinkResult {
@@ -117,10 +110,6 @@ void link_move(CameraLink *link, std::optional<double> pan, std::optional<double
 void link_stop(CameraLink *link, std::function<void(LinkResult)> done);
 // A still picture of the camera's current view (JPEG or PNG bytes).
 void link_picture(CameraLink *link, std::function<void(LinkResult, std::string bytes)> done);
-// Brings the point (x, y) of the last picture to its centre; x and y run from -1 to 1, up positive.
-// Turns the camera a little on each axis and back to measure how much of its range the picture spans.
-void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done);
-void link_move_in_view(CameraLink *link, double x, double y, std::function<void(LinkResult)> done);
 // The camera's live video: `picture` gets the newest decoded frame and `ended` the reason it stopped by itself or
 // can't be decoded, both on the UI thread; `done` gets a description such as "H.264 over RTSP".
 struct LiveFrame {
@@ -150,8 +139,10 @@ HWND create_plane(HWND parent, int id);
 HWND create_meter(HWND parent, int id, const wchar_t *title);
 
 namespace Gdiplus { class Bitmap; }
-// The camera's live video, or a still picture of its view, with a view grid on top. The centre is where the camera
-// points, and a point of the picture is aimed at in view units (-1..1 from edge to edge, up positive).
+// The camera's live video, or a still picture of its view, with the pan/tilt range plane on top: the whole range spans
+// the picture (pan across, tilt up), with its grid, zero axes and limits (hidden with Show Grid off), the trail of
+// recent positions, the starting position, the target and the current position. Click or drag to aim at a pan and
+// tilt; double-click to aim and move. Only measured positions are drawn: no reading, no marker.
 struct PlaneState {
     std::shared_ptr<Gdiplus::Bitmap> picture;
     int picture_width = 0, picture_height = 0;
@@ -159,21 +150,14 @@ struct PlaneState {
     bool picture_stale = false;  // the camera has moved since the picture was taken
     std::wstring picture_note;   // shown in place of a picture: why there is none
     std::wstring live;           // set while the picture is the camera's live video, e.g. "H.264 · 1920 × 1080"
-    bool can_aim = false;        // the camera moves within its view, or its view can be measured
-    // Where the picture points and how much of the range it spans, once its view is measured: pan and tilt are then
-    // drawn over the picture, and a click aims at absolute coordinates.
-    struct Overlay {
-        double pan, tilt;
-        ViewScale scale;
-    };
-    std::optional<Overlay> overlay;
-    bool measuring = false;      // the camera is turning a little and back to measure its view
+    bool show_grid = true;
+    AxisRange pan_range, tilt_range;
     std::optional<Snapshot> current, starting;
     std::optional<double> target_pan, target_tilt;
-    std::optional<std::pair<float, float>> picture_target;  // without a measured view: the point aimed at, view units
+    std::vector<std::optional<std::pair<double, double>>> trail;  // pan, tilt; empty entries mark gaps in measurements
     bool enabled = false;
-    std::function<void(float, float)> on_picture_aim, on_picture_aim_and_move;
     std::function<void(double, double)> on_aim, on_aim_and_move;
+    void record_trail();  // after `current` changes: the last 120 positions measured
 };
 PlaneState &plane_state(HWND plane);
 bool plane_set_picture(HWND plane, const std::string &bytes);  // JPEG or PNG; false when it can't be read

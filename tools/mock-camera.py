@@ -4,12 +4,9 @@
 Speaks ONVIF (SOAP 1.2, WS-Security UsernameToken digest is verified) and
 Axis VAPIX ptz.cgi (HTTP Digest is verified) on one port, and serves a tiny
 web page at /. Positions glide toward each AbsoluteMove target. Pictures of a
-drawn scene (PNG, standard library only) follow the camera's position and zoom,
-and moves within the view (ONVIF's field-of-view space, Axis center=) aim at a
-point of the picture. Live video comes over RTSP (TCP interleaved, Digest sign-in)
-on --rtsp-port, looping a short H.264 or H.265 clip from tests/fixtures. --no-fov
-plays an ONVIF camera without the field-of-view space; --plain-png sends
-uncompressed pictures a test can decode by itself.
+drawn scene (PNG, standard library only) follow the camera's position and zoom.
+Live video comes over RTSP (TCP interleaved, Digest sign-in) on --rtsp-port,
+looping a short H.264 or H.265 clip from tests/fixtures.
 
     python3 tools/mock-camera.py --port 8080 --user admin --password secret
 """
@@ -35,8 +32,6 @@ parser.add_argument("--password", default="secret")
 parser.add_argument("--rtsp-port", type=int, default=0, help="default: --port + 100")
 parser.add_argument("--video", choices=("h264", "h265", "none"), default="h264",
                     help="none: the stream address leads nowhere, as on a camera whose video can't be reached")
-parser.add_argument("--no-fov", action="store_true", help="ONVIF: don't offer moves in the field-of-view space")
-parser.add_argument("--plain-png", action="store_true", help="uncompressed pictures, for tests that decode them")
 args = parser.parse_args()
 args.rtsp_port = args.rtsp_port or args.port + 100
 
@@ -75,7 +70,6 @@ def fault(reason, code="ter:NotAuthorized"):
 
 
 PT_SPACE = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace"
-FOV_SPACE = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov"
 PICTURE_W, PICTURE_H = 480, 270
 
 
@@ -89,14 +83,6 @@ def axis_view():
     """Half the view's width and height in degrees at the current zoom."""
     half = 30 * (1 - 0.9 * (axis["zoom"] - 1) / 9998)
     return half, half * PICTURE_H / PICTURE_W
-
-
-def aim_in_view(state, x, y, half_w, half_h, pan_range, tilt_range):
-    """Glide so the point (x, y) of the picture (-1..1, up positive) comes to its centre."""
-    glide(state, ("pan", "tilt", "zoom"))
-    pan = min(max(state["pan"] + x * half_w, pan_range[0]), pan_range[1])
-    tilt = min(max(state["tilt"] + y * half_h, tilt_range[0]), tilt_range[1])
-    state.update(start=dict(state), target={"pan": pan, "tilt": tilt}, since=time.time())
 
 
 def picture(pan, tilt, half_w, half_h, scale):
@@ -130,7 +116,7 @@ def picture(pan, tilt, half_w, half_h, scale):
     def chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
     header = struct.pack(">IIBBBBB", PICTURE_W, PICTURE_H, 8, 2, 0, 0, 0)
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(rows), 0 if args.plain_png else 6)) + chunk(b"IEND", b"")
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b"")
 Z_SPACE = "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"
 
 
@@ -198,11 +184,7 @@ class Handler(BaseHTTPRequestHandler):
                 "<tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:AbsolutePanTiltPositionSpace>"
                 f"<tt:AbsoluteZoomPositionSpace><tt:URI>{Z_SPACE}</tt:URI>"
                 "<tt:XRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:XRange></tt:AbsoluteZoomPositionSpace>"
-                + ("" if args.no_fov else
-                   f"<tt:RelativePanTiltTranslationSpace><tt:URI>{FOV_SPACE}</tt:URI>"
-                   "<tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange>"
-                   "<tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:RelativePanTiltTranslationSpace>")
-                + "</tt:Spaces></tptz:PTZConfigurationOptions></tptz:GetConfigurationOptionsResponse>"))
+                "</tt:Spaces></tptz:PTZConfigurationOptions></tptz:GetConfigurationOptionsResponse>"))
         if op == "GetStatus":
             with lock:
                 moving = glide(onvif, ("pan", "tilt", "zoom"))
@@ -238,15 +220,6 @@ class Handler(BaseHTTPRequestHandler):
                 "</tt:Uri><tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>"
                 "<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot><tt:Timeout>PT0S</tt:Timeout></trt:MediaUri>"
                 "</trt:GetStreamUriResponse>"))
-        if op == "RelativeMove":
-            pt = re.search(r'<(?:\w+:)?PanTilt x="([^"]+)" y="([^"]+)" space="([^"]+)"', xml)
-            if not pt or pt.group(3) != FOV_SPACE or args.no_fov:
-                return self.reply(400, fault("Unsupported translation space", "ter:InvalidArgVal"))
-            with lock:
-                half_w, half_h = onvif_view()
-                aim_in_view(onvif, float(pt.group(1)), float(pt.group(2)), half_w, half_h, (-1, 1), (-1, 1))
-                print(f"mock: onvif view move to pan={onvif['target']['pan']:.4f} tilt={onvif['target']['tilt']:.4f}")
-            return self.reply(200, soap("<tptz:RelativeMoveResponse/>"))
         if op == "Stop":
             with lock:
                 glide(onvif, ("pan", "tilt", "zoom"))
@@ -298,13 +271,6 @@ class Handler(BaseHTTPRequestHandler):
                 body = "MinPan=-180\nMaxPan=180\nMinTilt=-90\nMaxTilt=10\nMinZoom=1\nMaxZoom=9999\n"
             elif q.get("query") == "position":
                 body = f"pan={axis['pan']:.4f}\ntilt={axis['tilt']:.4f}\nzoom={round(axis['zoom'])}\n"
-            elif "center" in q:
-                x, y = (float(v) for v in q["center"].split(","))
-                w, h = float(q.get("imagewidth", PICTURE_W)), float(q.get("imageheight", PICTURE_H))
-                half_w, half_h = axis_view()
-                aim_in_view(axis, 2 * x / w - 1, 1 - 2 * y / h, half_w, half_h, (-180, 180), (-90, 10))
-                print(f"mock: axis view move to pan={axis['target']['pan']:.4f} tilt={axis['target']['tilt']:.4f}")
-                body = ""
             elif q.get("move") == "stop":
                 axis["target"], body = None, ""
             else:

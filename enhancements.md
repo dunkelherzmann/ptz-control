@@ -62,3 +62,11 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [x] Mac (#6)
   - [x] Linux (#6)
   - [x] Windows (#6)
+- [x] **The pan/tilt range plane over the live video, in place of Measure View** (asked 2026-11-14, all platforms). Draw the whole-range plane as before (grid, zero axes, range labels, trail, start, target and the current position) on top of the live video or picture, and aim on it in pan/tilt as before: a click fills the targets, a double-click moves there. Measure View and the measured coordinates on the picture go.
+  - [x] Mac (#8)
+  - [x] Linux (#8)
+  - [x] Windows (#8)
+- [x] **Show or hide the grid** (asked 2026-11-14, all platforms): a toggle for the plane's grid over the picture.
+  - [x] Mac (#8)
+  - [x] Linux (#8)
+  - [x] Windows (#8)

@@ -42,6 +42,7 @@ struct Settings {
     QString ssh_host, ssh_user, ssh_identity;
     int ssh_port = 22;
     int theme = 0;
+    bool show_grid = true;  // View ▸ Show Grid: the range plane's grid, zero axes and limits over the picture
 
     static Settings load();
     void save() const;
@@ -63,16 +64,9 @@ struct Reading {
     QString text;
 };
 
-// How much of the pan/tilt range the picture spans: the turn that brings a point at the picture's right (top) edge
-// to its centre. A point (x, y) of the picture, -1..1 with up positive, lies at pan + x * pan_per_x, tilt + y * tilt_per_y.
-struct ViewScale {
-    double pan_per_x = 0, tilt_per_y = 0;
-};
-
 struct Snapshot {
     std::optional<Reading> pan, tilt, zoom;
     QString move_status;
-    std::optional<ViewScale> view_scale;  // the view measured at this reading's zoom
     bool empty() const { return !pan && !tilt && !zoom; }
     bool operator==(const Snapshot &o) const;  // the readings only
 };
@@ -81,7 +75,6 @@ struct CameraInfo {
     QString name, units;
     AxisRange pan, tilt, zoom;
     bool zoom_integer = false;
-    bool view_moves = false;  // a point of the picture can be brought to its centre
 };
 
 struct LinkResult {
@@ -111,10 +104,6 @@ void link_stop(CameraLink *link, std::function<void(LinkResult)> done);
 class QImage;
 // A still picture of the camera's current view.
 void link_picture(CameraLink *link, std::function<void(LinkResult, QImage)> done);
-// Brings the point (x, y) of the last picture to its centre; x and y run from -1 to 1, up positive.
-// Turns the camera a little on each axis and back to measure how much of its range the picture spans.
-void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done);
-void link_move_in_view(CameraLink *link, double x, double y, std::function<void(LinkResult)> done);
 // The camera's live video (live.cpp decodes it). Pictures and `ended` (it stopped by itself or can't be decoded)
 // arrive on the UI thread; `done` gets a description such as "H.264 over RTSP".
 void link_live_start(CameraLink *link, std::function<void(QImage)> picture, std::function<void(QString)> ended,

@@ -1,13 +1,10 @@
 /* Headless check of the core C API against tools/mock-camera.py.
  *   python3 tools/mock-camera.py --port 8080 &
- *   python3 tools/mock-camera.py --port 8081 --no-fov --plain-png &
  *   scripts/test-core.sh
  */
 #include "ptzcore.h"
 
-#include <math.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -118,15 +115,6 @@ static void exercise(ptz_vendor vendor, double pan, double tilt, double zoom, do
     CHECK(ptz_picture(s, &picture, &picture_bytes, &width, &height, error, sizeof error) && picture_bytes > 100 &&
               width > 0 && height > 0, "picture %dx%d, %zu bytes (%s)", width, height, picture_bytes, error);
     ptz_free(picture);
-    CHECK(info.view_moves, "camera aims within the view");
-    ptz_position before, after;
-    ptz_get_position(s, &before, error, sizeof error);
-    CHECK(ptz_move_in_view(s, 0.5, 0.5, error, sizeof error), "aim at the picture's upper right (%s)", error);
-    sleep(3);
-    CHECK(ptz_get_position(s, &after, error, sizeof error) && after.pan.value > before.pan.value &&
-              after.tilt.value > before.tilt.value, "moved right and up: pan %s -> %s, tilt %s -> %s",
-          before.pan.text, after.pan.text, before.tilt.text, after.tilt.text);
-    CHECK(!ptz_move_in_view(s, 1.5, 0, error, sizeof error), "point outside the picture refused: %s", error);
 
     exercise_live(s, PTZ_CODEC_H264, vendor == PTZ_VENDOR_AXIS ? "axis" : "onvif");
 
@@ -137,72 +125,6 @@ static void exercise(ptz_vendor vendor, double pan, double tilt, double zoom, do
     s = open_camera(vendor, "wrong-password", error);
     CHECK(s == NULL && strstr(error, "wrong-password") == NULL, "wrong password refused, redacted: %s", error);
     if (s) ptz_close(s);
-}
-
-static unsigned big_endian(const unsigned char *p) { return (unsigned)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
-
-/* The mock's --plain-png pictures (RGB, stored deflate blocks, no row filters) as grey pixels: enough to test
- * measuring without an image library. */
-static int grey_plain_png(void *context, const unsigned char *data, size_t size, unsigned char *grey, int width,
-                          int height) {
-    (void)context;
-    if (size < 33) return 0;
-    unsigned pw = big_endian(data + 16), ph = big_endian(data + 20);
-    size_t row = 1 + 3 * (size_t)pw, need = row * ph, have = 0;
-    unsigned char *zlib = malloc(size), *raw = malloc(need);
-    size_t zlen = 0;
-    for (size_t at = 8; at + 12 <= size;) {
-        unsigned length = big_endian(data + at);
-        if (!memcmp(data + at + 4, "IDAT", 4)) { memcpy(zlib + zlen, data + at + 8, length); zlen += length; }
-        at += 12 + length;
-    }
-    for (size_t at = 2; at + 5 <= zlen && have < need;) {  /* after the 2-byte zlib header: stored blocks */
-        int last = zlib[at] & 1;
-        unsigned len = zlib[at + 1] | zlib[at + 2] << 8;
-        if (have + len > need) len = (unsigned)(need - have);
-        memcpy(raw + have, zlib + at + 5, len);
-        have += len;
-        at += 5 + len;
-        if (last) break;
-    }
-    int ok = have == need;
-    for (int y = 0; ok && y < height; ++y)
-        for (int x = 0; x < width; ++x) {
-            const unsigned char *px = raw + (size_t)(y * ph / height) * row + 1 + 3 * (size_t)(x * pw / width);
-            grey[y * width + x] = (unsigned char)((299 * px[0] + 587 * px[1] + 114 * px[2]) / 1000);
-        }
-    free(zlib);
-    free(raw);
-    return ok;
-}
-
-/* An ONVIF camera without the field-of-view space: the view is measured from its pictures. The mock's picture spans
- * 0.25 pan and 0.140625 tilt from its centre to its edges at zoom 0. */
-static void measure(void) {
-    char error[512] = {0};
-    camera_port = 8081;
-    ptz_session *s = open_camera(PTZ_VENDOR_ONVIF, "secret", error);
-    camera_port = 8080;
-    CHECK(s != NULL, "onvif camera without field-of-view moves: connect (%s)", error);
-    if (!s) return;
-    ptz_info info;
-    ptz_info_get(s, &info);
-    CHECK(!info.view_moves, "it can't aim within its view by itself");
-    ptz_position start, end;
-    ptz_get_position(s, &start, error, sizeof error);
-    ptz_view_scale scale, kept;
-    CHECK(!ptz_view_scale_at(s, &start, &kept), "no scale before measuring");
-    int ok = ptz_measure_view(s, grey_plain_png, NULL, &scale, error, sizeof error);
-    CHECK(ok && fabs(scale.pan_per_x - 0.25) < 0.03 && fabs(scale.tilt_per_y - 0.140625) < 0.02,
-          "measured the view: %.4f pan, %.4f tilt per half picture (%s)", scale.pan_per_x, scale.tilt_per_y, error);
-    CHECK(ptz_view_scale_at(s, &start, &kept) && kept.pan_per_x == scale.pan_per_x, "the scale is kept for this zoom");
-    sleep(3);
-    CHECK(ptz_get_position(s, &end, error, sizeof error) && fabs(end.pan.value - start.pan.value) < 0.01 &&
-              fabs(end.tilt.value - start.tilt.value) < 0.01,
-          "turned back to where it was: pan %s, tilt %s", end.pan.text, end.tilt.text);
-    end.zoom.value += 0.5;
-    CHECK(!ptz_view_scale_at(s, &end, &kept), "no scale at another zoom");
-    ptz_close(s);
 }
 
 int main(void) {
@@ -230,7 +152,6 @@ int main(void) {
         exercise_live(s, PTZ_CODEC_H265, "onvif h265");
         ptz_close(s);
     }
-    measure();
     printf(failures ? "\n%d FAILED\n" : "\nall passed\n", failures);
     return failures != 0;
 }

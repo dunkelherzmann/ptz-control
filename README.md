@@ -85,10 +85,10 @@ someone else needs its quarantine flag removed once (see [Installing](#installin
 
 | Action | How |
 | --- | --- |
-| Aim | click a point of the camera picture, drag a travel meter, or type pan/tilt/zoom targets |
+| Aim | click the pan/tilt range plane over the camera picture, drag a travel meter, or type pan/tilt/zoom targets |
 | Move | Return in a target field, **Move**, ⌘↩, or double-click the picture or a meter |
 | New picture | ⇧⌘R, or ⟳ above the picture |
-| Pan and tilt over the picture | Camera ▸ Measure View (⇧⌘M): the camera turns a little and back; then a click fills the targets |
+| Show or hide the grid | View ▸ Show Grid (⌘'), or the grid button above the picture |
 | Keep an axis | leave its field blank (or `x`) |
 | Return to starting coordinates | ⌘B |
 | Stop motion | ⌘. |

@@ -48,8 +48,9 @@ PlaneView::PlaneView(QWidget *parent) : QWidget(parent) {
     setMinimumHeight(140);
 }
 
-// The picture's frame: as large as fits, in the picture's shape (16:9 until there is one), centred.
-QRectF PlaneView::picture_rect() const {
+// The picture's frame, which the range plane spans: as large as fits, in the picture's shape (16:9 until there is
+// one), centred.
+QRectF PlaneView::plot_rect() const {
     QRectF area = QRectF(rect()).adjusted(1, 1, -1, -1);
     double pw = state.picture.isNull() ? 16 : state.picture.width(), ph = state.picture.isNull() ? 9 : state.picture.height();
     if (pw <= 0 || ph <= 0 || area.width() <= 0 || area.height() <= 0) return area;
@@ -57,26 +58,29 @@ QRectF PlaneView::picture_rect() const {
     return QRectF(std::round(area.center().x() - w / 2), std::round(area.center().y() - h / 2), w, h);
 }
 
-QPointF PlaneView::widget_point(QPointF v) const {
-    QRectF r = picture_rect();
-    return QPointF(r.x() + (v.x() + 1) / 2 * r.width(), r.y() + (1 - v.y()) / 2 * r.height());
-}
-
 std::optional<QPointF> PlaneView::view_point(double pan, double tilt) const {
-    const auto &o = state.overlay;
-    if (!o || o->scale.pan_per_x == 0 || o->scale.tilt_per_y == 0) return std::nullopt;
-    return QPointF((pan - o->pan) / o->scale.pan_per_x, (tilt - o->tilt) / o->scale.tilt_per_y);
+    auto fx = state.pan.fraction(pan), fy = state.tilt.fraction(tilt);
+    if (!fx || !fy) return std::nullopt;
+    QRectF r = plot_rect();
+    return QPointF(r.x() + r.width() * *fx, r.bottom() - r.height() * *fy);
 }
 
-// A value with as many decimals as a step of `step` needs.
-static QString label_value(double value, double step) {
-    int decimals = std::clamp(static_cast<int>(std::ceil(-std::log10(std::max(std::abs(step), 1e-9)))) + 1, 0, 4);
-    return QString::number(value, 'f', decimals);
+std::optional<QPointF> PlaneView::camera_point(QPointF at) const {
+    if (!state.pan.available || !state.tilt.available) return std::nullopt;
+    QRectF r = plot_rect();
+    return QPointF(state.pan.value_at((at.x() - r.x()) / r.width()), state.tilt.value_at((r.bottom() - at.y()) / r.height()));
 }
 
-QPointF PlaneView::picture_point(QPointF at) const {
-    QRectF r = picture_rect();
-    return QPointF((at.x() - r.x()) / r.width() * 2 - 1, 1 - (at.y() - r.y()) / r.height() * 2);
+void PlaneView::record() {
+    const auto &current = state.current;
+    if (!current || !current->pan || !current->tilt) {
+        if (!trail_.empty() && trail_.back()) trail_.push_back(std::nullopt);
+        return;
+    }
+    QPointF point(current->pan->value, current->tilt->value);
+    if (!trail_.empty() && trail_.back() && *trail_.back() == point) return;
+    trail_.push_back(point);
+    if (trail_.size() > 120) trail_.erase(trail_.begin(), trail_.end() - 120);
 }
 
 void PlaneView::paintEvent(QPaintEvent *) {
@@ -84,192 +88,206 @@ void PlaneView::paintEvent(QPaintEvent *) {
     p.setRenderHint(QPainter::Antialiasing);
     p.fillRect(rect(), g_theme.panel);
     const PlaneState &s = state;
-    QRectF r = picture_rect();
+    QRectF r = plot_rect();
     const QColor white(255, 255, 255);
     auto centred = [&](const QString &text, double y, double size, bool bold, const QColor &color) {
         draw_text(p, text, r.center().x() - text_width(text, size, bold) / 2, y, size, color, bold);
     };
     // A label on a dark plate, readable on any picture. `at` is the plate's top-left (or top-right) corner.
-    auto plate = [&](const QString &text, QPointF at, const QColor &color, bool align_right = false) {
-        QFontMetricsF m(mono_font(10, true));
+    auto plate_height = [](double size = 10) { return QFontMetricsF(mono_font(size, true)).height() + 4; };
+    auto plate = [&](const QString &text, QPointF at, const QColor &color, bool align_right = false, double size = 10) {
+        QFontMetricsF m(mono_font(size, true));
         double w = m.horizontalAdvance(text) + 8, h = m.height() + 4;
         if (align_right) at.rx() -= w;
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(0, 0, 0, 140));
         p.drawRoundedRect(QRectF(at.x(), at.y(), w, h), 3, 3);
         p.setBrush(Qt::NoBrush);
-        draw_text(p, text, at.x() + 4, at.y() + 2, 10, color, true);
-        return h;
+        draw_text(p, text, at.x() + 4, at.y() + 2, size, color, true);
+    };
+    // The plate in the lower left: live, when the picture was taken, or that it is out of date.
+    auto status = [&] {
+        if (s.picture.isNull()) return;
+        QString text = !s.live.isEmpty() ? "● LIVE · " + s.live
+                       : s.picture_stale ? "MOVING · NEW PICTURE WHEN IT STOPS"
+                       : s.picture_taken.isValid() ? "PICTURE " + s.picture_taken.toString("HH:mm:ss") : QString("PICTURE");
+        plate(text, QPointF(r.x() + 6, r.bottom() - 6 - plate_height()), s.picture_stale ? g_theme.warning : white);
     };
 
+    // The picture, or why there is none.
     p.fillRect(r, Qt::black);
-    if (s.picture.isNull()) {
-        p.setPen(pen(g_theme.grid, 1));
-        for (int i = 0; i <= 10; ++i) {
-            double x = r.x() + r.width() * i / 10, y = r.y() + r.height() * i / 10;
-            p.drawLine(QPointF(x, r.y()), QPointF(x, r.bottom()));
-            p.drawLine(QPointF(r.x(), y), QPointF(r.right(), y));
-        }
+    if (!s.picture.isNull()) {
+        p.save();
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        p.setOpacity(s.picture_stale ? 0.45 : 1);
+        p.drawImage(r, s.picture);
+        p.restore();
+    } else {
         QString title = !s.enabled ? "NO CAMERA LINK" : s.picture_note.isEmpty() ? "TAKING A PICTURE…" : "NO PICTURE";
         double th = QFontMetricsF(mono_font(12, true)).height();
         centred(title, r.center().y() - th - 2, 12, true, g_theme.secondary);
         if (s.enabled && !s.picture_note.isEmpty()) {
-            p.setFont(QFont());
-            QFont f = p.font();
+            QFont f;
             f.setPixelSize(11);
             p.setFont(f);
             p.setPen(g_theme.secondary);
             p.drawText(QRectF(r.x() + 24, r.center().y() + 4, r.width() - 48, 40), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
                        s.picture_note);
         }
+    }
+    p.setPen(pen(alpha(white, 64), 1));
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5));
+
+    if (!s.pan.available || !s.tilt.available) {
+        if (s.enabled)
+            plate("PAN/TILT RANGE UNAVAILABLE", QPointF(r.right() - 6, r.bottom() - 6 - plate_height()), g_theme.warning, true);
+        status();
         return;
     }
-    p.save();
-    p.setRenderHint(QPainter::SmoothPixmapTransform);
-    p.setOpacity(s.picture_stale ? 0.45 : 1);
-    p.drawImage(r, s.picture);
-    p.restore();
 
-    // View grid: tenths of the picture, the centre lines stronger.
-    p.setPen(pen(alpha(white, 41), 0.5));
-    for (int i = 1; i <= 9; ++i) {
-        if (i == 5) continue;
-        double x = r.x() + r.width() * i / 10, y = r.y() + r.height() * i / 10;
-        p.drawLine(QPointF(x, r.y()), QPointF(x, r.bottom()));
-        p.drawLine(QPointF(r.x(), y), QPointF(r.right(), y));
-    }
-    QPointF c = r.center();
-    p.setPen(pen(alpha(white, 77), 0.75));
-    p.drawLine(QPointF(c.x(), r.y()), QPointF(c.x(), r.bottom()));
-    p.drawLine(QPointF(r.x(), c.y()), QPointF(r.right(), c.y()));
-
-    // Pan and tilt over the picture, once its view is measured: pan along the top edge and tilt along the right one
-    // (the centre values named), and the starting position as a square marked S.
-    auto inside = [](const std::optional<QPointF> &v) { return v && std::abs(v->x()) <= 1 && std::abs(v->y()) <= 1; };
-    if (const auto &o = s.overlay) {
-        QFont font = mono_font(9, true);
-        QFontMetricsF m(font);
-        for (int i = -4; i <= 4; i += 2) {
-            double f = i / 5.0;
-            QString pan = label_value(o->pan + f * o->scale.pan_per_x, std::abs(o->scale.pan_per_x) * 0.4);
-            QString tilt = label_value(o->tilt + f * o->scale.tilt_per_y, std::abs(o->scale.tilt_per_y) * 0.4);
-            if (i == 0) pan = "PAN " + pan, tilt = "TILT " + tilt;
-            for (int which = 0; which < 2; ++which) {
-                const QString &text = which ? tilt : pan;
-                double w = m.horizontalAdvance(text) + 6, h = m.height() + 2;
-                QRectF box = which ? QRectF(r.right() - 3 - w, c.y() - f * r.height() / 2 - h / 2, w, h)
-                                   : QRectF(c.x() + f * r.width() / 2 - w / 2, r.y() + 3, w, h);
-                p.setPen(Qt::NoPen);
-                p.setBrush(QColor(0, 0, 0, 128));
-                p.drawRoundedRect(box, 2, 2);
-                p.setBrush(Qt::NoBrush);
-                p.setFont(font);
-                p.setPen(white);
-                p.drawText(QPointF(box.x() + 3, box.y() + 1 + m.ascent()), text);
-            }
+    // The range plane's grid: tenths of the range, the zero axes when zero is in range, and the limits.
+    if (s.show_grid) {
+        p.setPen(pen(alpha(white, 46), 0.5));
+        for (int i = 1; i <= 9; ++i) {
+            double x = r.x() + r.width() * i / 10, y = r.y() + r.height() * i / 10;
+            p.drawLine(QPointF(x, r.y()), QPointF(x, r.bottom()));
+            p.drawLine(QPointF(r.x(), y), QPointF(r.right(), y));
         }
-        if (s.starting && s.starting->pan && s.starting->tilt) {
-            auto v = view_point(s.starting->pan->value, s.starting->tilt->value);
-            if (inside(v)) {
-                QPointF sp = widget_point(*v);
-                p.setPen(pen(g_theme.start, 1.5));
-                p.drawRect(QRectF(sp.x() - 5, sp.y() - 5, 10, 10));
-                draw_text(p, "S", sp.x() + 7, sp.y() - 16, 9, g_theme.start, true);
-            }
+        p.setPen(pen(alpha(white, 115), 1));
+        if (auto zero = view_point(0, s.tilt.min)) p.drawLine(QPointF(zero->x(), r.y()), QPointF(zero->x(), r.bottom()));
+        if (auto zero = view_point(s.pan.min, 0)) p.drawLine(QPointF(r.x(), zero->y()), QPointF(r.right(), zero->y()));
+        // Pan limits along the top edge, tilt limits down the right one.
+        double top = r.y() + 4;
+        plate("PAN " + format_value(s.pan.min), QPointF(r.x() + 4, top), white, false, 9);
+        plate(format_value(s.pan.max), QPointF(r.right() - 4, top), white, true, 9);
+        plate("TILT " + format_value(s.tilt.max), QPointF(r.right() - 4, top + 20), white, true, 9);
+        plate(format_value(s.tilt.min), QPointF(r.right() - 4, r.bottom() - 30 - plate_height(9)), white, true, 9);
+    }
+
+    // A dark halo under each marker keeps it readable on any picture.
+    auto stroke = [&](const QPainterPath &path, QPen ink) {
+        QPen halo = ink;
+        halo.setColor(QColor(0, 0, 0, 110));
+        halo.setWidthF(ink.widthF() + 2);
+        if (ink.style() == Qt::CustomDashLine) {  // the same dashes, measured in the wider pen's widths
+            QList<qreal> dashes = ink.dashPattern();
+            for (qreal &d : dashes) d *= ink.widthF() / halo.widthF();
+            halo.setDashPattern(dashes);
+        }
+        p.strokePath(path, halo);
+        p.strokePath(path, ink);
+    };
+
+    // Recent measured path; gaps stay gaps.
+    QPainterPath trail;
+    bool pen_down = false;
+    for (const auto &sample : trail_) {
+        std::optional<QPointF> point = sample ? view_point(sample->x(), sample->y()) : std::nullopt;
+        if (!point) {
+            pen_down = false;
+            continue;
+        }
+        pen_down ? trail.lineTo(*point) : trail.moveTo(*point);
+        pen_down = true;
+    }
+    QPen trail_pen = pen(alpha(g_theme.primary, 153), 1.5);
+    trail_pen.setJoinStyle(Qt::RoundJoin);
+    stroke(trail, trail_pen);
+
+    // Starting position: hollow square marked S.
+    if (s.starting && s.starting->pan && s.starting->tilt) {
+        if (auto sp = view_point(s.starting->pan->value, s.starting->tilt->value)) {
+            QPainterPath square;
+            square.addRect(QRectF(sp->x() - 5, sp->y() - 5, 10, 10));
+            stroke(square, pen(g_theme.start, 1.5));
+            QPainterPath letter;
+            QFont font = mono_font(9, true);
+            letter.addText(QPointF(sp->x() + 7, sp->y() - 3), font, "S");
+            p.strokePath(letter, QPen(QColor(0, 0, 0, 110), 2));
+            p.fillPath(letter, g_theme.start);
         }
     }
 
-    // Where the camera points: the picture's centre, or with a measured view, its latest reading (it may have moved
-    // since the picture).
-    if (s.current && s.current->pan && s.current->tilt) {
-        auto v = view_point(s.current->pan->value, s.current->tilt->value);
-        if (inside(v)) c = widget_point(*v);
-    }
-    p.setPen(pen(g_theme.primary, 1.5));
-    p.drawEllipse(c, 10, 10);
-    p.setPen(Qt::NoPen);
-    p.setBrush(g_theme.primary);
-    p.drawEllipse(c, 3, 3);
-    p.setBrush(Qt::NoBrush);
-
-    // Target: dashed crosshair, with a line from where the camera points. With a measured view it is the absolute
-    // target (an axis left blank keeps the current value).
-    std::optional<QPointF> aimed = s.picture_target;
-    if (s.overlay && (s.target_pan || s.target_tilt)) {
+    // Target: dashed crosshair and ring (an axis left blank keeps the current value), with a dotted line from the
+    // current position.
+    std::optional<QPointF> current;
+    if (s.current && s.current->pan && s.current->tilt) current = view_point(s.current->pan->value, s.current->tilt->value);
+    if (s.target_pan || s.target_tilt) {
         std::optional<double> pan = s.target_pan, tilt = s.target_tilt;
         if (!pan && s.current && s.current->pan) pan = s.current->pan->value;
         if (!tilt && s.current && s.current->tilt) tilt = s.current->tilt->value;
         if (pan && tilt) {
-            auto v = view_point(*pan, *tilt);
-            if (inside(v)) aimed = v;
+            if (auto t = view_point(*pan, *tilt)) {
+                QPainterPath cross;
+                cross.moveTo(t->x() - 14, t->y());
+                cross.lineTo(t->x() + 14, t->y());
+                cross.moveTo(t->x(), t->y() - 14);
+                cross.lineTo(t->x(), t->y() + 14);
+                cross.addEllipse(*t, 8, 8);
+                QPen dashed = pen(g_theme.target, 1.5);
+                dashed.setDashPattern({4 / 1.5, 2 / 1.5});
+                stroke(cross, dashed);
+                if (current) {
+                    QPainterPath line;
+                    line.moveTo(*current);
+                    line.lineTo(*t);
+                    QPen dotted = pen(alpha(g_theme.target, 178), 1);
+                    dotted.setDashPattern({2, 3});
+                    stroke(line, dotted);
+                }
+            }
         }
     }
-    if (aimed) {
-        QPointF t = widget_point(*aimed);
-        QPen dashed = pen(g_theme.target, 1.5);
-        dashed.setDashPattern({4 / 1.5, 2 / 1.5});
-        p.setPen(dashed);
-        p.drawLine(QPointF(t.x() - 14, t.y()), QPointF(t.x() + 14, t.y()));
-        p.drawLine(QPointF(t.x(), t.y() - 14), QPointF(t.x(), t.y() + 14));
-        p.drawEllipse(t, 8, 8);
-        QPen dotted = pen(alpha(g_theme.target, 178), 1);
-        dotted.setDashPattern({2, 3});
-        p.setPen(dotted);
-        p.drawLine(c, t);
+
+    // Current measured position: solid reticle.
+    if (current) {
+        QPainterPath ring;
+        ring.addEllipse(*current, 10, 10);
+        stroke(ring, pen(g_theme.primary, 1.5));
+        QPainterPath dot;
+        dot.addEllipse(*current, 4.5, 4.5);
+        p.strokePath(dot, QPen(QColor(0, 0, 0, 110), 2));
+        p.fillPath(dot, g_theme.primary);
+    } else if (s.current) {
+        plate("POSITION UNAVAILABLE", QPointF(r.right() - 6, r.bottom() - 6 - plate_height()), g_theme.warning, true);
     }
 
-    // Status plates: when the picture was taken, or that it is out of date.
-    QString status = s.measuring ? "MEASURING THE VIEW · THE CAMERA TURNS A LITTLE AND BACK"
-                   : !s.live.isEmpty() ? "● LIVE · " + s.live
-                     : s.picture_stale ? "MOVING · NEW PICTURE WHEN IT STOPS"
-                     : s.picture_taken.isValid() ? "PICTURE " + s.picture_taken.toString("HH:mm:ss") : QString("PICTURE");
-    double plate_h = QFontMetricsF(mono_font(10, true)).height() + 4;
-    plate(status, QPointF(r.x() + 6, r.bottom() - 6 - plate_h), s.picture_stale || s.measuring ? g_theme.warning : white);
-    if (!s.can_aim)
-        plate("THIS CAMERA CAN'T AIM FROM ITS PICTURE", QPointF(r.right() - 6, r.bottom() - 6 - plate_h), g_theme.warning, true);
+    status();
 
-    // Hover: guides and the point in view units.
-    if (hover_ && s.can_aim && r.contains(*hover_)) {
-        QPointF h = *hover_;
-        p.setPen(pen(alpha(white, 89), 0.5));
-        p.drawLine(QPointF(h.x(), r.y()), QPointF(h.x(), r.bottom()));
-        p.drawLine(QPointF(r.x(), h.y()), QPointF(r.right(), h.y()));
-        QPointF v = picture_point(h);
-        QString text = QString::asprintf("%s %.2f  %s %.2f", v.x() < 0 ? "◀" : "▶", std::abs(v.x()), v.y() < 0 ? "▼" : "▲",
-                                         std::abs(v.y()));
-        if (const auto &o = s.overlay)
-            text = "PAN " + label_value(o->pan + v.x() * o->scale.pan_per_x, std::abs(o->scale.pan_per_x) * 0.02) + "  TILT " +
-                   label_value(o->tilt + v.y() * o->scale.tilt_per_y, std::abs(o->scale.tilt_per_y) * 0.02);
-        double width = QFontMetricsF(mono_font(10, true)).horizontalAdvance(text) + 18;
-        QPointF at(h.x() + 10, h.y() - 8 - plate_h);
-        if (at.x() + width > r.right()) at.setX(h.x() - width - 10);
-        if (at.y() < r.y()) at.setY(h.y() + 8);
-        plate(text, at, white);
+    // Hover: guides and the pan and tilt under the pointer.
+    if (hover_ && s.enabled && r.contains(*hover_)) {
+        if (auto camera = camera_point(*hover_)) {
+            QPointF h = *hover_;
+            p.setPen(pen(alpha(white, 89), 0.5));
+            p.drawLine(QPointF(h.x(), r.y()), QPointF(h.x(), r.bottom()));
+            p.drawLine(QPointF(r.x(), h.y()), QPointF(r.right(), h.y()));
+            QString text = "PAN " + format_value(camera->x()) + "  TILT " + format_value(camera->y());
+            double width = QFontMetricsF(mono_font(10, true)).horizontalAdvance(text) + 18;
+            QPointF at(h.x() + 10, h.y() - 8 - plate_height());
+            if (at.x() + width > r.right()) at.setX(h.x() - width - 10);
+            if (at.y() < r.y()) at.setY(h.y() + 8);
+            plate(text, at, white);
+        }
     }
 }
 
 void PlaneView::aim(QPointF at, bool commit) {
-    if (!state.enabled || state.picture.isNull() || !state.can_aim || state.measuring || !picture_rect().contains(at)) return;
-    QPointF point = picture_point(at);
-    if (const auto &o = state.overlay) {
-        double pan = o->pan + point.x() * o->scale.pan_per_x, tilt = o->tilt + point.y() * o->scale.tilt_per_y;
-        if (commit) {
-            if (state.on_aim_and_move) state.on_aim_and_move(pan, tilt);
-        } else if (state.on_aim) {
-            state.on_aim(pan, tilt);
-        }
-        return;
-    }
+    if (!state.enabled) return;
+    QRectF r = plot_rect();
+    at = QPointF(std::clamp(at.x(), r.left(), r.right()), std::clamp(at.y(), r.top(), r.bottom()));
+    auto camera = camera_point(at);
+    if (!camera) return;
     if (commit) {
-        if (state.on_picture_aim_and_move) state.on_picture_aim_and_move(point);
-    } else if (state.on_picture_aim) {
-        state.on_picture_aim(point);
+        if (state.on_aim_and_move) state.on_aim_and_move(camera->x(), camera->y());
+    } else if (state.on_aim) {
+        state.on_aim(camera->x(), camera->y());
     }
 }
 
 void PlaneView::mouseMoveEvent(QMouseEvent *e) {
     QPointF at = e->position();
-    hover_ = picture_rect().contains(at) ? std::optional<QPointF>(at) : std::nullopt;
+    hover_ = state.enabled && plot_rect().contains(at) ? std::optional<QPointF>(at) : std::nullopt;
     if (dragging_) aim(at, false);
     update();
 }
