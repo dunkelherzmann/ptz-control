@@ -48,11 +48,6 @@ PlaneView::PlaneView(QWidget *parent) : QWidget(parent) {
     setMinimumHeight(140);
 }
 
-QRectF PlaneView::plot_rect() const {
-    if (state.mode == PlaneMode::Picture) return picture_rect();
-    return QRectF(46, 10, std::max(1.0, width() - 58.0), std::max(1.0, height() - 34.0));
-}
-
 // The picture's frame: as large as fits, in the picture's shape (16:9 until there is one), centred.
 QRectF PlaneView::picture_rect() const {
     QRectF area = QRectF(rect()).adjusted(1, 1, -1, -1);
@@ -67,111 +62,10 @@ QPointF PlaneView::picture_point(QPointF at) const {
     return QPointF((at.x() - r.x()) / r.width() * 2 - 1, 1 - (at.y() - r.y()) / r.height() * 2);
 }
 
-std::optional<QPointF> PlaneView::to_view(const QRectF &r, double pan, double tilt) const {
-    auto fx = state.pan.fraction(pan), fy = state.tilt.fraction(tilt);
-    if (!fx || !fy) return std::nullopt;
-    return QPointF(r.x() + r.width() * *fx, r.bottom() - r.height() * *fy);
-}
-
 void PlaneView::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     p.fillRect(rect(), g_theme.panel);
-    if (state.mode == PlaneMode::Picture) {
-        paint_picture(p);
-        return;
-    }
-    const PlaneState &s = state;
-    QRectF r = plot_rect();
-    p.setPen(pen(g_theme.grid, 1));
-    for (int i = 0; i <= 10; ++i) {
-        double x = r.x() + r.width() * i / 10, y = r.y() + r.height() * i / 10;
-        p.drawLine(QPointF(x, r.y()), QPointF(x, r.bottom()));
-        p.drawLine(QPointF(r.x(), y), QPointF(r.right(), y));
-    }
-    p.setPen(pen(g_theme.border, 1));
-    p.setBrush(Qt::NoBrush);
-    p.drawRect(r);
-
-    if (!s.pan.available || !s.tilt.available) {
-        QString text = s.enabled ? "PAN/TILT RANGE UNAVAILABLE" : "NO CAMERA LINK";
-        double w = text_width(text, 12, true);
-        draw_text(p, text, r.x() + (r.width() - w) / 2, r.y() + r.height() / 2 - 8, 12, g_theme.secondary, true);
-        return;
-    }
-
-    p.setPen(pen(g_theme.axis, 1));
-    if (auto zero = to_view(r, 0, s.tilt.min)) p.drawLine(QPointF(zero->x(), r.y()), QPointF(zero->x(), r.bottom()));
-    if (auto zero = to_view(r, s.pan.min, 0)) p.drawLine(QPointF(r.x(), zero->y()), QPointF(r.right(), zero->y()));
-
-    double label = 9;
-    draw_text(p, format_value(s.pan.min), r.x(), r.bottom() + 4, label, g_theme.secondary);
-    draw_text(p, format_value(s.pan.max), r.right(), r.bottom() + 4, label, g_theme.secondary, false, true);
-    draw_text(p, "PAN", r.x() + r.width() / 2 - 9, r.bottom() + 4, label, g_theme.secondary);
-    draw_text(p, format_value(s.tilt.max), r.x() - 6, r.y() - 2, label, g_theme.secondary, false, true);
-    draw_text(p, format_value(s.tilt.min), r.x() - 6, r.bottom() - 12, label, g_theme.secondary, false, true);
-    draw_text(p, "TILT", r.x() - 6, r.y() + r.height() / 2 - 6, label, g_theme.secondary, false, true);
-
-    // Measured path; gaps stay gaps.
-    p.setPen(pen(alpha(g_theme.primary, 90), 1.5));
-    std::optional<QPointF> last;
-    for (const auto &sample : trail_) {
-        std::optional<QPointF> point = sample ? to_view(r, sample->x(), sample->y()) : std::nullopt;
-        if (point && last) p.drawLine(*last, *point);
-        last = point;
-    }
-
-    if (s.starting && s.starting->pan && s.starting->tilt) {
-        if (auto pt = to_view(r, s.starting->pan->value, s.starting->tilt->value)) {
-            p.setPen(pen(g_theme.start, 1.5));
-            p.drawRect(QRectF(pt->x() - 5, pt->y() - 5, 10, 10));
-            draw_text(p, "S", pt->x() + 7, pt->y() - 16, label, g_theme.secondary);
-        }
-    }
-
-    if (s.target_pan || s.target_tilt) {
-        std::optional<double> pan = s.target_pan, tilt = s.target_tilt;
-        if (!pan && s.current && s.current->pan) pan = s.current->pan->value;
-        if (!tilt && s.current && s.current->tilt) tilt = s.current->tilt->value;
-        if (pan && tilt) {
-            if (auto pt = to_view(r, *pan, *tilt)) {
-                p.setPen(pen(g_theme.target, 1, Qt::DashLine));
-                p.drawLine(QPointF(pt->x() - 12, pt->y()), QPointF(pt->x() + 12, pt->y()));
-                p.drawLine(QPointF(pt->x(), pt->y() - 12), QPointF(pt->x(), pt->y() + 12));
-                p.drawEllipse(*pt, 7, 7);
-            }
-        }
-    }
-
-    if (s.current && s.current->pan && s.current->tilt) {
-        if (auto pt = to_view(r, s.current->pan->value, s.current->tilt->value)) {
-            p.setPen(Qt::NoPen);
-            p.setBrush(g_theme.primary);
-            p.drawEllipse(*pt, 4.5, 4.5);
-            p.setBrush(Qt::NoBrush);
-            p.setPen(pen(g_theme.primary, 1.5));
-            p.drawEllipse(*pt, 10, 10);
-        }
-    } else if (s.current) {
-        draw_text(p, "POSITION UNAVAILABLE", r.x() + 6, r.y() + 4, label, g_theme.secondary);
-    }
-
-    if (hover_ && s.enabled) {
-        QPointF h = *hover_;
-        p.setPen(pen(g_theme.axis, 1));
-        p.drawLine(QPointF(h.x(), r.y()), QPointF(h.x(), r.bottom()));
-        p.drawLine(QPointF(r.x(), h.y()), QPointF(r.right(), h.y()));
-        double pan = s.pan.value_at((h.x() - r.x()) / r.width()), tilt = s.tilt.value_at((r.bottom() - h.y()) / r.height());
-        QString text = format_value(pan) + ", " + format_value(tilt);
-        double w = text_width(text, 10), th = QFontMetricsF(mono_font(10)).height();
-        double x = h.x() + 8, y = h.y() - th - 4;
-        if (x + w > r.right()) x = h.x() - w - 8;
-        if (y < r.y()) y = h.y() + 6;
-        draw_text(p, text, x, y, 10, g_theme.text);
-    }
-}
-
-void PlaneView::paint_picture(QPainter &p) {
     const PlaneState &s = state;
     QRectF r = picture_rect();
     const QColor white(255, 255, 255);
@@ -280,30 +174,18 @@ void PlaneView::paint_picture(QPainter &p) {
 }
 
 void PlaneView::aim(QPointF at, bool commit) {
-    if (state.mode == PlaneMode::Picture) {
-        if (!state.enabled || state.picture.isNull() || !state.view_moves || !picture_rect().contains(at)) return;
-        QPointF point = picture_point(at);
-        if (commit) {
-            if (state.on_picture_aim_and_move) state.on_picture_aim_and_move(point);
-        } else if (state.on_picture_aim) {
-            state.on_picture_aim(point);
-        }
-        return;
-    }
-    if (!state.enabled || !state.pan.available || !state.tilt.available) return;
-    QRectF r = plot_rect();
-    double fx = std::clamp((at.x() - r.x()) / r.width(), 0.0, 1.0), fy = std::clamp((r.bottom() - at.y()) / r.height(), 0.0, 1.0);
-    double pan = state.pan.value_at(fx), tilt = state.tilt.value_at(fy);
+    if (!state.enabled || state.picture.isNull() || !state.view_moves || !picture_rect().contains(at)) return;
+    QPointF point = picture_point(at);
     if (commit) {
-        if (state.on_aim_and_move) state.on_aim_and_move(pan, tilt);
-    } else if (state.on_aim) {
-        state.on_aim(pan, tilt);
+        if (state.on_picture_aim_and_move) state.on_picture_aim_and_move(point);
+    } else if (state.on_picture_aim) {
+        state.on_picture_aim(point);
     }
 }
 
 void PlaneView::mouseMoveEvent(QMouseEvent *e) {
     QPointF at = e->position();
-    hover_ = plot_rect().contains(at) ? std::optional<QPointF>(at) : std::nullopt;
+    hover_ = picture_rect().contains(at) ? std::optional<QPointF>(at) : std::nullopt;
     if (dragging_) aim(at, false);
     update();
 }
@@ -323,18 +205,6 @@ void PlaneView::mouseDoubleClickEvent(QMouseEvent *e) {
 void PlaneView::leaveEvent(QEvent *) {
     hover_.reset();
     update();
-}
-
-void PlaneView::record() {
-    const auto &current = state.current;
-    if (!current || !current->pan || !current->tilt) {
-        if (!trail_.empty() && trail_.back()) trail_.push_back(std::nullopt);
-        return;
-    }
-    QPointF point(current->pan->value, current->tilt->value);
-    if (!trail_.empty() && trail_.back() && *trail_.back() == point) return;
-    trail_.push_back(point);
-    if (trail_.size() > 120) trail_.erase(trail_.begin(), trail_.end() - 120);
 }
 
 // ---- travel meter ----------------------------------------------------------------

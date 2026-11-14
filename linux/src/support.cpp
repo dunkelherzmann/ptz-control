@@ -202,7 +202,6 @@ Settings Settings::load() {
     s.ssh_port = q.value("SshPort", s.ssh_port).toInt();
     s.theme = q.value("Theme", s.theme).toInt();
     if (s.theme < 0 || s.theme > 4) s.theme = 0;
-    s.plane_mode = q.value("PlaneMode").toString() == "picture" ? "picture" : "range";
     return s;
 }
 
@@ -221,7 +220,6 @@ void Settings::save() const {
     q.setValue("SshIdentity", ssh_identity);
     q.setValue("SshPort", ssh_port);
     q.setValue("Theme", theme);
-    q.setValue("PlaneMode", plane_mode);
 }
 
 // ---- camera link -------------------------------------------------------------

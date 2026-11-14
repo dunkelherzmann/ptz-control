@@ -42,7 +42,6 @@ struct Settings {
     QString ssh_host, ssh_user, ssh_identity;
     int ssh_port = 22;
     int theme = 0;
-    QString plane_mode = "range";  // "range" or "picture"
 
     static Settings load();
     void save() const;

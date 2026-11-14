@@ -216,7 +216,6 @@ public:
         wire();
         apply_theme();
         update_controls();
-        set_plane_mode(settings_.plane_mode == "picture" ? PlaneMode::Picture : PlaneMode::Range);
         log_line("PTZ Control ready · core " + QString::fromUtf8(ptz_core_version()));
         if (vault_state() == VaultState::Unavailable) log_line("Saved logins are unavailable: " + vault_open_error(), true);
         auto *timer = new QTimer(this);
@@ -227,7 +226,7 @@ public:
 
 protected:
     void showEvent(QShowEvent *) override {
-        if (plane_->state.mode == PlaneMode::Picture) QTimer::singleShot(0, this, [this] { fit_window_to_picture(); });
+        QTimer::singleShot(0, this, [this] { fit_window_to_picture(); });
     }
 
     void closeEvent(QCloseEvent *e) override {
@@ -442,32 +441,12 @@ private:
         middle->setSpacing(12);
         auto *instruments = new QVBoxLayout;
         instruments->setSpacing(12);
-        auto *plane_panel = plane_panel_ = new Panel(kRangeCaption);
+        auto *plane_panel = new Panel("CAMERA PICTURE // VIEW — CLICK TO AIM, DOUBLE-CLICK TO MOVE THERE");
         plane_ = new PlaneView;
-        auto *accessory = new QWidget;
-        accessory->setAccessibleName("Position plane view");
-        auto *switch_row = new QHBoxLayout(accessory);
-        switch_row->setContentsMargins(0, 0, 0, 0);
-        switch_row->setSpacing(0);
         refresh_picture_ = new RefreshButton;
         refresh_picture_->setToolTip("Refresh Picture: take a new picture of the camera's view now (Ctrl+Shift+R)");
         refresh_picture_->setAccessibleName("Refresh Picture");
-        switch_row->addWidget(refresh_picture_);
-        switch_row->addSpacing(6);
-        show_range_ = button("Range", "mini");
-        show_picture_ = button("Picture", "mini");
-        show_range_->setToolTip("Range: the camera's whole pan/tilt range. Click to aim, double-click to move (Ctrl+1)");
-        show_picture_->setToolTip("Picture: a still picture of what the camera sees. Click a point to aim at it, "
-                                  "double-click to move the camera there (Ctrl+2)");
-        auto *mode_group = new QButtonGroup(this);
-        for (QPushButton *b : {show_range_, show_picture_}) {
-            b->setCheckable(true);
-            b->setFocusPolicy(Qt::NoFocus);
-            b->setFixedHeight(20);
-            mode_group->addButton(b);
-            switch_row->addWidget(b);
-        }
-        plane_panel->set_accessory(accessory);
+        plane_panel->set_accessory(refresh_picture_);
         (new QVBoxLayout(plane_panel))->addWidget(plane_);
         instruments->addWidget(plane_panel, 1);
         auto *meters_panel = new Panel("AXIS TRAVEL // % OF ADVERTISED LIMITS — DRAG TO AIM, DOUBLE-CLICK TO MOVE");
@@ -536,9 +515,7 @@ private:
         connect(start_, &QPushButton::clicked, this, [this] { return_to_start(); });
         connect(stop_, &QPushButton::clicked, this, [this] { stop_motion(); });
         connect(web_, &QPushButton::clicked, this, [this] { open_web(); });
-        connect(show_range_, &QPushButton::clicked, this, [this] { set_plane_mode(PlaneMode::Range); });
-        connect(show_picture_, &QPushButton::clicked, this, [this] { set_plane_mode(PlaneMode::Picture); });
-        connect(refresh_picture_, &QAbstractButton::clicked, this, [this] { refresh_picture(); });
+        connect(refresh_picture_, &QAbstractButton::clicked, this, [this] { take_picture(); });
         for (QLineEdit *f : fields_)
             connect(f, &QLineEdit::returnPressed, this, [this] {
                 if (state_ == State::Idle) connect_camera();
@@ -560,15 +537,6 @@ private:
             connect(f, &QLineEdit::returnPressed, this, [this] { send_move(); });
         }
 
-        plane_->state.on_aim = [this](double pan, double tilt) {
-            target_pan_->setText(format_value(pan));
-            target_tilt_->setText(format_value(tilt));
-        };
-        plane_->state.on_aim_and_move = [this](double pan, double tilt) {
-            target_pan_->setText(format_value(pan));
-            target_tilt_->setText(format_value(tilt));
-            send_move();
-        };
         plane_->state.on_picture_aim = [this](QPointF point) { aim_in_picture(point); };
         plane_->state.on_picture_aim_and_move = [this](QPointF point) {
             aim_in_picture(point);
@@ -650,12 +618,10 @@ private:
 
     void update_target_markers() {
         Target t = parse_target(nullptr);
-        plane_->state.target_pan = t.pan;
-        plane_->state.target_tilt = t.tilt;
         meter_pan_->state.target = t.pan;
         meter_tilt_->state.target = t.tilt;
         meter_zoom_->state.target = t.zoom;
-        for (QWidget *w : std::initializer_list<QWidget *>{plane_, meter_pan_, meter_tilt_, meter_zoom_}) w->update();
+        for (QWidget *w : std::initializer_list<QWidget *>{meter_pan_, meter_tilt_, meter_zoom_}) w->update();
     }
 
     void update_controls() {
@@ -683,10 +649,6 @@ private:
         const CameraInfo &info = info_ ? *info_ : empty_info;
         plane_->state.enabled = connected;
         refresh_picture_->setEnabled(connected && !taking_picture_);
-        plane_->state.pan = info.pan;
-        plane_->state.tilt = info.tilt;
-        plane_->state.current = connected ? current_ : std::nullopt;
-        plane_->state.starting = connected ? starting_ : std::nullopt;
         struct M { MeterView *w; AxisRange r; std::optional<Reading> Snapshot::*axis; };
         for (auto [w, range, axis] : {M{meter_pan_, info.pan, &Snapshot::pan}, M{meter_tilt_, info.tilt, &Snapshot::tilt},
                                       M{meter_zoom_, info.zoom, &Snapshot::zoom}}) {
@@ -931,7 +893,6 @@ private:
                 current_.reset();
                 failures_ = 0;
                 paused_ = false;
-                plane_->reset_trail();
                 plane_->state.view_moves = info.view_moves;
                 plane_->state.picture = QImage();
                 plane_->state.picture_note.clear();
@@ -1014,8 +975,6 @@ private:
                 }
                 if (current_ && !(snapshot == *current_)) log_line("Current coordinates: " + describe(snapshot));
                 current_ = snapshot;
-                plane_->state.current = snapshot;
-                plane_->record();
             } else {
                 if (result.link_lost) {
                     link_lost(result.error);
@@ -1092,7 +1051,7 @@ private:
 
     void send_move() {
         if (state_ != State::Connected) return;
-        if (plane_->state.mode == PlaneMode::Picture && plane_->state.picture_target) {
+        if (plane_->state.picture_target) {
             send_picture_move(*plane_->state.picture_target);
             return;
         }
@@ -1149,40 +1108,8 @@ private:
 
     // ---- picture (spec I9-I11) -------------------------------------------------------
 
-    static constexpr const char *kRangeCaption = "POSITION PLANE // XY — CLICK TO AIM, DOUBLE-CLICK TO MOVE";
-
-    void set_plane_mode(PlaneMode mode) {
-        bool changed = mode != plane_->state.mode;
-        plane_->state.mode = mode;
-        show_range_->setChecked(mode == PlaneMode::Range);
-        show_picture_->setChecked(mode == PlaneMode::Picture);
-        refresh_picture_->setVisible(mode == PlaneMode::Picture);
-        plane_panel_->set_caption(mode == PlaneMode::Picture ? "CAMERA PICTURE // VIEW — CLICK TO AIM, DOUBLE-CLICK TO MOVE THERE"
-                                                             : kRangeCaption);
-        plane_panel_->set_accessory(refresh_picture_->parentWidget());  // re-place it at its new width
-        plane_->update();
-        QString saved = mode == PlaneMode::Picture ? "picture" : "range";
-        if (settings_.plane_mode != saved) {
-            settings_.plane_mode = saved;
-            settings_.save();
-        }
-        if (mode == PlaneMode::Picture) {
-            fit_window_to_picture();
-            if (plane_->state.picture.isNull() || changed) take_picture();
-        } else {
-            restore_range_height();
-        }
-        update_controls();
-    }
-
-    void refresh_picture() {
-        if (state_ != State::Connected) return;
-        if (plane_->state.mode != PlaneMode::Picture) set_plane_mode(PlaneMode::Picture);
-        else take_picture();
-    }
-
     void take_picture() {
-        if (state_ != State::Connected || plane_->state.mode != PlaneMode::Picture || taking_picture_) return;
+        if (state_ != State::Connected || taking_picture_) return;
         taking_picture_ = true;
         link_picture(link_, [this](LinkResult result, QImage image) {
             taking_picture_ = false;
@@ -1221,7 +1148,7 @@ private:
 
     void send_picture_move(QPointF point) {
         if (!info_ || !info_->view_moves) {
-            log_line("This camera can't aim from its picture; use the target fields or the Range plane.", true);
+            log_line("This camera can't aim from its picture; use the target fields or the travel meters.", true);
             return;
         }
         QString describe = QString::asprintf("%.2f %s, %.2f %s of the picture", std::abs(point.x()), point.x() < 0 ? "left" : "right",
@@ -1244,16 +1171,16 @@ private:
 
     // The picture is out of date once the camera moves; a new one is taken when it stops.
     void camera_moved() {
-        if (plane_->state.mode != PlaneMode::Picture || plane_->state.picture.isNull()) return;
+        if (plane_->state.picture.isNull()) return;
         plane_->state.picture_stale = true;
         picture_due_ = QDateTime::currentMSecsSinceEpoch();
         plane_->update();
     }
 
-    // In Picture mode the plane takes the picture's shape: the window grows or shrinks in height, keeping its top
+    // The plane takes the picture's shape: the window grows or shrinks in height, keeping its top
     // edge, within the screen.
     void fit_window_to_picture() {
-        if (plane_->state.mode != PlaneMode::Picture || !isVisible() || isMaximized() || isFullScreen()) return;
+        if (!isVisible() || isMaximized() || isFullScreen()) return;
         layout()->activate();
         const QImage &picture = plane_->state.picture;
         double pw = picture.isNull() ? 16 : picture.width(), ph = picture.isNull() ? 9 : picture.height();
@@ -1261,7 +1188,6 @@ private:
         int wanted = static_cast<int>(std::round((plane_->width() - 2) * ph / pw + 2));
         int delta = wanted - plane_->height();
         if (std::abs(delta) < 2) return;
-        if (!range_height_) range_height_ = height();
         QRect frame = frameGeometry(), inner = geometry();
         int height = inner.height() + delta, top = frame.top();
         if (QScreen *screen = this->screen()) {
@@ -1273,14 +1199,6 @@ private:
         }
         resize(width(), height);
         if (top != frame.top()) move(frame.left(), top);
-    }
-
-    void restore_range_height() {
-        if (!range_height_) return;
-        int h = range_height_;
-        range_height_ = 0;
-        if (isMaximized() || isFullScreen()) return;
-        resize(width(), h);
     }
 
     void open_web() {
@@ -1309,10 +1227,9 @@ private:
             "• ONVIF: the camera's advertised absolute space (commonly pan/tilt −1…1, zoom 0…1; not degrees).\n"
             "• Axis: pan/tilt in degrees; zoom is an integer in the native range.\n\n"
             "Leave a target field blank (or type x) to keep that axis unchanged.\n"
-            "Click the position plane to aim, double-click to aim and move.\n"
-            "Picture (Ctrl+2) shows a still picture of the camera's view instead: click a point to aim at it, double-click "
-            "(or Move) to turn the camera so that point comes to the centre. A new picture comes once the camera stops, or "
-            "with Refresh Picture (Ctrl+Shift+R). Range (Ctrl+1) brings back the whole-range plane.\n"
+            "The camera picture shows what the camera sees: click a point to aim at it, double-click (or Move) to turn the "
+            "camera so that point comes to the centre. A new picture comes once the camera stops, or with Refresh Picture "
+            "(Ctrl+Shift+R).\n"
             "Drag along a travel meter to aim that axis alone, double-click it to aim and move.\n\n"
             "Starting coordinates are the first reading after connecting and stay fixed. "
             "Return to Start (Ctrl+B) sends an absolute move there.\n"
@@ -1360,9 +1277,7 @@ public:
         key(QKeySequence("Ctrl+."), [this] { stop_motion(); });
         key(QKeySequence("Ctrl+R"), [this] { refresh_now(); });
         key(QKeySequence("Ctrl+P"), [this] { toggle_pause(); });
-        key(QKeySequence("Ctrl+Shift+R"), [this] { refresh_picture(); });
-        key(QKeySequence("Ctrl+1"), [this] { set_plane_mode(PlaneMode::Range); });
-        key(QKeySequence("Ctrl+2"), [this] { set_plane_mode(PlaneMode::Picture); });
+        key(QKeySequence("Ctrl+Shift+R"), [this] { take_picture(); });
         key(QKeySequence("Ctrl+L"), [this] { open_web(); });
         key(QKeySequence("Ctrl+Q"), [this] { close(); });
         key(QKeySequence("Ctrl+M"), [window] { window->showMinimized(); });
@@ -1413,7 +1328,7 @@ public:
         camera->addSeparator();
         item(camera, "Refresh Position", "Ctrl+R", connected, [this] { refresh_now(); });
         item(camera, paused_ ? "Resume Auto-Refresh" : "Pause Auto-Refresh", "Ctrl+P", connected, [this] { toggle_pause(); });
-        item(camera, "Refresh Picture", "Ctrl+Shift+R", connected, [this] { refresh_picture(); });
+        item(camera, "Refresh Picture", "Ctrl+Shift+R", connected, [this] { take_picture(); });
         camera->addSeparator();
         item(camera, "Open Camera Web Interface", "Ctrl+L", connected, [this] { open_web(); });
         camera->addSeparator();
@@ -1421,14 +1336,6 @@ public:
              [this] { show_manage_logins(this); });
 
         QMenu *view = menu->addMenu("View");
-        for (auto [title, keys, mode] : {std::tuple{"Whole Range", "Ctrl+1", PlaneMode::Range},
-                                         std::tuple{"Camera Picture", "Ctrl+2", PlaneMode::Picture}}) {
-            PlaneMode m = mode;
-            QAction *a = item(view, title, keys, true, [this, m] { set_plane_mode(m); });
-            a->setCheckable(true);
-            a->setChecked(plane_->state.mode == m);
-        }
-        view->addSeparator();
         QMenu *phosphor = view->addMenu("Phosphor");
         for (int i = 0; i < 5; ++i) {
             QAction *a = item(phosphor, phosphor_title(static_cast<Phosphor>(i)), QString("Ctrl+Alt+%1").arg(i + 1), true,
@@ -1542,9 +1449,6 @@ private:
             QPushButton#segment { background: %4; color: %2; border-radius: 3px; }
             QPushButton#segment:checked { background: %7; color: %8; border-color: %7; }
             QPushButton#segment:checked:disabled { background: %17; color: %18; }
-            QPushButton#mini { background: %4; color: %2; border: 1px solid %6; border-radius: 3px; padding: 0px 9px;
-                               min-height: 0px; font-size: 11px; }
-            QPushButton#mini:checked { background: %7; color: %8; border-color: %7; }
             QPushButton#primary { background: %7; color: %8; border-color: %7; font-weight: bold; }
             QPushButton#primary:hover { border-color: %9; }
             QPushButton#primary:disabled { color: %15; background: %16; border-color: %11; }
@@ -1634,7 +1538,6 @@ private:
     // PTZ_SNAPSHOT_PICTURE: Picture mode, aim at a point of the picture (a picture of that is saved to
     // PTZ_SNAPSHOT_AIM_PATH), move there, and save the window once the new picture has come.
     void run_picture_script() {
-        set_plane_mode(PlaneMode::Picture);
         connect_camera();
         QTimer::singleShot(3000, this, [this] { if (plane_->state.on_picture_aim) plane_->state.on_picture_aim(QPointF(0.45, 0.3)); });
         QTimer::singleShot(3400, this, [this] {
@@ -1663,7 +1566,6 @@ private:
     qint64 next_refresh_ = 0;
     bool web_pending_ = false, closing_ = false, message_error_ = false, taking_picture_ = false;
     qint64 picture_due_ = 0, last_read_ = 0;  // when the camera last moved (a fresh picture is due), the last reading
-    int range_height_ = 0;                    // the window's height in Range mode, restored when leaving Picture mode
     int route_ = 0, vendor_ = 0;
     std::deque<std::pair<QString, bool>> log_lines_;
 
@@ -1678,8 +1580,6 @@ private:
     Chip *chip_;
     QToolButton *menu_button_;
     PlaneView *plane_;
-    Panel *plane_panel_;
-    QPushButton *show_range_, *show_picture_;
     RefreshButton *refresh_picture_;
     MeterView *meter_pan_, *meter_tilt_, *meter_zoom_;
     Readouts *readouts_;
