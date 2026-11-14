@@ -10,3 +10,4 @@ Items marked *found in testing* were found while testing other work, not reporte
   - [x] Linux
   - [x] Windows
 - [x] **The core test sometimes ran before its mock camera was listening.** `scripts/test-core.sh` paused one second after starting the mock, and on a busy GitHub macOS runner both connect checks failed with "Camera unreachable". It now waits until the port answers, up to 10 seconds. *Found in testing, 2026-11-12 · Mac (GitHub's build).*
+- [x] **Windows: Digest sign-in never answered** (*found in testing* 2026-11-14, Windows). WinHTTP accepted the camera's username and password but resent the request without an answer to the Digest challenge, so camera pictures (and every Axis request) got HTTP 401. The core now answers the challenge itself (MD5 or SHA-256 through Windows' CNG), as curl does on the Mac and Linux. Fixed in #5.
