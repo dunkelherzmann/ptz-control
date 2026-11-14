@@ -155,9 +155,13 @@ the rest as a gap.
     new picture of the camera's view now, or restart the live view (⇧⌘R)") restarts the live view while it plays
     ("Restarting the live view"); otherwise it takes a new picture and tries the live view again.
   - Disconnecting stops the video before the session closes.
-- **I4 Range plane over the picture.** The advertised pan range spans the picture from left to right and the tilt
-  range from bottom to top, in camera units. On it: a 10 × 10 grid, the zero axes when zero is in range, and the
-  limits on plates ("PAN −1" and "1" along the top edge, "TILT 1" and "−1" down the right one); the last 120 measured
+- **I4 Range plane over the picture.** The camera's whole pan/tilt range, in camera units, is drawn the size of the
+  picture (pan across, tilt up) and centred on where the camera points: the current position stays at the picture's
+  centre, where its width and height meet, as a crosshair, and the plane moves under it as the camera moves, while
+  pan 0, tilt 0 stays a fixed point of the range. Beyond the range's edges the picture is shaded. On the plane: a
+  10 × 10 grid, the range's edges, the zero axes when zero is in range, and the limits on plates at the edges where
+  they show ("PAN −1" and "PAN 1" along the top, "TILT 1" and "TILT −1" down the right side); until there is a
+  position the range spans the picture; the last 120 measured
   positions as a trail (gaps stay gaps); the starting position as a square marked **S**; the target (from the target
   fields, a blank axis keeping its current value) as a dashed crosshair and ring, with a dotted line from the current
   position; and the current measured position as a solid reticle. The markers have a dark halo, so they read on any
