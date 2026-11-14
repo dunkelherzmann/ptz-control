@@ -1,7 +1,7 @@
 // SSH tunnel for Windows using the OpenSSH Client that ships with Windows
 // (System32\OpenSSH\ssh.exe). Windows OpenSSH has no connection multiplexing,
 // so readiness comes from ssh's own "Local forwarding listening" log line and
-// the camera HTTPS port is forwarded up front. Prompts (password, passphrase,
+// the camera HTTPS port and RTSP video port are forwarded up front. Prompts (password, passphrase,
 // MFA) reach the host UI through SSH_ASKPASS: ssh runs the host executable,
 // which relays over a named pipe that only the current user may open.
 #include "internal.hpp"
@@ -361,6 +361,7 @@ public:
             });
             local_port_ = reserve_port();
             https_local_port_ = reserve_port();
+            rtsp_local_port_ = reserve_port();
             for (int attempt = 0;; ++attempt) {
                 launch();
                 std::string failure = wait_ready();
@@ -392,8 +393,10 @@ public:
 
     int forward(int camera_port) override {
         if (camera_port == p_.https_port) return https_local_port_;
-        throw Error("The camera's HTTPS port " + std::to_string(camera_port) + " differs from the configured " +
-                    std::to_string(p_.https_port) + "; set it under Advanced and reconnect");
+        if (camera_port == p_.rtsp_port) return rtsp_local_port_;
+        throw Error("Windows can't forward the camera's port " + std::to_string(camera_port) +
+                    " through SSH: only the HTTPS port set under Advanced (" + std::to_string(p_.https_port) +
+                    ") and the video port " + std::to_string(p_.rtsp_port) + " are forwarded");
     }
 
 private:
@@ -430,6 +433,7 @@ private:
             "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
             "-L", "127.0.0.1:" + std::to_string(local_port_) + ":" + target_ + ":" + std::to_string(p_.camera_port),
             "-L", "127.0.0.1:" + std::to_string(https_local_port_) + ":" + target_ + ":" + std::to_string(p_.https_port),
+            "-L", "127.0.0.1:" + std::to_string(rtsp_local_port_) + ":" + target_ + ":" + std::to_string(p_.rtsp_port),
             "-p", std::to_string(p_.ssh_port), "-l", p_.ssh_user,
         };
         if (fallback_) {
@@ -489,7 +493,7 @@ private:
     const Hooks &hooks_;
     std::string ssh_, target_, last_log_;
     std::wstring log_, pipe_;
-    int local_port_ = 0, https_local_port_ = 0;
+    int local_port_ = 0, https_local_port_ = 0, rtsp_local_port_ = 0;
     bool password_used_ = false, fallback_ = false;
     Process ssh_process_;
     std::unique_ptr<AskpassServer> askpass_;

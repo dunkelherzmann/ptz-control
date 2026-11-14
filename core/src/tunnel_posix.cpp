@@ -284,7 +284,7 @@ public:
         int rc = run({ssh_, "-S", control_, "-O", "forward", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
                       "-L", "127.0.0.1:" + std::to_string(port) + ":" + target_ + ":" + std::to_string(camera_port),
                       "-p", std::to_string(p_.ssh_port), "-l", p_.ssh_user, "--", p_.ssh_host});
-        if (rc != 0) throw Error("Could not forward the camera HTTPS port through the existing SSH connection");
+        if (rc != 0) throw Error("Could not forward the camera's port " + std::to_string(camera_port) + " through the existing SSH connection");
         return port;
     }
 

@@ -143,6 +143,28 @@ private:
         return text;
     }
 
+    std::string stream_uri() override {
+        // The RTSP port is a camera setting (Network.RTSP.Port, 554 by default).
+        int port = 554;
+        HttpRequest http;
+        http.url = "http://" + bracket_host(p_.host) + ":" + std::to_string(p_.port) +
+                   "/axis-cgi/param.cgi?action=list&group=Network.RTSP.Port";
+        http.timeout = p_.timeout;
+        http.digest_auth = true;
+        http.user = p_.user;
+        http.password = p_.password;
+        HttpResponse response = http_perform(http);
+        if (response.transport_ok && response.status == 200) {
+            auto eq = response.body.find('=');
+            if (eq != std::string::npos)
+                if (auto value = parse_number(trim(response.body.substr(eq + 1)));
+                    value && *value >= 1 && *value <= 65535 && *value == static_cast<int>(*value))
+                    port = static_cast<int>(*value);
+        }
+        return "rtsp://" + bracket_host(p_.host) + ":" + std::to_string(port) +
+               "/axis-media/media.amp?camera=1&videocodec=h264";
+    }
+
     CameraParams p_;
     std::string url_;
 };

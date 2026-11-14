@@ -14,12 +14,14 @@ static int failures = 0;
 
 static void on_log(void *context, const char *line) { (void)context; printf("      log: %s\n", line); }
 
+static int camera_port = 8080;
+
 static ptz_session *open_camera(ptz_vendor vendor, const char *password, char *error) {
     ptz_connect_params p = {0};
     p.route = PTZ_ROUTE_LOCAL;
     p.vendor = vendor;
     p.camera_host = "127.0.0.1";
-    p.camera_port = 8080;
+    p.camera_port = camera_port;
     p.camera_user = "admin";
     p.camera_password = password;
     p.https_port = 8443;
@@ -27,6 +29,52 @@ static ptz_session *open_camera(ptz_vendor vendor, const char *password, char *e
     ptz_callbacks cb = {0};
     cb.log = on_log;
     return ptz_connect(&p, &cb, NULL, error, 512);
+}
+
+/* Live video: frames arrive on the stream's thread. */
+typedef struct {
+    volatile int frames, keyframes, first_key, first_has_parameters, codec, ended, bad_order;
+    volatile double last_time;
+} live_seen;
+
+static void on_frame(void *context, const ptz_frame *frame) {
+    live_seen *seen = context;
+    if (seen->frames == 0) {
+        seen->first_key = frame->keyframe;
+        int type = frame->size > 4 ? frame->data[4] : 0;
+        /* H.264 SPS is NAL type 7; H.265 VPS is type 32. */
+        seen->first_has_parameters = frame->size > 4 && memcmp(frame->data, "\0\0\0\1", 4) == 0 &&
+                                     (frame->codec == PTZ_CODEC_H264 ? (type & 0x1f) == 7 : ((type >> 1) & 0x3f) == 32);
+    } else if (frame->time < seen->last_time) {
+        seen->bad_order = 1;
+    }
+    seen->last_time = frame->time;
+    seen->codec = frame->codec;
+    seen->keyframes += frame->keyframe;
+    seen->frames++;
+}
+
+static void on_ended(void *context, const char *reason) {
+    ((live_seen *)context)->ended = 1;
+    printf("      live ended: %s\n", reason);
+}
+
+static void exercise_live(ptz_session *s, ptz_codec codec, const char *name) {
+    char error[512] = {0}, description[64] = {0};
+    live_seen seen = {0};
+    ptz_live_callbacks cb = {&seen, on_frame, on_ended};
+    ptz_live *live = ptz_live_start(s, &cb, description, sizeof description, error, sizeof error);
+    CHECK(live != NULL, "%s live video starts: %s (%s)", name, description, error);
+    if (!live) return;
+    sleep(3);
+    int frames = seen.frames;
+    ptz_live_stop(live);
+    int after_stop = seen.frames;
+    usleep(300000);
+    CHECK(frames >= 15 && seen.codec == (int)codec, "%s: %d frames in 3 s, codec %d", name, frames, seen.codec);
+    CHECK(seen.first_key && seen.first_has_parameters, "%s: first frame is a key frame with parameter sets", name);
+    CHECK(seen.keyframes >= 2 && !seen.bad_order, "%s: %d key frames, times in order", name, seen.keyframes);
+    CHECK(!seen.ended && seen.frames == after_stop, "%s: nothing arrives after stopping", name);
 }
 
 static void exercise(ptz_vendor vendor, double pan, double tilt, double zoom, double bad_pan) {
@@ -77,6 +125,8 @@ static void exercise(ptz_vendor vendor, double pan, double tilt, double zoom, do
           before.pan.text, after.pan.text, before.tilt.text, after.tilt.text);
     CHECK(!ptz_move_in_view(s, 1.5, 0, error, sizeof error), "point outside the picture refused: %s", error);
 
+    exercise_live(s, PTZ_CODEC_H264, vendor == PTZ_VENDOR_AXIS ? "axis" : "onvif");
+
     char url[512], notice[256];
     CHECK(ptz_web_url(s, url, sizeof url, notice, sizeof notice, error, sizeof error), "web url %s %s", url, error);
     ptz_close(s);
@@ -102,6 +152,15 @@ int main(void) {
 
     exercise(PTZ_VENDOR_ONVIF, 0.55, 0.22, 0.4, 1.5);
     exercise(PTZ_VENDOR_AXIS, 45.5, -30, 2000, 270);
+
+    /* A second mock camera on port 8090 sends H.265. */
+    camera_port = 8090;
+    ptz_session *s = open_camera(PTZ_VENDOR_ONVIF, "secret", error);
+    CHECK(s != NULL, "h265 camera connects (%s)", error);
+    if (s) {
+        exercise_live(s, PTZ_CODEC_H265, "onvif h265");
+        ptz_close(s);
+    }
     printf(failures ? "\n%d FAILED\n" : "\nall passed\n", failures);
     return failures != 0;
 }

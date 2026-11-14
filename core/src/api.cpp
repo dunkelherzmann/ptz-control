@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 
 struct ptz_session {
     ptz::Hooks hooks;
@@ -13,6 +14,10 @@ struct ptz_session {
     std::unique_ptr<ptz::Camera> camera;
     std::unique_ptr<ptz::WebInterface> web;
     int picture_width = 0, picture_height = 0;  // the last picture's size, for aiming in it
+    bool tunneled = false;
+    std::string camera_user;
+    double timeout = 15;
+    std::map<int, int> video_forwards;  // camera port -> local port, so restarting the video adds no forwards
 
     std::string redact(std::string message) const {
         for (const std::string *secret : {&camera_password, &ssh_password}) {
@@ -94,6 +99,8 @@ extern "C" ptz_session *ptz_connect(const ptz_connect_params *params, const ptz_
             throw ptz::Error("Ports must be integers between 1 and 65535");
         if (params->profile < 0) throw ptz::Error("Profile index must be nonnegative");
         double timeout = params->timeout > 0 ? params->timeout : 15;
+        session->camera_user = camera_user;
+        session->timeout = timeout;
 
         ptz::CameraParams camera{camera_host, params->camera_port, camera_user, session->camera_password,
                                  params->profile, timeout, false};
@@ -118,6 +125,7 @@ extern "C" ptz_session *ptz_connect(const ptz_connect_params *params, const ptz_
             camera.host = "127.0.0.1";
             camera.port = session->tunnel->local_port();
             camera.tunneled = true;
+            session->tunneled = true;
         }
         session->hooks.log("Connecting to camera " + camera_host + " (" +
                            (params->vendor == PTZ_VENDOR_AXIS ? "Axis VAPIX" : "ONVIF") + "); no movement is sent");
@@ -162,6 +170,89 @@ extern "C" int ptz_picture(ptz_session *session, unsigned char **data, size_t *s
 }
 
 extern "C" void ptz_free(void *data) { std::free(data); }
+
+struct ptz_live {
+    ptz_live_callbacks callbacks{};
+    std::unique_ptr<ptz::RtspStream> stream;
+    std::atomic<bool> stop{false};
+    std::thread thread;
+    std::string camera_password, ssh_password;  // for redacting the reason the stream ended
+
+    std::string redact(std::string message) const {
+        for (const std::string *secret : {&camera_password, &ssh_password}) {
+            if (secret->empty()) continue;
+            for (size_t at; (at = message.find(*secret)) != std::string::npos;)
+                message.replace(at, secret->size(), "[redacted]");
+        }
+        return ptz::printable(message);
+    }
+};
+
+extern "C" ptz_live *ptz_live_start(ptz_session *session, const ptz_live_callbacks *callbacks, char *description,
+                                    size_t description_size, char *error, size_t error_size) {
+    copy(description, description_size, "");
+    auto live = std::make_unique<ptz_live>();
+    if (callbacks) live->callbacks = *callbacks;
+    live->camera_password = session->camera_password;
+    live->ssh_password = session->ssh_password;
+    int ok = guarded(session, error, error_size, [&] {
+        if (!ptz_link_alive(session)) throw ptz::Error("SSH connection closed; reconnect to continue");
+        std::string uri = session->camera->stream_uri();
+        ptz::UriParts parts = ptz::split_uri(uri);
+        if (parts.scheme != "rtsp") throw ptz::Error("Camera gave a video address that isn't RTSP");
+        int port = parts.port ? parts.port : 554;
+        // Requests name the address without credentials; the camera signs us in with Digest.
+        uri = "rtsp://" + ptz::bracket_host(parts.host) + (parts.port ? ":" + std::to_string(parts.port) : "") +
+              parts.path;
+        ptz::StreamTarget target{uri, parts.host, port, session->camera_user, session->camera_password,
+                                 session->timeout};
+        if (session->tunneled) {
+            target.dial_host = "127.0.0.1";
+            auto known = session->video_forwards.find(port);
+            target.dial_port = known != session->video_forwards.end()
+                                   ? known->second
+                                   : (session->video_forwards[port] = session->tunnel->forward(port));
+        }
+        live->stream = std::make_unique<ptz::RtspStream>(target);
+        live->stream->open();
+        copy(description, description_size,
+             std::string(live->stream->codec() == ptz::Codec::h265 ? "H.265" : "H.264") + " over RTSP");
+    });
+    if (!ok) return nullptr;
+    ptz_live *raw = live.get();
+    ptz_codec codec = raw->stream->codec() == ptz::Codec::h265 ? PTZ_CODEC_H265 : PTZ_CODEC_H264;
+    raw->thread = std::thread([raw, codec] {
+        std::string reason;
+        try {
+            raw->stream->run(
+                [&](const std::string &data, bool keyframe, double time) {
+                    if (!raw->callbacks.frame) return;
+                    ptz_frame frame{codec, reinterpret_cast<const unsigned char *>(data.data()), data.size(),
+                                    keyframe ? 1 : 0, time};
+                    raw->callbacks.frame(raw->callbacks.context, &frame);
+                },
+                raw->stop);
+        } catch (const std::exception &e) {
+            reason = raw->redact(e.what());
+        } catch (...) {
+            reason = "Unexpected error in the live view";
+        }
+        if (!raw->stop && raw->callbacks.ended)
+            raw->callbacks.ended(raw->callbacks.context, reason.empty() ? "The live view ended" : reason.c_str());
+    });
+    return live.release();
+}
+
+extern "C" void ptz_live_stop(ptz_live *live) {
+    if (!live) return;
+    live->stop = true;
+    if (live->thread.joinable()) live->thread.join();
+    // TEARDOWN goes out after the reader has stopped, so the reply isn't read.
+    live->stream->teardown();
+    std::fill(live->camera_password.begin(), live->camera_password.end(), '\0');
+    std::fill(live->ssh_password.begin(), live->ssh_password.end(), '\0');
+    delete live;
+}
 
 extern "C" int ptz_move_in_view(ptz_session *session, double x, double y, char *error, size_t error_size) {
     return guarded(session, error, error_size, [&] {
