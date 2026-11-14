@@ -88,6 +88,7 @@ someone else needs its quarantine flag removed once (see [Installing](#installin
 | Aim | click a point of the camera picture, drag a travel meter, or type pan/tilt/zoom targets |
 | Move | Return in a target field, **Move**, ⌘↩, or double-click the picture or a meter |
 | New picture | ⇧⌘R, or ⟳ above the picture |
+| Pan and tilt over the picture | Camera ▸ Measure View (⇧⌘M): the camera turns a little and back; then a click fills the targets |
 | Keep an axis | leave its field blank (or `x`) |
 | Return to starting coordinates | ⌘B |
 | Stop motion | ⌘. |
