@@ -492,16 +492,16 @@ static int grey_picture(void *, const unsigned char *data, size_t size, unsigned
     int ok = 0;
     {
         Gdiplus::Bitmap picture(stream);
-        Gdiplus::Bitmap small(width, height, PixelFormat32bppARGB);
-        if (picture.GetLastStatus() == Gdiplus::Ok && small.GetLastStatus() == Gdiplus::Ok) {
+        Gdiplus::Bitmap scaled(width, height, PixelFormat32bppARGB);
+        if (picture.GetLastStatus() == Gdiplus::Ok && scaled.GetLastStatus() == Gdiplus::Ok) {
             {
-                Gdiplus::Graphics g(&small);
+                Gdiplus::Graphics g(&scaled);
                 g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBilinear);
                 g.DrawImage(&picture, 0, 0, width, height);
             }
             Gdiplus::BitmapData pixels;
             Gdiplus::Rect all(0, 0, width, height);
-            if (small.LockBits(&all, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &pixels) == Gdiplus::Ok) {
+            if (scaled.LockBits(&all, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &pixels) == Gdiplus::Ok) {
                 for (int y = 0; y < height; ++y) {
                     auto *row = static_cast<const BYTE *>(pixels.Scan0) + static_cast<size_t>(y) * pixels.Stride;
                     for (int x = 0; x < width; ++x) {  // BGRA in memory
@@ -509,7 +509,7 @@ static int grey_picture(void *, const unsigned char *data, size_t size, unsigned
                         out[static_cast<size_t>(y) * width + x] = static_cast<unsigned char>((114 * p[0] + 587 * p[1] + 299 * p[2]) / 1000);
                     }
                 }
-                small.UnlockBits(&pixels);
+                scaled.UnlockBits(&pixels);
                 ok = 1;
             }
         }
