@@ -33,6 +33,10 @@ No open bugs in `bugs.md`.
   (`ptz_live_start`, decoded with Media Foundation's own decoders; H.265 needs HEVC Video Extensions), with the
   "● LIVE · H.264 · 320 × 180" plate, aiming on top and Refresh Picture restarting it; still pictures when it can't
   play. Tested like the Mac's runs 3 and 4.
+- [x] **The range plane follows the camera** (I4). The plane keeps the picture's size but is centred on the current
+  position, so the reticle stays at the picture's centre and the grid, zero axes, range edges, limits, trail, start and
+  target move under it; beyond the range's edges the picture is shaded, and limit plates show only at visible edges.
+  Tested like the Mac's run 3.
 - [x] **Saved logins.** The Login menus, Save login, the first-save choice, unlocking and Manage Logins, over the
   core's login vault, with the vault file in the app's own data folder. (§17 P1–P8; #11)
 - [x] **Copy each build to the desktop.** (#7) `windows\scripts\build.ps1` copies the new `PTZControl.exe` to the desktop as
