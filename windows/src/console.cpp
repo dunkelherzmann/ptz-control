@@ -369,6 +369,7 @@ std::optional<Settings> read_settings(std::wstring &error) {
 
 void refresh();
 void disconnect(std::function<void()> then = nullptr);
+void take_picture();
 
 // ---- saved logins ---------------------------------------------------------------------
 
@@ -613,8 +614,6 @@ void refresh() {
     });
     update_controls();
 }
-
-void take_picture();
 
 void tick() {
     if (g->state != State::Connected || link_busy(g->link)) return;

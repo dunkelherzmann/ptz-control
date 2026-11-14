@@ -44,7 +44,7 @@ the rest as a gap.
   1180 × 780, smallest 980 × 680. It can't be tabbed.
 - **K2 Remembered frame.** The window's size and position are restored at the next launch; the first launch centers it.
 - **K3 Layout.** On the left, the **Secure link configuration** panel (300 pt wide). On the right, from the top: the
-  header with the status chip, the position plane next to the **Current coordinates** panel, the axis travel meters,
+  header with the status chip, the camera picture next to the **Current coordinates** panel, the axis travel meters,
   the target row, the event buffer and a footer line.
 - **K4 Closing.** Closing the window quits the app. If a camera is connected or connecting, the app first disconnects
   (L5), then quits. ⌘Q does the same.
@@ -132,28 +132,17 @@ the rest as a gap.
 - **I1 Header**: "No camera link", "Connecting to <address>…", or "<address> · <camera name>" with the units below it.
 - **I2 Status chip**: OFFLINE, LINKING, CLOSING, REQUEST (a request is running), READS PAUSED, POSITION OK or
   NO POSITION, with a green, orange or muted lamp.
-- **I3 Position plane** (pan across, tilt up), in camera units, in **Range** mode: a 10 × 10 grid, the zero axes when zero is in range,
-  range labels, the last 120 measured positions as a trail (gaps stay gaps), the starting position as a square marked
-  **S**, the target as a dashed crosshair and ring, and the current position as a solid reticle. Without ranges it
-  reads "NO CAMERA LINK" or "PAN/TILT RANGE UNAVAILABLE"; with no measured position, "POSITION UNAVAILABLE".
-- **I4 Aim on the plane.** Pointing at it shows guide lines and the pan, tilt value under the pointer. Click or drag to
-  aim (fills the pan and tilt targets); double-click to aim and move.
-- **I9 Range or Picture.** A switch at the right of the plane's caption, **Range | Picture** (also View ▸ Whole Range
-  ⌘1 and View ▸ Camera Picture ⌘2), picks what the plane shows; the choice is remembered. Hover text: "Range: the
-  camera's whole pan/tilt range. Click to aim, double-click to move (⌘1)" and "Picture: a still picture of what the
-  camera sees. Click a point to aim at it, double-click to move the camera there (⌘2)".
-- **I10 Camera picture.** In Picture mode the plane, captioned "Camera picture // view — click to aim, double-click to
-  move there", shows a still picture of the camera's view, as large as fits and in the picture's shape, with a view
-  grid on top: tenths of the picture, stronger centre lines, and a solid reticle at the centre, where the camera
-  points. The window grows or shrinks in height to the picture's shape, keeping its top edge and staying on the screen,
-  and gets its Range height back when switching to Range. A plate in the corner reads "PICTURE <time taken>". A picture
-  is taken on connecting, on switching to Picture, with **Refresh Picture** (⇧⌘R, or the ⟳ button beside the switch,
-  hover text "Refresh Picture: take a new picture of the camera's view now (⇧⌘R)"), and after every move or stop
-  once the camera stops (a reading taken after the move that isn't MOVING, or 3 s when the camera doesn't report its
-  motion). Until then the picture is dimmed and the plate reads "MOVING · NEW PICTURE WHEN IT STOPS". Without a
-  picture the plane reads "NO CAMERA LINK", "TAKING A PICTURE…" or "NO PICTURE" with the reason; a failed picture is
-  logged in red once.
-- **I11 Aim in the picture.** Pointing at the picture shows guide lines and the point in view units (◀/▶ and ▲/▼,
+- **I3 Camera picture.** The plane, captioned "Camera picture // view — click to aim, double-click to move there",
+  shows a still picture of the camera's view, as large as fits and in the picture's shape, with a view grid on top:
+  tenths of the picture, stronger centre lines, and a solid reticle at the centre, where the camera points. The window
+  grows or shrinks in height to the picture's shape, keeping its top edge and staying on the screen. A plate in the
+  corner reads "PICTURE <time taken>". A picture is taken on connecting, with **Refresh Picture** (⇧⌘R, or the ⟳
+  button at the right of the plane's caption, hover text "Refresh Picture: take a new picture of the camera's view now
+  (⇧⌘R)"), and after every move or stop once the camera stops (a reading taken after the move that isn't MOVING, or
+  3 s when the camera doesn't report its motion). Until then the picture is dimmed and the plate reads "MOVING · NEW
+  PICTURE WHEN IT STOPS". Without a picture the plane reads "NO CAMERA LINK", "TAKING A PICTURE…" or "NO PICTURE"
+  with the reason; a failed picture is logged in red once.
+- **I4 Aim in the picture.** Pointing at the picture shows guide lines and the point in view units (◀/▶ and ▲/▼,
   0 at the centre, 1 at the edges). Click to aim: a dashed crosshair and ring with a dotted line from the centre.
   Double-click (or Move, ⌘↩) turns the camera so that point comes to the centre, logged as "Move toward the picture
   point accepted: 0.45 right, 0.30 up of the picture (movement may still be in progress)". Typing in a target field
@@ -173,8 +162,8 @@ the rest as a gap.
 ## 8. Target and moves
 
 - **M1 Target fields** for pan, tilt and zoom (placeholder "Pan: unchanged" and so on). They are absolute positions,
-  not increments. A blank field or `x` keeps that axis. Typing updates the target markers on the plane and meters.
-- **M2 Move** (⌘↩, the Move button, Return in a target field, or a double-click on the plane or a meter). An invalid
+  not increments. A blank field or `x` keeps that axis. Typing updates the target markers on the meters.
+- **M2 Move** (⌘↩, the Move button, Return in a target field, or a double-click on the picture or a meter). An invalid
   number beeps and is logged in red; all axes blank logs "All axes unchanged; no move sent." Success is logged as
   "Move accepted: pan=…, tilt=… (movement may still be in progress)" and the position is read again at once.
 - **M3 Return to Starting Coordinates** (⌘B, the Return to Start button) moves back to the first reading after
@@ -220,13 +209,12 @@ the rest as a gap.
   Manage Logins' top row, on every platform, holds every menu, each as a submenu, and opens right-aligned under the
   button: PTZ Control (About, Hide, Hide Others, Show All, Quit), Edit (Undo, Redo, Cut, Copy, Paste, Select All),
   Camera (Connect, Disconnect, Move to Target, Return to Starting Coordinates, Stop Motion, Refresh Position, Pause
-  Auto-Refresh, Refresh Picture, Open Camera Web Interface, Manage Logins), View (Whole Range, Camera Picture,
-  Phosphor), Window (Minimize, Zoom, Close), Help
+  Auto-Refresh, Refresh Picture, Open Camera Web Interface, Manage Logins), View (Phosphor), Window (Minimize, Zoom, Close), Help
   (Coordinate Help). Camera commands are enabled only when they can act. Hover text: "Main Menu: every command of PTZ
   Control, with its shortcut"; VoiceOver reads "Main Menu". On the Mac the menu bar keeps only the app menu macOS
   always shows (About, Services, Hide, Hide Others, Show All, Quit), so on a wide screen no command needs a trip to the
   top of the screen. Every shortcut works from any window, Cut, Copy and Paste in text fields included.
-- **H2 Coordinate Help** (⌘?) explains absolute targets, the units per vendor, blank or `x`, aiming on the plane and
+- **H2 Coordinate Help** (⌘?) explains absolute targets, the units per vendor, blank or `x`, aiming in the picture and
   meters, starting coordinates, the 2 s refresh, Stop and the web interface.
 - **H3 About** shows the name, the version, "PTZ Coordinates Controller", "ONVIF · Axis VAPIX · Local or SSH",
   "By dunkelherzmann" and a link to the project on GitHub.
@@ -245,7 +233,6 @@ What differs from the Mac version today. The `pending.md` in each folder says wh
   All, acting on the field that has the focus), Camera, View ▸ Phosphor, Window (Minimize Ctrl+M, Maximize, Close
   Ctrl+W) and Help (Coordinate Help, F1 here for ⌘?).
 - Default size 1180 × 820. The window's size and position aren't remembered.
-- No camera picture yet (I9–I11): the plane always shows the whole range.
 - The Advanced fields are always shown, without a disclosure triangle.
 - Enter in any connection field connects while nothing is connected.
 - The event buffer always scrolls to the newest line.
