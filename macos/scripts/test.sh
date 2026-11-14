@@ -13,7 +13,7 @@ WORK="$(mktemp -d "$ROOT/.build/test-XXXXXX")"
 TEST_ID=com.herbertcisneros.PTZControl.test
 COPY="$WORK/PTZ Control Test.app"
 mkdir -p "$OUT"
-trap 'kill "$MOCK" 2>/dev/null || true; defaults delete "$TEST_ID" >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
+trap 'kill "$MOCK" "${STILL_MOCK:-}" 2>/dev/null || true; defaults delete "$TEST_ID" >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
 
 ditto "$APP" "$COPY"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $TEST_ID" "$COPY/Contents/Info.plist"
@@ -25,8 +25,8 @@ python3 -u "$ROOT/tools/mock-camera.py" --port "$PORT" >"$WORK/mock.log" 2>&1 &
 MOCK=$!
 sleep 1
 
-settings() {  # camera username
-    printf '{"route":0,"vendor":0,"cameraHost":"127.0.0.1","cameraPort":%s,"cameraUser":"%s","httpsPort":443,"profile":0,"timeout":15,"sshHost":"","sshUser":"","sshPort":22,"sshIdentity":""}' "$PORT" "$1" \
+settings() {  # camera username [camera port]
+    printf '{"route":0,"vendor":0,"cameraHost":"127.0.0.1","cameraPort":%s,"cameraUser":"%s","httpsPort":443,"profile":0,"timeout":15,"sshHost":"","sshUser":"","sshPort":22,"sshIdentity":""}' "${2:-$PORT}" "$1" \
         | xxd -p | tr -d '\n'
 }
 FAIL=0
@@ -65,23 +65,40 @@ check "run 2 connected with the saved login and moved" "$([ "$(moves)" -gt "$BEF
 check "Manage Logins picture saved" "$([ -s "$OUT/macos-logins.png" ] && echo 0 || echo 1)"
 check "still one camera login" "$([ "$(grep -c '^camera' "$VAULT")" = 1 ] && echo 0 || echo 1)"
 
-# Run 3: the camera picture. A picture comes on connect, a point of it is aimed at, the camera moves toward it, and
-# a new picture comes once it stops.
-defaults write "$TEST_ID" ConnectionSettings -data "$(settings admin)"
+# Run 3: still pictures, from a camera whose video can't be reached. A picture comes on connect, a point of it is
+# aimed at, the camera moves toward it, and a new picture comes once it stops.
+STILL_PORT=18083
+python3 -u "$ROOT/tools/mock-camera.py" --port "$STILL_PORT" --video none >"$WORK/mock-still.log" 2>&1 &
+STILL_MOCK=$!
+sleep 1
+defaults write "$TEST_ID" ConnectionSettings -data "$(settings admin "$STILL_PORT")"
 rm -f "$OUT/macos-picture.png" "$OUT/macos-picture-aim.png"
-PICTURES_BEFORE="$(grep -c '^mock: picture' "$WORK/mock.log" || true)"
 PTZ_VAULT_PATH="$VAULT" PTZ_PASSWORD=secret PTZ_SNAPSHOT_PICTURE=1 PTZ_SNAPSHOT_PATH="$OUT/macos-picture.png" \
     PTZ_SNAPSHOT_AIM_PATH="$OUT/macos-picture-aim.png" PTZ_SNAPSHOT_MOVING_PATH="$OUT/macos-picture-moving.png" \
-    "$BIN" >"$WORK/app3.log" 2>&1 || true
+    PTZ_SNAPSHOT_LIVE_PATH="$WORK/live3.txt" "$BIN" >"$WORK/app3.log" 2>&1 || true
 check "run 3 took a picture, then a new one after the move" \
-    "$([ $(( $(grep -c '^mock: picture' "$WORK/mock.log" || true) - PICTURES_BEFORE )) -ge 2 ] && echo 0 || echo 1)"
+    "$([ "$(grep -c '^mock: picture' "$WORK/mock-still.log" || true)" -ge 2 ] && echo 0 || echo 1)"
 check "run 3 moved toward the aimed point (right and up)" \
-    "$(grep -E '^mock: onvif view move to pan=0\.[0-9]+ tilt=0\.[0-9]+' "$WORK/mock.log" >/dev/null && echo 0 || echo 1)"
+    "$(grep -E '^mock: onvif view move to pan=0\.[0-9]+ tilt=0\.[0-9]+' "$WORK/mock-still.log" >/dev/null && echo 0 || echo 1)"
+check "run 3 fell back to still pictures" "$(grep -qx 'no live view' "$WORK/live3.txt" && echo 0 || echo 1)"
 check "camera-picture pictures saved" "$([ -s "$OUT/macos-picture.png" ] && [ -s "$OUT/macos-picture-aim.png" ] && echo 0 || echo 1)"
+
+# Run 4: the live view. The camera's H.264 video plays in the plane, and aiming in it still moves the camera.
+defaults write "$TEST_ID" ConnectionSettings -data "$(settings admin)"
+rm -f "$OUT/macos-live.png"
+VIEW_MOVES_BEFORE="$(grep -c '^mock: onvif view move' "$WORK/mock.log" || true)"
+PTZ_VAULT_PATH="$VAULT" PTZ_PASSWORD=secret PTZ_SNAPSHOT_PICTURE=1 PTZ_SNAPSHOT_PATH="$OUT/macos-live.png" \
+    PTZ_SNAPSHOT_LIVE_PATH="$WORK/live4.txt" "$BIN" >"$WORK/app4.log" 2>&1 || true
+check "run 4 played the camera's video ($(cat "$WORK/live4.txt" 2>/dev/null))" \
+    "$(grep -qx 'H.264 · 320 × 180' "$WORK/live4.txt" 2>/dev/null; echo $?)"
+check "run 4 started the video over RTSP" "$(grep -q '^mock: rtsp play' "$WORK/mock.log" && echo 0 || echo 1)"
+check "run 4 aimed in the live view" \
+    "$([ "$(grep -c '^mock: onvif view move' "$WORK/mock.log" || true)" -gt "$VIEW_MOVES_BEFORE" ] && echo 0 || echo 1)"
+check "live view picture saved" "$([ -s "$OUT/macos-live.png" ] && echo 0 || echo 1)"
 
 if [ "$FAIL" = 0 ]; then
     printf 'PASS PTZ Control %s (test copy): pictures in %s\n' "$(defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString)" "$OUT"
 else
-    cat "$WORK/app1.log" "$WORK/app2.log" "$WORK/app3.log" "$WORK/mock.log"
+    cat "$WORK/app1.log" "$WORK/app2.log" "$WORK/app3.log" "$WORK/app4.log" "$WORK/mock.log" "$WORK/mock-still.log"
     exit 1
 fi

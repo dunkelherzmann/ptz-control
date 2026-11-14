@@ -31,7 +31,8 @@ parser.add_argument("--port", type=int, default=8080)
 parser.add_argument("--user", default="admin")
 parser.add_argument("--password", default="secret")
 parser.add_argument("--rtsp-port", type=int, default=0, help="default: --port + 1")
-parser.add_argument("--video", choices=("h264", "h265"), default="h264")
+parser.add_argument("--video", choices=("h264", "h265", "none"), default="h264",
+                    help="none: the stream address leads nowhere, as on a camera whose video can't be reached")
 args = parser.parse_args()
 args.rtsp_port = args.rtsp_port or args.port + 1
 
@@ -334,7 +335,7 @@ def load_clip():
     return params, frames
 
 
-CLIP_PARAMS, CLIP_FRAMES = load_clip()
+CLIP_PARAMS, CLIP_FRAMES = load_clip() if args.video != "none" else ({}, [])
 
 
 def sdp():
@@ -493,8 +494,9 @@ class RtspHandler(socketserver.BaseRequestHandler):
 
 socketserver.ThreadingTCPServer.allow_reuse_address = True
 socketserver.ThreadingTCPServer.daemon_threads = True
-rtsp_server = socketserver.ThreadingTCPServer(("127.0.0.1", args.rtsp_port), RtspHandler)
-threading.Thread(target=rtsp_server.serve_forever, daemon=True).start()
+if args.video != "none":
+    rtsp_server = socketserver.ThreadingTCPServer(("127.0.0.1", args.rtsp_port), RtspHandler)
+    threading.Thread(target=rtsp_server.serve_forever, daemon=True).start()
 
 print(f"Mock camera on http://127.0.0.1:{args.port} and rtsp://127.0.0.1:{args.rtsp_port}  user={args.user}")
 ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
