@@ -24,7 +24,8 @@ the rest as a gap.
 ## 1. Core
 
 - **C1 One C interface.** `core/include/ptzcore.h` is the only thing the hosts call: connect, camera info, read
-  position, move, stop, take a picture, move toward a point of the picture, find the web interface, check the link,
+  position, move, stop, take a picture, move toward a point of the picture, measure the picture's view, find the web
+  interface, check the link,
   close. All calls block. Each host runs them on one
   worker thread or serial queue per session, never on the UI thread, so camera requests never overlap.
 - **C2 Callbacks.** While connecting, the core can ask the host to log a line, to ask the operator for text (secret or
@@ -165,8 +166,24 @@ the rest as a gap.
   0 at the centre, 1 at the edges). Click to aim: a dashed crosshair and ring with a dotted line from the centre.
   Double-click (or Move, ⌘↩) turns the camera so that point comes to the centre, logged as "Move toward the picture
   point accepted: 0.45 right, 0.30 up of the picture (movement may still be in progress)". Typing in a target field
-  drops the point, and an absolute target takes over. A camera that can't aim from its picture (see V6) shows "THIS
-  CAMERA CAN'T AIM FROM ITS PICTURE" in the corner and ignores clicks.
+  drops the point, and an absolute target takes over. A camera that can't move within its view by itself (see V6) has
+  its view measured first (I12), then gets an absolute move to the point's pan and tilt. A camera without pan and tilt
+  ranges shows "THIS CAMERA CAN'T AIM FROM ITS PICTURE" in the corner and ignores clicks.
+- **I12 Measure View** (Camera ▸ Measure View, ⇧⌘M; enabled when connected to a camera with pan and tilt ranges)
+  learns how much of the pan/tilt range the picture spans at the current zoom: the camera turns about 1% of its range
+  on one axis, the app compares the pictures before and after to find how far the scene moved, then turns by a larger
+  amount that should move the scene about 0.4 of the half picture and matches it near where that lands (so a repeating
+  scene can't match a whole period away), then returns; the same for the other axis. It takes several seconds, the
+  plate reads "MEASURING THE VIEW · THE CAMERA TURNS A LITTLE AND BACK" and clicks are ignored meanwhile. The log reads
+  "Measuring the camera's view: it turns a little on each axis and back (a few seconds)…", then "View measured: the
+  picture spans ±0.251 pan and ±0.1421 tilt from its centre at zoom 0" or "Measuring the view failed: <reason>" in
+  red. The result is kept per zoom for the connection; at another zoom the view is unmeasured again.
+- **I13 Coordinates over the picture.** While the picture's view is measured and the camera hasn't moved since it was
+  taken, pan values label the top edge and tilt values the right edge at every other grid line (the centre ones named
+  "PAN …" and "TILT …", with as many decimals as the step needs), the starting position shows as a square marked
+  **S**, the reticle follows the latest reading, the absolute target (from the target fields, a blank axis keeping its
+  current value) shows as the dashed crosshair, and the hover readout gives PAN and TILT. A click then fills the pan and
+  tilt target fields (within the ranges) and a double-click also moves there.
 - **I5 Axis travel meters** for pan, tilt and zoom: the bar's fill is the position as a percentage of the advertised
   limits. A missing reading is hatched and reads "N/A", never an empty bar. Ticks mark the start and the target, a
   small handle marks the target, and the limits are printed at both ends.
@@ -228,7 +245,7 @@ the rest as a gap.
   Manage Logins' top row, on every platform, holds every menu, each as a submenu, and opens right-aligned under the
   button: PTZ Control (About, Hide, Hide Others, Show All, Quit), Edit (Undo, Redo, Cut, Copy, Paste, Select All),
   Camera (Connect, Disconnect, Move to Target, Return to Starting Coordinates, Stop Motion, Refresh Position, Pause
-  Auto-Refresh, Refresh Picture, Open Camera Web Interface, Manage Logins), View (Phosphor), Window (Minimize, Zoom, Close), Help
+  Auto-Refresh, Refresh Picture, Measure View, Open Camera Web Interface, Manage Logins), View (Phosphor), Window (Minimize, Zoom, Close), Help
   (Coordinate Help). Camera commands are enabled only when they can act. Hover text: "Main Menu: every command of PTZ
   Control, with its shortcut"; VoiceOver reads "Main Menu". On the Mac the menu bar keeps only the app menu macOS
   always shows (About, Services, Hide, Hide Others, Show All, Quit), so on a wide screen no command needs a trip to the

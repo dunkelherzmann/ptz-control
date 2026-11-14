@@ -135,6 +135,22 @@ ptz_live *ptz_live_start(ptz_session *session, const ptz_live_callbacks *callbac
  * before ptz_close, from any thread except the stream's own. */
 void ptz_live_stop(ptz_live *live);
 
+/* How much of the pan/tilt range the picture spans, measured at one zoom: the pan change that brings a point at the
+ * picture's right edge (x = 1) to its centre, and the tilt change for its top edge (y = 1). A point (x, y) of the
+ * picture lies at pan + x * pan_per_x, tilt + y * tilt_per_y. */
+typedef struct {
+    double pan_per_x, tilt_per_y;
+} ptz_view_scale;
+/* Decodes a JPEG or PNG picture into exactly width x height grey pixels (0-255, top row first), stretching it to fit.
+ * Returns 1 on success. The host supplies it: the core has no image decoder. */
+typedef int (*ptz_grey_fn)(void *context, const unsigned char *data, size_t size, unsigned char *grey, int width,
+                           int height);
+/* Measures the scale at the current zoom: turns the camera a few percent of its range on each axis, compares the
+ * pictures, and turns it back. Takes several seconds. The session keeps the result for that zoom. */
+int ptz_measure_view(ptz_session *session, ptz_grey_fn grey, void *context, ptz_view_scale *scale, char *error,
+                     size_t error_size);
+/* The scale measured at the zoom of `position` (its zoom reading, or the only one when there is none); 0 when none. */
+int ptz_view_scale_at(ptz_session *session, const ptz_position *position, ptz_view_scale *scale);
 /* Probes HTTP, then HTTPS, without sending credentials. Fills a URL the host
  * may open in the browser, plus an optional notice (e.g. self-signed cert). */
 int ptz_web_url(ptz_session *session, char *url, size_t url_size,

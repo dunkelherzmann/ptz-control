@@ -58,7 +58,7 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [ ] Mac
   - [ ] Linux
   - [ ] Windows
-- [ ] **Aim from the picture on every camera, with the coordinates drawn over it** (asked 2026-11-14, all platforms). A camera without ONVIF's field-of-view move can't aim from its picture today; measure its field of view (turn it a known amount and compare the pictures) so a point of the picture becomes a pan/tilt target, and draw the pan/tilt grid, start, target and trail over the picture.
-  - [ ] Mac
-  - [ ] Linux
-  - [ ] Windows
+- [x] **Aim from the picture on every camera, with the coordinates drawn over it** (asked 2026-11-14, all platforms). A camera without ONVIF's field-of-view move can't aim from its picture today; measure its field of view (turn it a known amount and compare the pictures) so a point of the picture becomes a pan/tilt target, and draw the pan/tilt grid, start, target and trail over the picture. Built as Camera ▸ Measure View, measured on its own the first time such a camera moves toward a point of its picture; pan and tilt label the picture's edges and the start, target and current position show on it. The trail of past positions is left out, since the picture itself shows where the camera has been looking.
+  - [x] Mac (#6)
+  - [x] Linux (#6)
+  - [x] Windows (#6)

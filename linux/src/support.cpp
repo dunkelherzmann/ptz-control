@@ -424,6 +424,8 @@ void link_position(CameraLink *link, std::function<void(LinkResult, Snapshot)> d
                 snapshot.tilt = reading(raw.tilt);
                 snapshot.zoom = reading(raw.zoom);
                 snapshot.move_status = field(raw.move_status);
+                ptz_view_scale scale;
+                if (ptz_view_scale_at(link->session_, &raw, &scale)) snapshot.view_scale = ViewScale{scale.pan_per_x, scale.tilt_per_y};
                 result.ok = true;
             }
         }
@@ -485,6 +487,35 @@ void link_picture(CameraLink *link, std::function<void(LinkResult, QImage)> done
             }
         }
         return [done, result, image] { done(result, image); };
+    });
+}
+
+void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done) {
+    link->run([=]() -> std::function<void()> {
+        LinkResult result;
+        ViewScale view;
+        if (!link->session_) {
+            result.error = "Not connected";
+        } else {
+            // The core compares small grey pictures; decoding them is the host's part.
+            auto grey = [](void *, const unsigned char *data, size_t size, unsigned char *out, int width, int height) -> int {
+                QImage image = QImage::fromData(data, static_cast<int>(size));
+                if (image.isNull()) return 0;
+                image = image.convertToFormat(QImage::Format_Grayscale8)
+                            .scaled(width, height, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+                for (int y = 0; y < height; ++y) std::memcpy(out + static_cast<size_t>(y) * width, image.constScanLine(y), width);
+                return 1;
+            };
+            ptz_view_scale scale;
+            char error[1024] = {};
+            if (ptz_measure_view(link->session_, grey, nullptr, &scale, error, sizeof error)) {
+                view = ViewScale{scale.pan_per_x, scale.tilt_per_y};
+                result.ok = true;
+            } else {
+                result = failure(link->session_, error);
+            }
+        }
+        return [done, result, view] { done(result, view); };
     });
 }
 

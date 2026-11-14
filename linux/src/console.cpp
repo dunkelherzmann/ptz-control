@@ -537,6 +537,11 @@ private:
             connect(f, &QLineEdit::returnPressed, this, [this] { send_move(); });
         }
 
+        plane_->state.on_aim = [this](double pan, double tilt) { aim(pan, tilt); };
+        plane_->state.on_aim_and_move = [this](double pan, double tilt) {
+            aim(pan, tilt);
+            send_move();
+        };
         plane_->state.on_picture_aim = [this](QPointF point) { aim_in_picture(point); };
         plane_->state.on_picture_aim_and_move = [this](QPointF point) {
             aim_in_picture(point);
@@ -618,6 +623,9 @@ private:
 
     void update_target_markers() {
         Target t = parse_target(nullptr);
+        plane_->state.target_pan = t.pan;
+        plane_->state.target_tilt = t.tilt;
+        plane_->update();
         meter_pan_->state.target = t.pan;
         meter_tilt_->state.target = t.tilt;
         meter_zoom_->state.target = t.zoom;
@@ -648,6 +656,8 @@ private:
         const CameraInfo empty_info;
         const CameraInfo &info = info_ ? *info_ : empty_info;
         plane_->state.enabled = connected;
+        plane_->state.current = connected ? current_ : std::nullopt;
+        plane_->state.starting = connected ? starting_ : std::nullopt;
         refresh_picture_->setEnabled(connected && !taking_picture_);
         struct M { MeterView *w; AxisRange r; std::optional<Reading> Snapshot::*axis; };
         for (auto [w, range, axis] : {M{meter_pan_, info.pan, &Snapshot::pan}, M{meter_tilt_, info.tilt, &Snapshot::tilt},
@@ -893,7 +903,10 @@ private:
                 current_.reset();
                 failures_ = 0;
                 paused_ = false;
-                plane_->state.view_moves = info.view_moves;
+                plane_->state.can_aim = info.view_moves || (info.pan.available && info.tilt.available);
+                plane_->state.overlay.reset();
+                measured_.reset();
+                picture_at_.reset();
                 plane_->state.picture = QImage();
                 plane_->state.picture_note.clear();
                 plane_->state.picture_target.reset();
@@ -938,6 +951,8 @@ private:
             plane_->state.live.clear();
             live_codec_.clear();
             ++live_id_;
+            plane_->state.overlay.reset();
+            plane_->state.measuring = false;
             picture_due_ = 0;
             show_message("Disconnected.", false);
             log_line("Disconnected");
@@ -979,6 +994,7 @@ private:
                 }
                 if (current_ && !(snapshot == *current_)) log_line("Current coordinates: " + describe(snapshot));
                 current_ = snapshot;
+                update_overlay();
             } else {
                 if (result.link_lost) {
                     link_lost(result.error);
@@ -1061,7 +1077,8 @@ private:
     void send_move() {
         if (state_ != State::Connected) return;
         if (plane_->state.picture_target) {
-            send_picture_move(*plane_->state.picture_target);
+            if (info_ && info_->view_moves) send_picture_move(*plane_->state.picture_target);
+            else measure_then_move(*plane_->state.picture_target);
             return;
         }
         QString error;
@@ -1129,13 +1146,14 @@ private:
             } else if (result.ok) {
                 bool reshaped = s.picture.size() != image.size();
                 if (s.picture_stale) s.picture_target.reset();  // the camera has moved since
+                picture_at_ = current_;
                 s.picture = image;
                 s.picture_taken = QDateTime::currentDateTime();
                 s.picture_stale = false;
                 s.picture_note.clear();
                 if (reshaped) {
                     log_line(QString("Camera picture: %1 × %2").arg(image.width()).arg(image.height()) +
-                             (info_ && info_->view_moves ? "" : "; this camera can't aim from its picture"));
+                             (s.can_aim ? "" : "; this camera can't aim from its picture"));
                     fit_window_to_picture();
                 }
             } else if (result.link_lost) {
@@ -1146,6 +1164,7 @@ private:
                 s.picture_note = result.error;
                 s.picture_stale = false;
             }
+            update_overlay();
             plane_->update();
             update_controls();
         });
@@ -1204,10 +1223,12 @@ private:
         s.picture = image;
         s.picture_stale = false;
         s.picture_note.clear();
+        bool first = s.live.isEmpty();
         s.live = image.text("codec") +
                  QString(" · %1 × %2").arg(image.width()).arg(image.height());
         plane_->update();
         if (reshaped) fit_window_to_picture();
+        if (first) update_overlay();
     }
 
     void live_ended(const QString &reason) {
@@ -1220,6 +1241,89 @@ private:
         link_live_stop(link_);
         take_picture();
         update_controls();
+    }
+
+    // Pan and tilt over the picture once its view is measured at the picture's zoom, while the camera hasn't moved since.
+    void update_overlay() {
+        PlaneState &s = plane_->state;
+        if (!s.live.isEmpty()) picture_at_ = current_;  // the live view shows where the camera points now
+        // The first picture comes before the first reading; while the camera hasn't moved, that reading is the picture's.
+        if (!s.picture.isNull() && !s.picture_stale && (!picture_at_ || !picture_at_->pan || !picture_at_->tilt))
+            picture_at_ = current_;
+        if (s.picture.isNull() || s.picture_stale || !picture_at_ || !picture_at_->pan || !picture_at_->tilt) {
+            if (s.picture.isNull() || s.picture_stale) s.overlay.reset();
+            plane_->update();
+            return;
+        }
+        auto zoom = [](const std::optional<Snapshot> &snap) {
+            return snap && snap->zoom ? std::optional<double>(snap->zoom->value) : std::nullopt;
+        };
+        std::optional<ViewScale> scale;
+        if (current_ && zoom(current_) == zoom(picture_at_)) scale = current_->view_scale;
+        if (!scale && measured_ && measured_->first == zoom(picture_at_)) scale = measured_->second;
+        if (scale) {
+            s.overlay = PlaneState::Overlay{picture_at_->pan->value, picture_at_->tilt->value, *scale};
+            s.picture_target.reset();  // aiming is in coordinates now
+        } else {
+            s.overlay.reset();
+        }
+        plane_->update();
+    }
+
+    void aim(double pan, double tilt) {
+        auto clamp = [](double v, const AxisRange &r) { return r.available ? std::clamp(v, r.min, r.max) : v; };
+        plane_->state.picture_target.reset();
+        target_pan_->setText(format_value(info_ ? clamp(pan, info_->pan) : pan));
+        target_tilt_->setText(format_value(info_ ? clamp(tilt, info_->tilt) : tilt));
+        update_target_markers();
+    }
+
+    bool can_measure_view() const {
+        return state_ == State::Connected && !plane_->state.measuring && info_ && info_->pan.available && info_->tilt.available;
+    }
+
+    // Camera ▸ Measure View: turns the camera a little on each axis and back, to learn how much of its range the
+    // picture spans at this zoom; then pan and tilt show over the picture and clicks aim at coordinates.
+    void measure_view(std::function<void(ViewScale)> then = nullptr) {
+        if (!can_measure_view()) return;
+        plane_->state.measuring = true;
+        plane_->update();
+        std::optional<double> zoom = current_ && current_->zoom ? std::optional<double>(current_->zoom->value) : std::nullopt;
+        log_line("Measuring the camera's view: it turns a little on each axis and back (a few seconds)…");
+        link_measure_view(link_, [this, zoom, then](LinkResult result, ViewScale scale) {
+            plane_->state.measuring = false;
+            plane_->update();
+            if (state_ != State::Connected) return;
+            if (result.ok) {
+                measured_ = std::make_pair(zoom, scale);
+                log_line("View measured: the picture spans ±" + format_value(std::abs(scale.pan_per_x)) + " pan and ±" +
+                         format_value(std::abs(scale.tilt_per_y)) + " tilt from its centre" +
+                         (zoom ? " at zoom " + format_value(*zoom) : QString()));
+                next_refresh_ = 0;
+                update_overlay();
+                if (then) then(scale);
+            } else if (result.link_lost) {
+                link_lost(result.error);
+                return;
+            } else {
+                log_line("Measuring the view failed: " + result.error, true);
+            }
+            update_controls();
+        });
+        update_controls();
+    }
+
+    // A camera that can't move within its view: measure the view, then aim at the point's coordinates.
+    void measure_then_move(QPointF point) {
+        if (!picture_at_ || !picture_at_->pan || !picture_at_->tilt) {
+            log_line("This camera can't aim from its picture without pan and tilt readings; use the target fields.", true);
+            return;
+        }
+        double pan = picture_at_->pan->value, tilt = picture_at_->tilt->value;
+        measure_view([this, point, pan, tilt](ViewScale scale) {
+            aim(pan + point.x() * scale.pan_per_x, tilt + point.y() * scale.tilt_per_y);
+            send_move();
+        });
     }
 
     void aim_in_picture(QPointF point) {
@@ -1254,7 +1358,10 @@ private:
     // move itself, and the aimed point is cleared once the camera stops.
     void camera_moved() {
         if (plane_->state.picture.isNull()) return;
-        if (plane_->state.live.isEmpty()) plane_->state.picture_stale = true;
+        if (plane_->state.live.isEmpty()) {
+            plane_->state.picture_stale = true;
+            plane_->state.overlay.reset();
+        }
         picture_due_ = QDateTime::currentMSecsSinceEpoch();
         plane_->update();
     }
@@ -1312,6 +1419,10 @@ private:
             "The camera picture shows the camera's live video, or a still picture when the video can't play: click a point "
             "to aim at it, double-click (or Move) to turn the camera so that point comes to the centre. A still picture is "
             "renewed once the camera stops. Refresh Picture (Ctrl+Shift+R) takes a new picture, or restarts the live view.\n"
+            "Measure View (Ctrl+Shift+M) turns the camera a little on each axis and back to learn how much of its range "
+            "the picture spans at this zoom; then pan and tilt show over the picture and a click fills the target fields. "
+            "A camera that can't move within its view by itself is measured the first time you move toward a point of its "
+            "picture.\n"
             "Drag along a travel meter to aim that axis alone, double-click it to aim and move.\n\n"
             "Starting coordinates are the first reading after connecting and stay fixed. "
             "Return to Start (Ctrl+B) sends an absolute move there.\n"
@@ -1360,6 +1471,7 @@ public:
         key(QKeySequence("Ctrl+R"), [this] { refresh_now(); });
         key(QKeySequence("Ctrl+P"), [this] { toggle_pause(); });
         key(QKeySequence("Ctrl+Shift+R"), [this] { refresh_picture(); });
+        key(QKeySequence("Ctrl+Shift+M"), [this] { measure_view(); });
         key(QKeySequence("Ctrl+L"), [this] { open_web(); });
         key(QKeySequence("Ctrl+Q"), [this] { close(); });
         key(QKeySequence("Ctrl+M"), [window] { window->showMinimized(); });
@@ -1411,6 +1523,7 @@ public:
         item(camera, "Refresh Position", "Ctrl+R", connected, [this] { refresh_now(); });
         item(camera, paused_ ? "Resume Auto-Refresh" : "Pause Auto-Refresh", "Ctrl+P", connected, [this] { toggle_pause(); });
         item(camera, "Refresh Picture", "Ctrl+Shift+R", connected, [this] { refresh_picture(); });
+        item(camera, "Measure View", "Ctrl+Shift+M", can_measure_view(), [this] { measure_view(); });
         camera->addSeparator();
         item(camera, "Open Camera Web Interface", "Ctrl+L", connected, [this] { open_web(); });
         camera->addSeparator();
@@ -1630,7 +1743,10 @@ private:
         QTimer::singleShot(4400, this, [this] {
             if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_MOVING_PATH"); !path.isEmpty()) grab().save(path);
         });
-        QTimer::singleShot(10000, this, [this] {
+        // PTZ_SNAPSHOT_WAIT: seconds before the last picture (a camera whose view is measured first takes longer).
+        bool ok = false;
+        int wait = qEnvironmentVariableIntValue("PTZ_SNAPSHOT_WAIT", &ok);
+        QTimer::singleShot((ok ? wait : 10) * 1000, this, [this] {
             grab().save(qEnvironmentVariable("PTZ_SNAPSHOT_PATH"));
             if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_LIVE_PATH"); !path.isEmpty()) {
                 QFile file(path);
@@ -1656,6 +1772,8 @@ private:
     bool live_starting_ = false;  // the live video: starting, or playing with its codec ("H.264")
     QString live_codec_;
     int live_id_ = 0;
+    std::optional<Snapshot> picture_at_;                                 // the reading the picture was taken at
+    std::optional<std::pair<std::optional<double>, ViewScale>> measured_;  // the last view measured, with its zoom
     qint64 picture_due_ = 0, last_read_ = 0;  // when the camera last moved (a fresh picture is due), the last reading
     int route_ = 0, vendor_ = 0;
     std::deque<std::pair<QString, bool>> log_lines_;

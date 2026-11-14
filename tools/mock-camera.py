@@ -7,7 +7,9 @@ web page at /. Positions glide toward each AbsoluteMove target. Pictures of a
 drawn scene (PNG, standard library only) follow the camera's position and zoom,
 and moves within the view (ONVIF's field-of-view space, Axis center=) aim at a
 point of the picture. Live video comes over RTSP (TCP interleaved, Digest sign-in)
-on --rtsp-port, looping a short H.264 or H.265 clip from tests/fixtures.
+on --rtsp-port, looping a short H.264 or H.265 clip from tests/fixtures. --no-fov
+plays an ONVIF camera without the field-of-view space; --plain-png sends
+uncompressed pictures a test can decode by itself.
 
     python3 tools/mock-camera.py --port 8080 --user admin --password secret
 """
@@ -30,11 +32,13 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--port", type=int, default=8080)
 parser.add_argument("--user", default="admin")
 parser.add_argument("--password", default="secret")
-parser.add_argument("--rtsp-port", type=int, default=0, help="default: --port + 1")
+parser.add_argument("--rtsp-port", type=int, default=0, help="default: --port + 100")
 parser.add_argument("--video", choices=("h264", "h265", "none"), default="h264",
                     help="none: the stream address leads nowhere, as on a camera whose video can't be reached")
+parser.add_argument("--no-fov", action="store_true", help="ONVIF: don't offer moves in the field-of-view space")
+parser.add_argument("--plain-png", action="store_true", help="uncompressed pictures, for tests that decode them")
 args = parser.parse_args()
-args.rtsp_port = args.rtsp_port or args.port + 1
+args.rtsp_port = args.rtsp_port or args.port + 100
 
 lock = threading.Lock()
 onvif = {"pan": 0.0, "tilt": 0.0, "zoom": 0.0, "target": None, "since": 0.0}
@@ -126,7 +130,7 @@ def picture(pan, tilt, half_w, half_h, scale):
     def chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
     header = struct.pack(">IIBBBBB", PICTURE_W, PICTURE_H, 8, 2, 0, 0, 0)
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b"")
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(rows), 0 if args.plain_png else 6)) + chunk(b"IEND", b"")
 Z_SPACE = "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"
 
 
@@ -194,10 +198,11 @@ class Handler(BaseHTTPRequestHandler):
                 "<tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:AbsolutePanTiltPositionSpace>"
                 f"<tt:AbsoluteZoomPositionSpace><tt:URI>{Z_SPACE}</tt:URI>"
                 "<tt:XRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:XRange></tt:AbsoluteZoomPositionSpace>"
-                f"<tt:RelativePanTiltTranslationSpace><tt:URI>{FOV_SPACE}</tt:URI>"
-                "<tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange>"
-                "<tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:RelativePanTiltTranslationSpace>"
-                "</tt:Spaces></tptz:PTZConfigurationOptions></tptz:GetConfigurationOptionsResponse>"))
+                + ("" if args.no_fov else
+                   f"<tt:RelativePanTiltTranslationSpace><tt:URI>{FOV_SPACE}</tt:URI>"
+                   "<tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange>"
+                   "<tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:RelativePanTiltTranslationSpace>")
+                + "</tt:Spaces></tptz:PTZConfigurationOptions></tptz:GetConfigurationOptionsResponse>"))
         if op == "GetStatus":
             with lock:
                 moving = glide(onvif, ("pan", "tilt", "zoom"))
@@ -219,6 +224,8 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 glide(onvif, ("pan", "tilt", "zoom"))
                 onvif.update(start=dict(onvif), target=target, since=time.time())
+            if pt:
+                print(f"mock: onvif absolute move to pan={target['pan']:.4f} tilt={target['tilt']:.4f}")
             return self.reply(200, soap("<tptz:AbsoluteMoveResponse/>"))
         if op == "GetSnapshotUri":
             return self.reply(200, soap(
@@ -233,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
                 "</trt:GetStreamUriResponse>"))
         if op == "RelativeMove":
             pt = re.search(r'<(?:\w+:)?PanTilt x="([^"]+)" y="([^"]+)" space="([^"]+)"', xml)
-            if not pt or pt.group(3) != FOV_SPACE:
+            if not pt or pt.group(3) != FOV_SPACE or args.no_fov:
                 return self.reply(400, fault("Unsupported translation space", "ter:InvalidArgVal"))
             with lock:
                 half_w, half_h = onvif_view()
@@ -426,10 +433,12 @@ class RtspHandler(socketserver.BaseRequestHandler):
                         rtp = struct.pack(">BBHII", 0x80, marker | 96, sequence & 0xFFFF, timestamp, 0x1234) + payload
                         data += struct.pack(">BBH", ord("$"), self.channel, len(rtp)) + rtp
                         sequence += 1
-                    # Sent in odd-sized pieces with pauses, so reads end partway through packets as on a real network.
-                    for at in range(0, len(data), 777):
-                        self.send(data[at:at + 777])
-                        time.sleep(0.002)
+                    # Sent in odd-sized pieces with pauses, so reads end partway through packets as on a real network,
+                    # but whole, so a reply to a request never lands inside a packet.
+                    with self.send_lock:
+                        for at in range(0, len(data), 777):
+                            self.request.sendall(data[at:at + 777])
+                            time.sleep(0.002)
                     sent += 1
                     timestamp = (timestamp + 9000) & 0xFFFFFFFF
                     time.sleep(0.1)
@@ -478,7 +487,7 @@ class RtspHandler(socketserver.BaseRequestHandler):
                         continue
                     m = re.search(r"interleaved=(\d+)", transport)
                     self.channel = int(m.group(1)) if m else 0
-                    self.reply(cseq, headers=[("Session", "MOCK42;timeout=60"), ("Transport",
+                    self.reply(cseq, headers=[("Session", "MOCK42;timeout=6"), ("Transport",
                                f"RTP/AVP/TCP;unicast;interleaved={self.channel}-{self.channel + 1}")])
                 elif method == "PLAY":
                     print("mock: rtsp play")
@@ -486,7 +495,8 @@ class RtspHandler(socketserver.BaseRequestHandler):
                     if not self.playing.is_set():
                         self.playing.set()
                         threading.Thread(target=self.stream, daemon=True).start()
-                elif method == "GET_PARAMETER":
+                elif method == "GET_PARAMETER":  # the keep-alive, every 3 s with this short session timeout
+                    print("mock: rtsp keep-alive")
                     self.reply(cseq, headers=[("Session", "MOCK42")])
                 elif method == "TEARDOWN":
                     print("mock: rtsp teardown")

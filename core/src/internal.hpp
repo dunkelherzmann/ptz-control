@@ -178,6 +178,20 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+// ---- measuring the view (view.cpp) ------------------------------------------
+// Decodes JPEG or PNG bytes into width x height grey pixels, top row first (the hosts do it: no decoder here).
+using GreyDecoder = std::function<bool(const std::string &bytes, unsigned char *grey, int width, int height)>;
+struct ViewScale {
+    double pan_per_x = 0, tilt_per_y = 0;  // the turn that brings a point at the picture's right (top) edge to its centre
+    bool zoom_available = false;
+    double zoom = 0;                       // the zoom it was measured at
+};
+// How far the scene moved between two grey pictures of the same size, in view units (x right, y up), when it is
+// clear, looking within `reach` of the expected shift.
+std::optional<std::pair<double, double>> picture_shift(const unsigned char *before, const unsigned char *after, int width,
+                                                      int height, double expect_x, double expect_y, double reach);
+// Turns the camera a little on each axis, compares pictures and returns it to where it was. Takes several seconds.
+ViewScale measure_view(Camera &camera, const Hooks &hooks, const GreyDecoder &grey);
 
 std::unique_ptr<Camera> make_onvif(const CameraParams &params, const Hooks &hooks);
 std::unique_ptr<Camera> make_axis(const CameraParams &params, const Hooks &hooks);

@@ -117,6 +117,27 @@ float plate(Graphics &g, const std::wstring &text, float x, float y, COLORREF co
 
 float plate_height(Graphics &g) { return measure(g, L"PICTURE", 10, true).Height + S(4); }
 
+PointF widget_point(const RectF &r, double vx, double vy) {  // view units -> client pixels
+    return PointF(r.X + static_cast<float>((vx + 1) / 2) * r.Width, r.Y + static_cast<float>((1 - vy) / 2) * r.Height);
+}
+
+// The point of the picture (view units) showing pan and tilt, with a measured view.
+std::optional<PointF> view_point(const PlaneState &s, double pan, double tilt) {
+    const auto &o = s.overlay;
+    if (!o || o->scale.pan_per_x == 0 || o->scale.tilt_per_y == 0) return std::nullopt;
+    return PointF(static_cast<float>((pan - o->pan) / o->scale.pan_per_x), static_cast<float>((tilt - o->tilt) / o->scale.tilt_per_y));
+}
+
+bool inside(const std::optional<PointF> &v) { return v && std::fabs(v->X) <= 1 && std::fabs(v->Y) <= 1; }
+
+// A value with as many decimals as a step of `step` needs.
+std::wstring label_value(double value, double step) {
+    int decimals = std::clamp(static_cast<int>(std::ceil(-std::log10(std::max(std::fabs(step), 1e-9)))) + 1, 0, 4);
+    wchar_t text[64];
+    swprintf(text, 64, L"%.*f", decimals, value);
+    return text;
+}
+
 void paint_plane(Plane &p, Graphics &g, float w, float h) {
     const PlaneState &s = p.state;
     RectF r = picture_rect(s, w, h);
@@ -167,15 +188,63 @@ void paint_plane(Plane &p, Graphics &g, float w, float h) {
     g.DrawLine(&axes, c.X, r.Y, c.X, r.GetBottom());
     g.DrawLine(&axes, r.X, c.Y, r.GetRight(), c.Y);
 
-    // Where the camera points: the picture's centre.
+    // Pan and tilt over the picture, once its view is measured: pan along the top edge and tilt along the right one
+    // (the centre values named), and the starting position as a square marked S.
+    if (const auto &o = s.overlay) {
+        Font font(mono_family(), S(9), FontStyleBold, UnitPixel);
+        SolidBrush ink(Color(255, 255, 255, 255)), shade(Color(128, 0, 0, 0));
+        for (int i = -4; i <= 4; i += 2) {
+            float f = i / 5.0f;
+            std::wstring pan = label_value(o->pan + f * o->scale.pan_per_x, std::fabs(o->scale.pan_per_x) * 0.4);
+            std::wstring tilt = label_value(o->tilt + f * o->scale.tilt_per_y, std::fabs(o->scale.tilt_per_y) * 0.4);
+            if (i == 0) pan = L"PAN " + pan, tilt = L"TILT " + tilt;
+            for (int which = 0; which < 2; ++which) {
+                const std::wstring &text = which ? tilt : pan;
+                SizeF size = measure(g, text, 9, true);
+                float w = size.Width + S(4), h = size.Height + S(1);
+                RectF box = which ? RectF(r.GetRight() - S(3) - w, c.Y - f * r.Height / 2 - h / 2, w, h)
+                                  : RectF(c.X + f * r.Width / 2 - w / 2, r.Y + S(3), w, h);
+                g.FillRectangle(&shade, box);
+                g.DrawString(text.c_str(), -1, &font, PointF(box.X + S(2), box.Y), &ink);
+            }
+        }
+        if (s.starting && s.starting->pan && s.starting->tilt) {
+            auto v = view_point(s, s.starting->pan->value, s.starting->tilt->value);
+            if (inside(v)) {
+                PointF sp = widget_point(r, v->X, v->Y);
+                Pen start(C(g_theme.start), S(1.5f));
+                g.DrawRectangle(&start, sp.X - S(5), sp.Y - S(5), S(10), S(10));
+                draw_text(g, L"S", sp.X + S(7), sp.Y - S(16), 9, g_theme.start, true);
+            }
+        }
+    }
+
+    // Where the camera points: the picture's centre, or with a measured view, its latest reading (it may have moved
+    // since the picture).
+    if (s.current && s.current->pan && s.current->tilt) {
+        auto v = view_point(s, s.current->pan->value, s.current->tilt->value);
+        if (inside(v)) c = widget_point(r, v->X, v->Y);
+    }
     Pen ring(C(g_theme.primary), S(1.5f));
     g.DrawEllipse(&ring, c.X - S(10), c.Y - S(10), S(20), S(20));
     SolidBrush dot(C(g_theme.primary));
     g.FillEllipse(&dot, c.X - S(3), c.Y - S(3), S(6), S(6));
 
-    // Target: dashed crosshair, with a line from the centre.
-    if (s.picture_target) {
-        PointF t(r.X + (s.picture_target->first + 1) / 2 * r.Width, r.Y + (1 - s.picture_target->second) / 2 * r.Height);
+    // Target: dashed crosshair, with a line from where the camera points. With a measured view it is the absolute
+    // target (an axis left blank keeps the current value).
+    std::optional<PointF> aimed;
+    if (s.picture_target) aimed = PointF(s.picture_target->first, s.picture_target->second);
+    if (s.overlay && (s.target_pan || s.target_tilt)) {
+        std::optional<double> pan = s.target_pan, tilt = s.target_tilt;
+        if (!pan && s.current && s.current->pan) pan = s.current->pan->value;
+        if (!tilt && s.current && s.current->tilt) tilt = s.current->tilt->value;
+        if (pan && tilt) {
+            auto v = view_point(s, *pan, *tilt);
+            if (inside(v)) aimed = v;
+        }
+    }
+    if (aimed) {
+        PointF t = widget_point(r, aimed->X, aimed->Y);
         Pen dashed(C(g_theme.target), S(1.5f));
         REAL dash[] = {4 / 1.5f, 2 / 1.5f};
         dashed.SetDashPattern(dash, 2);
@@ -190,23 +259,29 @@ void paint_plane(Plane &p, Graphics &g, float w, float h) {
 
     // Status plates: the live video, when the picture was taken, or that it is out of date.
     float ph = plate_height(g);
-    std::wstring status = !s.live.empty() ? L"\u25cf LIVE · " + s.live
+    std::wstring status = s.measuring ? L"MEASURING THE VIEW · THE CAMERA TURNS A LITTLE AND BACK"
+                        : !s.live.empty() ? L"\u25cf LIVE · " + s.live
                           : s.picture_stale ? L"MOVING · NEW PICTURE WHEN IT STOPS"
                           : s.picture_taken.empty() ? L"PICTURE" : L"PICTURE " + s.picture_taken;
-    plate(g, status, r.X + S(6), r.GetBottom() - S(6) - ph, s.picture_stale ? g_theme.warning : white);
-    if (!s.view_moves) plate(g, L"THIS CAMERA CAN'T AIM FROM ITS PICTURE", r.GetRight() - S(6), r.GetBottom() - S(6) - ph, g_theme.warning, true);
+    plate(g, status, r.X + S(6), r.GetBottom() - S(6) - ph, s.picture_stale || s.measuring ? g_theme.warning : white);
+    if (!s.can_aim) plate(g, L"THIS CAMERA CAN'T AIM FROM ITS PICTURE", r.GetRight() - S(6), r.GetBottom() - S(6) - ph, g_theme.warning, true);
 
     // Hover: guides and the point in view units.
-    if (p.hover && s.view_moves && r.Contains(*p.hover)) {
+    if (p.hover && s.can_aim && r.Contains(*p.hover)) {
         PointF hv = *p.hover;
         Pen guide(C(white, 89), S(0.5f));
         g.DrawLine(&guide, hv.X, r.Y, hv.X, r.GetBottom());
         g.DrawLine(&guide, r.X, hv.Y, r.GetRight(), hv.Y);
         PointF v = picture_point(r, hv.X, hv.Y);
-        wchar_t text[64];
-        swprintf(text, 64, L"%s %.2f  %s %.2f", v.X < 0 ? L"◀" : L"▶", std::fabs(v.X), v.Y < 0 ? L"▼" : L"▲", std::fabs(v.Y));
+        wchar_t buffer[64];
+        swprintf(buffer, 64, L"%s %.2f  %s %.2f", v.X < 0 ? L"◀" : L"▶", std::fabs(v.X), v.Y < 0 ? L"▼" : L"▲", std::fabs(v.Y));
+        std::wstring text = buffer;
+        if (const auto &o = s.overlay)
+            text = L"PAN " + label_value(o->pan + v.X * o->scale.pan_per_x, std::fabs(o->scale.pan_per_x) * 0.02) + L"  TILT " +
+                   label_value(o->tilt + v.Y * o->scale.tilt_per_y, std::fabs(o->scale.tilt_per_y) * 0.02);
+        float width = measure(g, text, 10, true).Width + S(18);
         float x = hv.X + S(10), y = hv.Y - S(8) - ph;
-        if (x + S(110) > r.GetRight()) x = hv.X - S(120);
+        if (x + width > r.GetRight()) x = hv.X - width - S(10);
         if (y < r.Y) y = hv.Y + S(8);
         plate(g, text, x, y, white);
     }
@@ -217,8 +292,17 @@ void plane_aim(HWND hwnd, Plane &p, int x, int y, bool commit) {
     RECT rc;
     GetClientRect(hwnd, &rc);
     RectF r = picture_rect(s, static_cast<float>(rc.right), static_cast<float>(rc.bottom));
-    if (!s.enabled || !s.picture || !s.view_moves || !r.Contains(static_cast<float>(x), static_cast<float>(y))) return;
+    if (!s.enabled || !s.picture || !s.can_aim || s.measuring || !r.Contains(static_cast<float>(x), static_cast<float>(y))) return;
     PointF point = picture_point(r, static_cast<float>(x), static_cast<float>(y));
+    if (const auto &o = s.overlay) {
+        double pan = o->pan + point.X * o->scale.pan_per_x, tilt = o->tilt + point.Y * o->scale.tilt_per_y;
+        if (commit) {
+            if (s.on_aim_and_move) s.on_aim_and_move(pan, tilt);
+        } else if (s.on_aim) {
+            s.on_aim(pan, tilt);
+        }
+        return;
+    }
     if (commit) {
         if (s.on_picture_aim_and_move) s.on_picture_aim_and_move(point.X, point.Y);
     } else if (s.on_picture_aim) {

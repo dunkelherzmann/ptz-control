@@ -48,6 +48,11 @@ $mockLog = Join-Path $Work 'mock.log'
 $stillLog = Join-Path $Work 'mock-still.log'
 $mock = Start-Process python -ArgumentList @('-u', "`"$Root\tools\mock-camera.py`"", '--port', $Port) -PassThru `
     -WindowStyle Hidden -RedirectStandardOutput $mockLog -RedirectStandardError (Join-Path $Work 'mock.err')
+# A second camera without ONVIF's field-of-view moves: its view is measured from its pictures (run 4).
+$Port2 = 18086
+$mockLog2 = Join-Path $Work 'mock-no-fov.log'
+$mock2 = Start-Process python -ArgumentList @('-u', "`"$Root\tools\mock-camera.py`"", '--port', $Port2, '--no-fov') -PassThru `
+    -WindowStyle Hidden -RedirectStandardOutput $mockLog2 -RedirectStandardError (Join-Path $Work 'mock-no-fov.err')
 Start-Sleep -Seconds 1
 $vault = Join-Path $Work 'logins.vault'
 [IO.File]::WriteAllText($vault, "PTZ Control logins 1`nplain`n")
@@ -88,14 +93,14 @@ function RunApp($vars) {
     if ((Test-Path $Observer) -and -not $env:PTZ_NO_OBSERVE) {
         # Its verdict comes on stderr, which Windows PowerShell turns into errors that 'Stop' would throw.
         $ErrorActionPreference = 'Continue'
-        $verdict = @(& python $Observer run --out (Join-Path $Out 'observer') --name "run $script:Runs" --timeout 60 `
+        $verdict = @(& python $Observer run --out (Join-Path $Out 'observer') --name "run $script:Runs" --timeout 90 `
             --allow $Work --allow $Out --guard 'HKCU\Software\PTZControl' --guard "$env:APPDATA\PTZControl" -- $exe 2>&1 | ForEach-Object { "$_" })
         $problems = @($verdict | Where-Object { $_ -like 'observer: PROBLEM*' })
         Check "run $($script:Runs): no crash, hang or change to the real app's data (master-control)" ($problems.Count -eq 0)
         $problems | ForEach-Object { Write-Output "     $_" }
     } else {
         $p = Start-Process $exe -PassThru
-        if (-not $p.WaitForExit(60000)) { $p.Kill() }
+        if (-not $p.WaitForExit(90000)) { $p.Kill() }
     }
     foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
 }
@@ -145,22 +150,38 @@ try {
     Check 'run 3 fell back to still pictures' ((Test-Path $live3) -and ((Get-Content -Raw -Encoding UTF8 $live3) -ceq 'no live view'))
     Check 'camera-picture pictures drawn' ((Drawn $picture) -and (Drawn $aim))
 
-    # Run 4: the live view. The camera's H.264 video plays in the plane, and aiming in it still moves the camera.
+    # Run 4: a camera that can't move within its view. Moving toward the same point first measures its view (it turns
+    # a little on each axis and back), then sends an absolute move to the point's coordinates: 0.45 x 0.25 pan and
+    # 0.3 x 0.140625 tilt from where the mock starts.
+    Settings 'admin' $Port2
+    $measured = Join-Path $Out 'windows-measured.png'
+    Remove-Item $measured -ErrorAction SilentlyContinue
+    RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PICTURE = '1'; PTZ_SNAPSHOT_PATH = $measured; PTZ_SNAPSHOT_WAIT = '40'
+              PTZ_SNAPSHOT_AIM_PATH = $null; PTZ_SNAPSHOT_MOVING_PATH = $null }
+    $last = @(Select-String -Path $mockLog2 -Pattern '^mock: onvif absolute move to pan=(\S+) tilt=(\S+)' -ErrorAction SilentlyContinue) |
+        Select-Object -Last 1
+    $near = $last -and [Math]::Abs([double]$last.Matches[0].Groups[1].Value - 0.1125) -lt 0.02 -and
+        [Math]::Abs([double]$last.Matches[0].Groups[2].Value - 0.0422) -lt 0.012
+    Check "run 4 measured the view and moved to the point's coordinates ($($last.Line))" $near
+    Check 'measured-view picture drawn' (Drawn $measured)
+
+    # Run 5: the live view. The camera's H.264 video plays in the plane, and aiming in it still moves the camera.
     Settings 'admin'
     $live = Join-Path $Out 'windows-live.png'
-    $live4 = Join-Path $Work 'live4.txt'
+    $live5 = Join-Path $Work 'live5.txt'
     Remove-Item $live -ErrorAction SilentlyContinue
     $viewMovesBefore = @(Select-String -Path $mockLog -Pattern '^mock: onvif view move' -ErrorAction SilentlyContinue).Count
     RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PICTURE = '1'; PTZ_SNAPSHOT_PATH = $live; PTZ_SNAPSHOT_AIM_PATH = $null
-              PTZ_SNAPSHOT_MOVING_PATH = $null; PTZ_SNAPSHOT_LIVE_PATH = $live4 }
-    $plate = if (Test-Path $live4) { Get-Content -Raw -Encoding UTF8 $live4 } else { '' }
-    Check "run 4 played the camera's video ($plate)" ($plate -ceq "H.264 $([char]0xb7) 320 $([char]0xd7) 180")
-    Check 'run 4 started the video over RTSP' (@(Select-String -Path $mockLog -Pattern '^mock: rtsp play' -ErrorAction SilentlyContinue).Count -ge 1)
-    Check 'run 4 aimed in the live view' `
+              PTZ_SNAPSHOT_MOVING_PATH = $null; PTZ_SNAPSHOT_LIVE_PATH = $live5 }
+    $plate = if (Test-Path $live5) { Get-Content -Raw -Encoding UTF8 $live5 } else { '' }
+    Check "run 5 played the camera's video ($plate)" ($plate -ceq "H.264 $([char]0xb7) 320 $([char]0xd7) 180")
+    Check 'run 5 started the video over RTSP' (@(Select-String -Path $mockLog -Pattern '^mock: rtsp play' -ErrorAction SilentlyContinue).Count -ge 1)
+    Check 'run 5 aimed in the live view' `
         (@(Select-String -Path $mockLog -Pattern '^mock: onvif view move' -ErrorAction SilentlyContinue).Count -gt $viewMovesBefore)
     Check 'live view picture drawn' (Drawn $live)
 } finally {
     Stop-Process -Id $mock.Id -ErrorAction SilentlyContinue
+    Stop-Process -Id $mock2.Id -ErrorAction SilentlyContinue
     if ($stillMock) { Stop-Process -Id $stillMock.Id -ErrorAction SilentlyContinue }
     Remove-Item -Path "HKCU:\$KeyName" -Recurse -ErrorAction SilentlyContinue
 }
