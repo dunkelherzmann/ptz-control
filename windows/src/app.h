@@ -115,6 +115,7 @@ void link_move_in_view(CameraLink *link, double x, double y, std::function<void(
 // The camera's live video: `picture` gets the newest decoded frame and `ended` the reason it stopped by itself or
 // can't be decoded, both on the UI thread; `done` gets a description such as "H.264 over RTSP".
 struct LiveFrame {
+    std::wstring codec;  // "H.264" or "H.265"
     int width = 0, height = 0;
     std::vector<unsigned char> bgra;  // top-down rows, 4 bytes per pixel
 };

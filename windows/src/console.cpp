@@ -778,7 +778,7 @@ void show_live_frame(const LiveFrame &frame) {
     if (!plane_set_frame(g->plane, frame)) return;
     s.picture_stale = false;
     s.picture_note.clear();
-    s.live = (g->live_codec.empty() ? L"VIDEO" : g->live_codec) + L" \u00b7 " + std::to_wstring(frame.width) + L" \u00d7 " +
+    s.live = frame.codec + L" \u00b7 " + std::to_wstring(frame.width) + L" \u00d7 " +
              std::to_wstring(frame.height);
     if (reshaped) fit_window_to_picture();
     InvalidateRect(g->plane, nullptr, FALSE);
@@ -810,7 +810,8 @@ void start_live() {
         },
         [run](LinkResult result, std::wstring description) {
             g->live_starting = false;
-            if (g->state != State::Connected || run != g->live_run) return;  // disconnecting or stopping ends it
+            // Disconnecting stops it; a stream that ended before this reply was already reported.
+            if (g->state != State::Connected || run != g->live_run) return;
             if (result.ok) {
                 g->live_codec = description.substr(0, description.find(L' '));
                 log_line(L"Live view: " + description);

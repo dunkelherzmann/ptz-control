@@ -12,17 +12,10 @@
 #include <algorithm>
 #include <cstring>
 #include <mutex>
-#include <cstdarg>
-#include <cstdio>
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
-void dbg(const char *fmt, ...) {
-    static FILE *f = getenv("PTZ_LIVE_DEBUG") ? fopen(getenv("PTZ_LIVE_DEBUG"), "w") : nullptr;
-    if (!f) return;
-    va_list a; va_start(a, fmt); vfprintf(f, fmt, a); va_end(a); fputc('\n', f); fflush(f);
-}
 
 std::once_flag g_media_once;
 HRESULT g_media_status = E_FAIL;
@@ -79,16 +72,16 @@ public:
         sample->SetSampleTime(static_cast<LONGLONG>(frame.time * 1e7));
         if (frame.keyframe) sample->SetUINT32(MFSampleExtension_CleanPoint, TRUE);
 
-        dbg("input %zu key %d", frame.size, frame.keyframe);
         HRESULT hr = decoder_->ProcessInput(0, sample.Get(), 0);
-        dbg("input hr %lx", hr);
         if (hr == MF_E_NOTACCEPTING) {
             hr = drain();
             if (SUCCEEDED(hr)) hr = decoder_->ProcessInput(0, sample.Get(), 0);
         }
         if (SUCCEEDED(hr)) hr = drain();
         if (failed_once_) return;
-        if (FAILED(hr)) {
+        if (lost(hr)) {
+            decoder_.Reset();  // after sleep or a graphics change: a new decoder takes the next key frame
+        } else if (FAILED(hr)) {
             if (++failures_ >= 30) fail(L"Windows can't decode the camera's " + codec_name() + L" video (Media Foundation error " + hex(hr) + L")");
         } else {
             failures_ = 0;
@@ -99,6 +92,12 @@ public:
     void close() { decoder_.Reset(); }
 
 private:
+    // The decoder's device or session is gone; a new decoder can carry on.
+    static bool lost(HRESULT hr) {
+        return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_HUNG ||
+               hr == MF_E_HW_MFT_FAILED_START_STREAMING || hr == MF_E_SHUTDOWN || hr == MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED;
+    }
+
     std::wstring codec_name() const { return codec_ == PTZ_CODEC_H265 ? L"H.265" : L"H.264"; }
 
     bool open(ptz_codec codec) {
@@ -133,7 +132,6 @@ private:
         // The decoder may only know its output once it has seen the first frame; some (H.265) need a picture size
         // first, and take a stand-in until the camera's video settings change it.
         have_output_ = choose_output() || (set_input(input.guidSubtype, 1920, 1080) && choose_output());
-        dbg("open codec %d have_output %d flags %lx cb %lu", codec, have_output_, output_info_.dwFlags, output_info_.cbSize);
         if (have_output_) begin_streaming();
         return true;
     }
@@ -191,7 +189,6 @@ private:
             bool hd = matrix == MFVideoTransferMatrix_BT709;
             matrix_ = range == MFNominalRange_0_255 ? (hd ? kBt709Full : kBt601Full) : (hd ? kBt709Limited : kBt601Limited);
             decoder_->GetOutputStreamInfo(0, &output_info_);
-            dbg("output type %ux%u crop %u,%u %ux%u stride %ld flags %lx cb %lu", w, h, crop_x_, crop_y_, crop_w_, crop_h_, stride_, output_info_.dwFlags, output_info_.cbSize);
             return true;
         }
     }
@@ -210,9 +207,7 @@ private:
                 output.pSample = ours.Get();
             }
             DWORD status = 0;
-            dbg("output have %d provides %d sample %p", have_output_, provides, output.pSample);
             HRESULT hr = decoder_->ProcessOutput(0, 1, &output, &status);
-            dbg("output hr %lx", hr);
             if (output.pEvents) output.pEvents->Release();
             ComPtr<IMFSample> theirs;
             if (output.pSample && output.pSample != ours.Get()) theirs.Attach(output.pSample);
@@ -253,6 +248,7 @@ private:
             rows = whole / static_cast<DWORD>(pitch) * 2 / 3;
         if (pitch > 0) {
             auto frame = std::make_shared<LiveFrame>();
+            frame->codec = codec_name();
             frame->width = static_cast<int>(crop_w_);
             frame->height = static_cast<int>(crop_h_);
             frame->bgra.resize(static_cast<size_t>(crop_w_) * crop_h_ * 4);
