@@ -103,6 +103,8 @@ the rest as a gap.
   15 s and dropped after 3 missed replies. The forward listens on 127.0.0.1 only.
 - **S6 HTTPS forward on demand.** The camera's HTTPS port is forwarded through the same connection, using SSH
   connection sharing, the first time the web interface needs it.
+- **S7 Video forward on demand.** Likewise, the camera's RTSP port is forwarded the first time the live view (V7)
+  needs it, once per connection.
 
 ## 6. Cameras
 
@@ -127,6 +129,14 @@ the rest as a gap.
   `imagewidth` and `imageheight`. Pictures are JPEG or PNG, fetched with HTTP Digest like every other request; a
   camera that asks for Basic sign-in is refused with "turn on Digest sign-in on the camera", since Basic would send
   the password unprotected.
+- **V7 Live video.** ONVIF: the media service's `GetStreamUri` (RTP unicast over RTSP) for the chosen profile. Axis:
+  `/axis-media/media.amp?camera=1&videocodec=h264` on the camera's RTSP port (its `Network.RTSP.Port` setting, read
+  with `param.cgi`, 554 when it can't be read). The core plays it with its own RTSP client over one TCP connection, the
+  video interleaved on it (so it also runs through the SSH tunnel), signs in with Digest (a camera that offers only
+  Basic is refused with "turn on Digest sign-in for RTSP on the camera"), keeps the session alive, and rebuilds whole
+  H.264 or H.265 frames from the RTP packets. Each app decodes them with the system's own decoder: VideoToolbox on the
+  Mac, Media Foundation on Windows, GStreamer from the Flatpak runtime on Linux. Motion JPEG and other formats aren't
+  played ("choose a profile with H.264 or H.265 video").
 
 ## 7. Instruments
 
@@ -134,15 +144,24 @@ the rest as a gap.
 - **I2 Status chip**: OFFLINE, LINKING, CLOSING, REQUEST (a request is running), READS PAUSED, POSITION OK or
   NO POSITION, with a green, orange or muted lamp.
 - **I3 Camera picture.** The plane, captioned "Camera picture // view — click to aim, double-click to move there",
-  shows a still picture of the camera's view, as large as fits and in the picture's shape, with a view grid on top:
-  tenths of the picture, stronger centre lines, and a solid reticle at the centre, where the camera points. The window
-  grows or shrinks in height to the picture's shape, keeping its top edge and staying on the screen. A plate in the
-  corner reads "PICTURE <time taken>". A picture is taken on connecting, with **Refresh Picture** (⇧⌘R, or the ⟳
-  button at the right of the plane's caption, hover text "Refresh Picture: take a new picture of the camera's view now
-  (⇧⌘R)"), and after every move or stop once the camera stops (a reading taken after the move that isn't MOVING, or
-  3 s when the camera doesn't report its motion). Until then the picture is dimmed and the plate reads "MOVING · NEW
-  PICTURE WHEN IT STOPS". Without a picture the plane reads "NO CAMERA LINK", "TAKING A PICTURE…" or "NO PICTURE"
-  with the reason; a failed picture is logged in red once.
+  shows the camera's live video, or a still picture of its view when there's no video, as large as fits and in the
+  picture's shape, with a view grid on top: tenths of the picture, stronger centre lines, and a solid reticle at the
+  centre, where the camera points. The window grows or shrinks in height to the picture's shape, keeping its top edge
+  and staying on the screen.
+  - **Live view.** On connecting, a still picture is taken, then the live video (V7) starts and replaces it once its
+    first frame is decoded, logged as "Live view: H.264 over RTSP" and "Live view playing: 1920 × 1080". The plate in
+    the corner reads "● LIVE · H.264 · 1920 × 1080". Only the newest frame is shown; frames the screen can't keep up
+    with are skipped. Moves show in the video, and an aimed point (I4) is cleared once the camera stops.
+  - **Still pictures** take over when the video can't start ("No live view: <reason>. Showing still pictures.", in
+    red) or stops ("Live view stopped: <reason>. Showing still pictures."). The plate then reads "PICTURE <time
+    taken>". A picture is taken after every move or stop once the camera stops (a reading taken after the move that
+    isn't MOVING, or 3 s when the camera doesn't report its motion). Until then the picture is dimmed and the plate
+    reads "MOVING · NEW PICTURE WHEN IT STOPS". Without a picture the plane reads "NO CAMERA LINK", "TAKING A
+    PICTURE…" or "NO PICTURE" with the reason; a failed picture is logged in red once.
+  - **Refresh Picture** (⇧⌘R, or the ⟳ button at the right of the plane's caption, hover text "Refresh Picture: take a
+    new picture of the camera's view now, or restart the live view (⇧⌘R)") restarts the live view while it plays
+    ("Restarting the live view"); otherwise it takes a new picture and tries the live view again.
+  - Disconnecting stops the video before the session closes.
 - **I4 Aim in the picture.** Pointing at the picture shows guide lines and the point in view units (◀/▶ and ▲/▼,
   0 at the centre, 1 at the edges). Click to aim: a dashed crosshair and ring with a dotted line from the centre.
   Double-click (or Move, ⌘↩) turns the camera so that point comes to the centre, logged as "Move toward the picture
@@ -265,8 +284,9 @@ What differs from the Mac version today. The `pending.md` in each folder says wh
 - SSH uses Windows' own OpenSSH Client (`C:\Windows\System32\OpenSSH\ssh.exe`, then any `ssh` on PATH). Prompts are
   relayed over a named pipe only the signed-in user can open. Password and passphrase dialogs need Win32-OpenSSH 8.6
   or later; the 8.1 build in Windows 10 can't relay them, so use a key without a passphrase or ssh-agent there.
-- Windows OpenSSH has no connection sharing, so the HTTPS port set under Advanced is forwarded when the tunnel opens,
-  and a camera that redirects to another HTTPS port can't be reached through SSH.
+- Windows OpenSSH has no connection sharing, so the HTTPS port set under Advanced and the RTSP port 554 are forwarded
+  when the tunnel opens. A camera that redirects to another HTTPS port can't be reached through SSH, and one that
+  streams its video on another port shows still pictures through SSH.
 - The key file field takes a full path (placeholder `C:\Users\me\.ssh\id_ed25519`).
 - Manage Logins is modal, so it has no ☰ of its own: the main window waits while it's open. Redo is greyed in
   Windows' plain text fields, which keep a single undo step.
@@ -301,7 +321,7 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
 - **B3 Linux** (built on Linux with flatpak-builder): `linux/scripts/build.sh` builds `org.ptzcontrol.app` from
   `linux/org.ptzcontrol.app.yml` on KDE's Qt 6 runtime (`org.kde.Platform` 6.11) for the machine's own CPU and writes
   `dist/PTZ-Control-<version>-<arch>.flatpak` (about 0.6 MB). The bundle holds the app, JetBrains Mono, the icons,
-  the desktop entry, the AppStream metadata and the licence notices; Qt, libcurl, OpenSSL and OpenSSH come from the
+  the desktop entry, the AppStream metadata and the licence notices; Qt, GStreamer, libcurl, OpenSSL and OpenSSH come from the
   runtime. The sandbox gets the network, X11 and Wayland, the GPU, `~/.ssh` and the ssh-agent socket. `--install`
   also installs it for the current user.
 - **B4 Releases** carry the macOS zip, the Windows zip and the Linux Flatpak.
@@ -311,12 +331,17 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
 
 ## 16. Tests
 
-- **T1 Mock camera.** `tools/mock-camera.py` answers ONVIF and Axis requests, for work without hardware.
+- **T1 Mock camera.** `tools/mock-camera.py` answers ONVIF and Axis requests, for work without hardware, and serves
+  live video over RTSP on the next port, looping a short clip from `tests/fixtures` (`--video h264`, `h265`, or `none`
+  for a camera whose video can't be reached).
 - **T2 Core test.** `scripts/test-core.sh` builds `tests/core-smoke.c` against the core and runs it against the mock
   camera, for ONVIF and Axis: connect, read, move, a tilt-only move, out-of-range and fractional-zoom refusals, stop,
-  the web address, number parsing and address checks. It needs clang and libcurl (macOS or Linux).
+  the web address, number parsing and address checks, and the live video: H.264 from both vendors and H.265 from a
+  second mock camera, each starting with a key frame that carries its parameter sets, in order, and silent once
+  stopped. It needs clang and libcurl (macOS or Linux).
 - **T3 SSH test.** `scripts/test-ssh.sh` starts a throwaway user-level `sshd` on 127.0.0.1:2222 with a
-  passphrase-protected key and runs `tests/ssh-smoke.c` through it: tunnel, askpass relay, read, move, web address.
+  passphrase-protected key and runs `tests/ssh-smoke.c` through it: tunnel, askpass relay, read, move, web address,
+  live video.
   It backs up `~/.ssh/known_hosts` and restores it afterwards.
 - **T4 Window snapshot.** With `PTZ_SNAPSHOT_PATH` (and `PTZ_PASSWORD`, optionally `PTZ_THEME`) the Mac and Linux
   apps connect with the saved settings, move, aim along the zoom meter, save a picture of the window and quit. The
@@ -324,8 +349,10 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
 - **T6 Mac app test.** `macos/scripts/test.sh` runs a private test copy of the Mac app (its own bundle id, settings
   and vault file, off screen and out of the Dock) against the mock camera twice: first it ticks Save login and checks
   the camera login reached the vault, then it starts from a wrong username, fills the fields from the saved login and
-  checks that the camera moved. It saves pictures of the window, of Manage Logins and of the Edit form.
-  `linux/scripts/test.sh` does the same with the installed Flatpak (T5).
+  checks that the camera moved. Then, against a mock camera without video, it checks the still pictures: one on
+  connecting, an aimed move, and a new picture once the camera stops. Last, it checks the live view plays the mock
+  camera's H.264 video and that aiming in it moves the camera. It saves pictures of the window, of Manage Logins, of
+  the Edit form and of the live view. `linux/scripts/test.sh` does the same with the installed Flatpak (T5).
 - **T7 Windows test.** `windows\scripts\test.ps1` builds and runs `tests/vault-smoke.c` with MSVC, then runs
   `dist\PTZControl.exe` twice as the Mac test does, with its own registry key (`PTZ_SETTINGS_KEY`) and vault file,
   without taking focus. Pictures are taken with `WM_PRINT`, so the test also works over SSH, where no compositor runs;

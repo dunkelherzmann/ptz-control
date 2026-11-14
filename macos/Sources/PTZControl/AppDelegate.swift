@@ -174,7 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         • Axis: pan/tilt in degrees; zoom is an integer in the native range.
 
         Leave a target field blank (or type x) to keep that axis unchanged.
-        The camera picture shows what the camera sees: click a point to aim at it, double-click (or Move) to turn the camera so that point comes to the centre. A new picture comes once the camera stops, or with Refresh Picture (⇧⌘R).
+        The camera picture shows the camera's live video, or a still picture when the video can't play: click a point to aim at it, double-click (or Move) to turn the camera so that point comes to the centre. A still picture is renewed once the camera stops. Refresh Picture (⇧⌘R) takes a new picture, or restarts the live view.
         Measure View (⇧⌘M) turns the camera a little on each axis and back to learn how much of its range the picture spans at this zoom; then pan and tilt show over the picture and a click fills the target fields. A camera that can't move within its view by itself is measured the first time you move toward a point of its picture.
         Drag along a travel meter to aim that axis alone, double-click it to aim and move.
 

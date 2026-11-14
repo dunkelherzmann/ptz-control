@@ -202,6 +202,19 @@ public:
         return fetch_picture(snapshot_uri_, p_.user, p_.password, p_.timeout);
     }
 
+    std::string stream_uri() override {
+        auto body = call(media_, kMediaNs, "http://www.onvif.org/ver10/media/wsdl/GetStreamUri",
+                         "<trt:GetStreamUri><trt:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream><tt:Transport>"
+                         "<tt:Protocol>RTSP</tt:Protocol></tt:Transport></trt:StreamSetup><trt:ProfileToken>" +
+                             xml_escape(profile_token_) + "</trt:ProfileToken></trt:GetStreamUri>",
+                         "trt");
+        const XmlNode *uri = body.find("Uri");
+        if (!uri || trim(uri->text).empty()) throw Error("Camera did not give an address for its video");
+        std::string text = trim(uri->text);
+        if (lower(text).rfind("rtsp://", 0) != 0) throw Error("Camera gave a video address that isn't RTSP");
+        return text;
+    }
+
     bool view_moves() const override { return fov_.has_value(); }
 
     void move_in_view(double x, double y, int, int) override {

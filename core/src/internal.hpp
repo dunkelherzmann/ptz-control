@@ -55,6 +55,8 @@ std::string trim(std::string_view text);
 std::string printable(std::string_view text);  // strips control characters
 std::string base64_encode(const unsigned char *data, size_t size);
 void sha1(const unsigned char *data, size_t size, unsigned char digest[20]);
+std::optional<std::string> base64_decode(std::string_view text);  // standard or URL alphabet
+std::string md5_hex(std::string_view text);                       // lower-case hex, for Digest sign-in
 std::string random_bytes(size_t count);
 std::string bracket_host(const std::string &host);  // IPv6 literal -> [addr]
 std::string validate_host(std::string host);         // throws Error
@@ -132,12 +134,50 @@ public:
     // Brings the point (x, y) of the current picture to its centre: x and y run from -1 at the picture's left and
     // bottom edges to 1 at its right and top edges. width and height are the picture's size in pixels.
     virtual void move_in_view(double x, double y, int width, int height) = 0;
+    // The rtsp:// address of the camera's live video (H.264 or H.265), without credentials.
+    virtual std::string stream_uri() = 0;
 };
 
 // ---- pictures (picture.cpp) -----------------------------------------------
 std::optional<std::pair<int, int>> picture_size(const std::string &data);  // JPEG or PNG: width, height
 std::string fetch_picture(const std::string &url, const std::string &user, const std::string &password, double timeout);
 
+// ---- live video (stream.cpp) ---------------------------------------------
+enum class Codec { h264 = 1, h265 = 2 };
+
+struct StreamTarget {
+    std::string uri;        // rtsp:// address used in requests
+    std::string dial_host;  // where to connect (127.0.0.1 when tunnelled)
+    int dial_port = 554;
+    std::string user, password;
+    double timeout = 15;
+};
+
+struct UriParts {
+    std::string scheme, host, path;  // path includes the query; host without brackets
+    int port = 0;                    // 0 when not given
+};
+UriParts split_uri(const std::string &uri);  // drops any user:password@; throws Error
+
+// One RTSP session over TCP (video interleaved on the same connection, so it also runs through an SSH forward).
+class RtspStream {
+public:
+    explicit RtspStream(StreamTarget target);
+    ~RtspStream();
+    // DESCRIBE, SETUP and PLAY. Throws Error with a reason the operator can act on.
+    void open();
+    Codec codec() const;
+    // Reads until stop is set or the stream fails (throws). Each frame is one access unit in Annex B form; key
+    // frames carry the parameter sets in front.
+    void run(const std::function<void(const std::string &frame, bool keyframe, double time)> &on_frame,
+             const std::atomic<bool> &stop);
+    void interrupt();  // wakes run() from another thread
+    void teardown();   // best effort, after run() has returned
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 // ---- measuring the view (view.cpp) ------------------------------------------
 // Decodes JPEG or PNG bytes into width x height grey pixels, top row first (the hosts do it: no decoder here).
 using GreyDecoder = std::function<bool(const std::string &bytes, unsigned char *grey, int width, int height)>;
@@ -161,6 +201,7 @@ struct TunnelParams {
     std::string ssh_host, ssh_user, ssh_password;
     int ssh_port = 22;
     int https_port = 443;  // Windows pre-forwards it: no multiplexing for later forwards
+    int rtsp_port = 554;   // likewise for the live video
     std::string ssh_identity;
     std::string camera_host;
     int camera_port = 80;

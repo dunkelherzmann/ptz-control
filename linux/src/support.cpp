@@ -235,6 +235,7 @@ public:
         }
         ready_.notify_all();
         thread_.join();
+        live_stop(live_);
         if (session_) ptz_close(session_);
         delete receiver_;  // drops callbacks still queued for it
     }
@@ -262,6 +263,7 @@ public:
 
     LinkDelegate delegate;
     ptz_session *session_ = nullptr;  // worker thread only
+    LiveVideo *live_ = nullptr;       // worker thread only
     volatile int cancel_ = 0;
     int pending_ = 0;                 // UI thread only
 
@@ -531,6 +533,38 @@ void link_move_in_view(CameraLink *link, double x, double y, std::function<void(
     });
 }
 
+void link_live_start(CameraLink *link, std::function<void(QImage)> picture, std::function<void(QString)> ended,
+                     std::function<void(LinkResult, QString)> done) {
+    link->run([=]() -> std::function<void()> {
+        LinkResult result;
+        QString description;
+        if (!link->session_) {
+            result.error = "Not connected";
+        } else {
+            live_stop(link->live_);
+            link->live_ = nullptr;
+            QString error;
+            LivePost post = [link](std::function<void()> fn) { link->post(std::move(fn)); };
+            link->live_ = live_start(link->session_, post, picture, ended, &description, &error);
+            if (link->live_) {
+                result.ok = true;
+            } else {
+                result.error = error;
+                result.link_lost = !ptz_link_alive(link->session_);
+            }
+        }
+        return [done, result, description] { done(result, description); };
+    });
+}
+
+void link_live_stop(CameraLink *link, std::function<void()> done) {
+    link->run([=]() -> std::function<void()> {
+        live_stop(link->live_);
+        link->live_ = nullptr;
+        return [done] { if (done) done(); };
+    });
+}
+
 void link_web_url(CameraLink *link, std::function<void(LinkResult, QString, QString)> done) {
     link->run([=]() -> std::function<void()> {
         LinkResult result;
@@ -554,6 +588,8 @@ void link_web_url(CameraLink *link, std::function<void(LinkResult, QString, QStr
 
 void link_disconnect(CameraLink *link, std::function<void()> done) {
     link->run([=]() -> std::function<void()> {
+        live_stop(link->live_);
+        link->live_ = nullptr;
         if (link->session_) {
             ptz_close(link->session_);
             link->session_ = nullptr;

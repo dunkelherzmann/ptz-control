@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cwchar>
 #include <memory>
 #include <vector>
@@ -256,9 +257,10 @@ void paint_plane(Plane &p, Graphics &g, float w, float h) {
         g.DrawLine(&dotted, c, t);
     }
 
-    // Status plates: when the picture was taken, or that it is out of date.
+    // Status plates: the live video, when the picture was taken, or that it is out of date.
     float ph = plate_height(g);
     std::wstring status = s.measuring ? L"MEASURING THE VIEW · THE CAMERA TURNS A LITTLE AND BACK"
+                        : !s.live.empty() ? L"\u25cf LIVE · " + s.live
                           : s.picture_stale ? L"MOVING · NEW PICTURE WHEN IT STOPS"
                           : s.picture_taken.empty() ? L"PICTURE" : L"PICTURE " + s.picture_taken;
     plate(g, status, r.X + S(6), r.GetBottom() - S(6) - ph, s.picture_stale || s.measuring ? g_theme.warning : white);
@@ -535,6 +537,23 @@ bool plane_set_picture(HWND plane, const std::string &bytes) {
     s.picture = bitmap;
     s.picture_width = static_cast<int>(bitmap->GetWidth());
     s.picture_height = static_cast<int>(bitmap->GetHeight());
+    return true;
+}
+
+bool plane_set_frame(HWND plane, const LiveFrame &frame) {
+    if (frame.width <= 0 || frame.height <= 0) return false;
+    PlaneState &s = plane_state(plane);
+    auto bitmap = std::make_shared<Bitmap>(frame.width, frame.height, PixelFormat32bppRGB);
+    Rect all(0, 0, frame.width, frame.height);
+    BitmapData data;
+    if (bitmap->GetLastStatus() != Ok || bitmap->LockBits(&all, ImageLockModeWrite, PixelFormat32bppRGB, &data) != Ok) return false;
+    const size_t row = static_cast<size_t>(frame.width) * 4;
+    for (int y = 0; y < frame.height; ++y)
+        std::memcpy(static_cast<BYTE *>(data.Scan0) + static_cast<ptrdiff_t>(y) * data.Stride, frame.bgra.data() + y * row, row);
+    bitmap->UnlockBits(&data);
+    s.picture = bitmap;
+    s.picture_width = frame.width;
+    s.picture_height = frame.height;
     return true;
 }
 

@@ -113,10 +113,12 @@ final class CameraLink: @unchecked Sendable {
     private var session: OpaquePointer?
     private let cancelFlag = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
     private(set) var pending = 0  // main thread only
+    var live: LiveVideo?  // the link's queue only
 
     init() { cancelFlag.initialize(to: 0) }
 
     deinit {
+        if let handle = live?.handle { ptz_live_stop(handle) }
         if let session { ptz_close(session) }
         cancelFlag.deallocate()
     }
@@ -133,6 +135,23 @@ final class CameraLink: @unchecked Sendable {
                 MainActor.assumeIsolated { completion(result) }
             }
         }
+    }
+
+    /// Runs `work` with the session on the link's queue.
+    func runOnSession<T>(_ work: @escaping (OpaquePointer) -> Result<T, LinkError>,
+                         completion: @escaping @MainActor (Result<T, LinkError>) -> Void) {
+        run({
+            switch self.requireSession() {
+            case .failure(let e): return .failure(e)
+            case .success(let session): return work(session)
+            }
+        }, completion: completion)
+    }
+
+    /// The link's queue only.
+    func stopLiveNow() {
+        if let handle = live?.handle { ptz_live_stop(handle) }
+        live = nil
     }
 
     private func requireSession() -> Result<OpaquePointer, LinkError> {
@@ -333,6 +352,7 @@ final class CameraLink: @unchecked Sendable {
     /// Waits for any in-flight request; no new moves are queued after this.
     func disconnect(completion: @escaping @MainActor () -> Void) {
         run({ () -> Result<Void, LinkError> in
+            self.stopLiveNow()
             if let session = self.session {
                 ptz_close(session)
                 self.session = nil

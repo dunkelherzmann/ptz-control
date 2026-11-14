@@ -226,6 +226,7 @@ public:
         }
         ready_.notify_all();
         thread_.join();
+        stop_live_now();
         if (session_) ptz_close(session_);
     }
 
@@ -252,8 +253,13 @@ public:
     // Core threads: run on the UI thread and wait (modal prompts).
     void sync(std::function<void()> fn) { SendMessageW(notify_, WM_APP_SYNC, 0, reinterpret_cast<LPARAM>(&fn)); }
 
+    // Worker thread only: stops the live video, if any, and waits for its thread.
+    void stop_live_now();
+
     LinkDelegate delegate;
     ptz_session *session_ = nullptr;  // worker thread only
+    ptz_live *live_ = nullptr;        // worker thread only
+    struct LiveContext *live_context_ = nullptr;
     volatile int cancel_ = 0;
     int pending_ = 0;                 // UI thread only
 
@@ -573,8 +579,77 @@ void link_web_url(CameraLink *link, std::function<void(LinkResult, std::wstring,
     });
 }
 
+// The live video's state shared with its stream thread: the decoder and where `ended` goes.
+struct LiveContext {
+    CameraLink *link;
+    std::shared_ptr<LiveDecoder> decoder;
+    std::function<void(const std::wstring &)> ended;
+};
+
+void CameraLink::stop_live_now() {
+    if (live_) ptz_live_stop(live_);
+    live_ = nullptr;
+    if (live_context_) {
+        live_decoder_close(*live_context_->decoder);
+        delete live_context_;
+        live_context_ = nullptr;
+    }
+}
+
+namespace {
+
+void on_live_frame(void *context, const ptz_frame *frame) {
+    if (frame) live_decoder_decode(*static_cast<LiveContext *>(context)->decoder, *frame);
+}
+
+void on_live_ended(void *context, const char *reason) {
+    auto *live = static_cast<LiveContext *>(context);
+    std::wstring text = reason && *reason ? W(reason) : L"The live view ended";
+    auto ended = live->ended;
+    live->link->post([ended, text] { ended(text); });
+}
+
+}  // namespace
+
+void link_start_live(CameraLink *link, std::function<void(std::shared_ptr<LiveFrame>)> picture,
+                     std::function<void(const std::wstring &)> ended, std::function<void(LinkResult, std::wstring)> done) {
+    link->run([=]() -> std::function<void()> {
+        LinkResult result;
+        std::wstring description;
+        if (!link->session_) {
+            result.error = L"Not connected";
+        } else {
+            link->stop_live_now();
+            auto *live = new LiveContext{
+                link, live_decoder_create([link](std::function<void()> fn) { link->post(std::move(fn)); }, picture, ended),
+                ended};
+            ptz_live_callbacks callbacks{live, on_live_frame, on_live_ended};
+            char d[128] = {}, error[1024] = {};
+            if (ptz_live *handle = ptz_live_start(link->session_, &callbacks, d, sizeof d, error, sizeof error)) {
+                link->live_ = handle;
+                link->live_context_ = live;
+                description = W(d);
+                result.ok = true;
+            } else {
+                live_decoder_close(*live->decoder);
+                delete live;
+                result = failure(link->session_, error);
+            }
+        }
+        return [done, result, description] { done(result, description); };
+    });
+}
+
+void link_stop_live(CameraLink *link) {
+    link->run([link]() -> std::function<void()> {
+        link->stop_live_now();
+        return [] {};
+    });
+}
+
 void link_disconnect(CameraLink *link, std::function<void()> done) {
     link->run([=]() -> std::function<void()> {
+        link->stop_live_now();
         if (link->session_) {
             ptz_close(link->session_);
             link->session_ = nullptr;

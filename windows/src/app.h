@@ -121,8 +121,28 @@ void link_picture(CameraLink *link, std::function<void(LinkResult, std::string b
 // Turns the camera a little on each axis and back to measure how much of its range the picture spans.
 void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done);
 void link_move_in_view(CameraLink *link, double x, double y, std::function<void(LinkResult)> done);
+// The camera's live video: `picture` gets the newest decoded frame and `ended` the reason it stopped by itself or
+// can't be decoded, both on the UI thread; `done` gets a description such as "H.264 over RTSP".
+struct LiveFrame {
+    std::wstring codec;  // "H.264" or "H.265"
+    int width = 0, height = 0;
+    std::vector<unsigned char> bgra;  // top-down rows, 4 bytes per pixel
+};
+void link_start_live(CameraLink *link, std::function<void(std::shared_ptr<LiveFrame>)> picture,
+                     std::function<void(const std::wstring &)> ended, std::function<void(LinkResult, std::wstring)> done);
+// Stops the live video, if any, and waits for its thread.
+void link_stop_live(CameraLink *link);
 void link_web_url(CameraLink *link, std::function<void(LinkResult, std::wstring url, std::wstring notice)> done);
 void link_disconnect(CameraLink *link, std::function<void()> done);
+
+// ---- live video decoding (live.cpp, Media Foundation) --------------------------------
+class LiveDecoder;
+// `post` runs a call on the UI thread; `picture` (the newest frame only) and `failed` run there.
+std::shared_ptr<LiveDecoder> live_decoder_create(std::function<void(std::function<void()>)> post,
+                                                 std::function<void(std::shared_ptr<LiveFrame>)> picture,
+                                                 std::function<void(const std::wstring &)> failed);
+void live_decoder_decode(LiveDecoder &decoder, const ptz_frame &frame);  // the stream's thread
+void live_decoder_close(LiveDecoder &decoder);                           // once the stream has stopped
 
 // ---- custom instrument windows ----------------------------------------------
 void register_instrument_classes(HINSTANCE instance);
@@ -130,14 +150,15 @@ HWND create_plane(HWND parent, int id);
 HWND create_meter(HWND parent, int id, const wchar_t *title);
 
 namespace Gdiplus { class Bitmap; }
-// The camera's still picture with a view grid on top. The centre is where the camera points, and a point of the
-// picture is aimed at in view units (-1..1 from edge to edge, up positive).
+// The camera's live video, or a still picture of its view, with a view grid on top. The centre is where the camera
+// points, and a point of the picture is aimed at in view units (-1..1 from edge to edge, up positive).
 struct PlaneState {
     std::shared_ptr<Gdiplus::Bitmap> picture;
     int picture_width = 0, picture_height = 0;
     std::wstring picture_taken;  // HH:MM:SS
     bool picture_stale = false;  // the camera has moved since the picture was taken
     std::wstring picture_note;   // shown in place of a picture: why there is none
+    std::wstring live;           // set while the picture is the camera's live video, e.g. "H.264 · 1920 × 1080"
     bool can_aim = false;        // the camera moves within its view, or its view can be measured
     // Where the picture points and how much of the range it spans, once its view is measured: pan and tilt are then
     // drawn over the picture, and a click aims at absolute coordinates.
@@ -156,6 +177,7 @@ struct PlaneState {
 };
 PlaneState &plane_state(HWND plane);
 bool plane_set_picture(HWND plane, const std::string &bytes);  // JPEG or PNG; false when it can't be read
+bool plane_set_frame(HWND plane, const LiveFrame &frame);       // a decoded frame of the live video
 
 struct MeterState {
     AxisRange range;

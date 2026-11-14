@@ -59,6 +59,11 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
     var measuring: Bool { plane.measuring }
     /// When the camera last moved and a fresh picture is wanted once it stops.
     private var pictureDue: Date?
+    /// The live video: starting, or playing with its codec ("H.264"). Each start gets a new generation, so news from
+    /// a stream that has since been stopped or restarted is ignored.
+    private var liveStarting = false
+    private var liveCodec: String?
+    private var liveGeneration = 0
     private var lastRead = Date.distantPast
     private var themedLabels: [(NSTextField, (PhosphorTheme) -> NSColor)] = []
 
@@ -132,7 +137,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         pictureButton.isBordered = false
         pictureButton.showsBorderOnlyWhileMouseInside = true
         pictureButton.controlSize = .small
-        pictureButton.toolTip = "Refresh Picture: take a new picture of the camera's view now (⇧⌘R)"
+        pictureButton.toolTip = "Refresh Picture: take a new picture of the camera's view now, or restart the live view (⇧⌘R)"
         pictureButton.setAccessibilityLabel("Refresh Picture")
         pictureButton.target = self
         pictureButton.action = #selector(refreshPicture(_:))
@@ -322,6 +327,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
                 self.plane.pictureTarget = nil
                 self.pictureDue = nil
                 self.takePicture()
+                self.startLive()
                 self.connection.show(message: "Connected. No movement has been sent.", error: false)
                 self.eventLog.append("Connected: \(info.name)")
                 self.eventLog.append(info.units)
@@ -389,6 +395,9 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             self.starting = nil
             self.plane.picture = nil
             self.plane.pictureTarget = nil
+            self.plane.live = nil
+            self.liveCodec = nil
+            self.liveGeneration += 1
             self.plane.overlay = nil
             self.plane.measuring = false
             self.pictureDue = nil
@@ -416,8 +425,12 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             let stopped = lastRead > due.addingTimeInterval(0.8) && current?.moveStatus != nil && current?.moveStatus != "MOVING"
             if stopped || (age >= 3 && (current?.moveStatus == nil || paused)) || age >= 30 {
                 pictureDue = nil
-                takePicture()
-                return
+                if plane.live != nil {
+                    plane.pictureTarget = nil  // the live view has shown the move; the aimed point is reached
+                } else {
+                    takePicture()
+                    return
+                }
             }
         }
         guard !paused, Date() >= nextRefresh else { return }
@@ -560,7 +573,74 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
 
     @objc func refreshPicture(_ sender: Any?) {
         guard state == .connected else { return }
+        if liveCodec != nil {
+            // Restart the live view, as when its picture has stopped changing.
+            liveCodec = nil
+            liveGeneration += 1
+            plane.live = nil
+            eventLog.append("Restarting the live view")
+            link.stopLive()
+            startLive()
+            return
+        }
         takePicture()
+        startLive()
+    }
+
+    // MARK: Live view
+
+    private func startLive() {
+        guard state == .connected, !liveStarting, liveCodec == nil else { return }
+        liveStarting = true
+        liveGeneration += 1
+        let generation = liveGeneration
+        link.startLive(picture: { [weak self] image, codec in
+            guard self?.liveGeneration == generation else { return }
+            self?.showLiveFrame(image, codec: codec)
+        }, ended: { [weak self] reason in
+            guard self?.liveGeneration == generation else { return }
+            self?.liveEnded(reason)
+        }) { [weak self] result in
+            guard let self else { return }
+            self.liveStarting = false
+            // Disconnecting stops it; a stream that ended before this reply was already reported.
+            guard self.state == .connected, self.liveGeneration == generation else { return }
+            switch result {
+            case .success(let description):
+                self.liveCodec = description.components(separatedBy: " ").first ?? description
+                self.eventLog.append("Live view: \(description)")
+            case .failure(let error):
+                if error.linkLost { self.linkLost(error.message); return }
+                self.eventLog.append("No live view: \(error.message). Showing still pictures.", warning: true)
+            }
+            self.updateControls()
+        }
+        updateControls()
+    }
+
+    private func showLiveFrame(_ image: CGImage, codec: String) {
+        guard state == .connected, liveStarting || liveCodec != nil else { return }
+        let size = NSSize(width: image.width, height: image.height)
+        let reshaped = plane.picture?.size != size
+        let first = plane.live == nil
+        if first { eventLog.append("Live view playing: \(image.width) × \(image.height)") }
+        plane.picture = NSImage(cgImage: image, size: size)
+        plane.pictureStale = false
+        plane.pictureNote = nil
+        plane.live = "\(codec) · \(image.width) × \(image.height)"
+        if reshaped { fitWindowToPicture() }
+        if first { updateOverlay() }
+    }
+
+    private func liveEnded(_ reason: String) {
+        guard state == .connected, liveCodec != nil || liveStarting else { return }
+        liveCodec = nil
+        liveGeneration += 1  // a start still under way is reported here, not again by its reply
+        plane.live = nil
+        eventLog.append("Live view stopped: \(reason). Showing still pictures.", warning: true)
+        link.stopLive()
+        takePicture()
+        updateControls()
     }
 
     private func takePicture() {
@@ -572,6 +652,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             guard self.state == .connected else { return }
             switch result {
             case .success(let image):
+                if self.plane.live != nil { break }  // the live view is already showing
                 let reshaped = self.plane.picture?.size != image.size
                 if self.plane.pictureStale { self.plane.pictureTarget = nil }  // the camera has moved since
                 self.pictureAt = self.current
@@ -598,6 +679,8 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
     /// Pan and tilt over the picture once its view is measured at the picture's zoom, and while the camera hasn't moved
     /// since.
     private func updateOverlay() {
+        // The live view shows where the camera points now.
+        if plane.live != nil { pictureAt = current }
         // The first picture comes before the first reading; while the camera hasn't moved, that reading is the picture's.
         if plane.picture != nil, !plane.pictureStale, pictureAt?.pan == nil || pictureAt?.tilt == nil { pictureAt = current }
         guard plane.picture != nil, !plane.pictureStale, let at = pictureAt, let pan = at.pan?.value,
@@ -699,11 +782,14 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         updateControls()
     }
 
-    /// The picture is out of date once the camera moves; a new one is taken when it stops.
+    /// The picture is out of date once the camera moves; a new one is taken when it stops. The live view shows the
+    /// move itself, and the aimed point is cleared once the camera stops.
     private func cameraMoved() {
         guard plane.picture != nil else { return }
-        plane.pictureStale = true
-        plane.overlay = nil
+        if plane.live == nil {
+            plane.pictureStale = true
+            plane.overlay = nil
+        }
         pictureDue = Date()
     }
 
@@ -924,8 +1010,9 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
 }
 
 extension ConsoleWindowController {
-    /// Test copy, PTZ_SNAPSHOT_PICTURE: Picture mode, aim at a point of the picture (a picture of that is saved to
-    /// PTZ_SNAPSHOT_AIM_PATH), move there, and save the window once the new picture has come.
+    /// Test copy, PTZ_SNAPSHOT_PICTURE: aim at a point of the picture (a picture of that is saved to
+    /// PTZ_SNAPSHOT_AIM_PATH), move there, and save the window once the new picture has come; PTZ_SNAPSHOT_LIVE_PATH
+    /// gets the live view's plate ("H.264 · 320 × 180") or "no live view".
     fileprivate func runPictureScript(to path: String, env: [String: String]) {
         connect()
         func save(_ file: String) {
@@ -946,6 +1033,9 @@ extension ConsoleWindowController {
         // PTZ_SNAPSHOT_WAIT: seconds before the last picture (a camera whose view is measured first takes longer).
         DispatchQueue.main.asyncAfter(deadline: .now() + (Double(env["PTZ_SNAPSHOT_WAIT"] ?? "") ?? 10)) {
             save(path)
+            if let livePath = env["PTZ_SNAPSHOT_LIVE_PATH"] {
+                try? (self.plane.live ?? "no live view").write(toFile: livePath, atomically: true, encoding: .utf8)
+            }
             NSApp.terminate(nil)
         }
     }

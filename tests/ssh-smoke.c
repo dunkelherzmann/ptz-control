@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static int prompts = 0;
 
@@ -25,6 +26,9 @@ static int on_confirm(void *context, const char *title, const char *message) {
     printf("      confirm: %s — %s\n", title, message);
     return 0;
 }
+
+static volatile int live_frames;
+static void on_live_frame(void *context, const ptz_frame *frame) { (void)context; (void)frame; live_frames++; }
 
 int main(int argc, char **argv) {
     if (ptz_is_askpass_invocation()) return ptz_askpass_main(argc, argv);
@@ -66,6 +70,20 @@ int main(int argc, char **argv) {
     char url[512], notice[256];
     if (ptz_web_url(s, url, sizeof url, notice, sizeof notice, error, sizeof error)) printf("ok:   web url %s\n", url);
     else { printf("FAIL: web: %s\n", error); failures++; }
+    /* Live video: the RTSP port is forwarded through the same SSH connection. */
+    live_frames = 0;
+    ptz_live_callbacks live_cb = {NULL, on_live_frame, NULL};
+    char description[64];
+    ptz_live *live = ptz_live_start(s, &live_cb, description, sizeof description, error, sizeof error);
+    if (live) {
+        sleep(2);
+        ptz_live_stop(live);
+        if (live_frames >= 10) printf("ok:   live video through tunnel: %s, %d frames\n", description, live_frames);
+        else { printf("FAIL: live video through tunnel: only %d frames\n", live_frames); failures++; }
+    } else {
+        printf("FAIL: live video through tunnel: %s\n", error);
+        failures++;
+    }
     printf("ok:   link alive=%d\n", ptz_link_alive(s));
     ptz_close(s);
     printf(failures ? "\n%d FAILED\n" : "\nall passed\n", failures);

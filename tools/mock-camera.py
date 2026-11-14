@@ -6,8 +6,10 @@ Axis VAPIX ptz.cgi (HTTP Digest is verified) on one port, and serves a tiny
 web page at /. Positions glide toward each AbsoluteMove target. Pictures of a
 drawn scene (PNG, standard library only) follow the camera's position and zoom,
 and moves within the view (ONVIF's field-of-view space, Axis center=) aim at a
-point of the picture. --no-fov plays an ONVIF camera without that space;
---plain-png sends uncompressed pictures a test can decode by itself.
+point of the picture. Live video comes over RTSP (TCP interleaved, Digest sign-in)
+on --rtsp-port, looping a short H.264 or H.265 clip from tests/fixtures. --no-fov
+plays an ONVIF camera without the field-of-view space; --plain-png sends
+uncompressed pictures a test can decode by itself.
 
     python3 tools/mock-camera.py --port 8080 --user admin --password secret
 """
@@ -16,6 +18,8 @@ import base64
 import hashlib
 import os
 import re
+import socket
+import socketserver
 import struct
 import threading
 import time
@@ -28,9 +32,13 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--port", type=int, default=8080)
 parser.add_argument("--user", default="admin")
 parser.add_argument("--password", default="secret")
+parser.add_argument("--rtsp-port", type=int, default=0, help="default: --port + 100")
+parser.add_argument("--video", choices=("h264", "h265", "none"), default="h264",
+                    help="none: the stream address leads nowhere, as on a camera whose video can't be reached")
 parser.add_argument("--no-fov", action="store_true", help="ONVIF: don't offer moves in the field-of-view space")
 parser.add_argument("--plain-png", action="store_true", help="uncompressed pictures, for tests that decode them")
 args = parser.parse_args()
+args.rtsp_port = args.rtsp_port or args.port + 100
 
 lock = threading.Lock()
 onvif = {"pan": 0.0, "tilt": 0.0, "zoom": 0.0, "target": None, "since": 0.0}
@@ -224,6 +232,12 @@ class Handler(BaseHTTPRequestHandler):
                 f"<trt:GetSnapshotUriResponse><trt:MediaUri><tt:Uri>{base}/onvif/snapshot</tt:Uri>"
                 "<tt:InvalidAfterConnect>false</tt:InvalidAfterConnect><tt:InvalidAfterReboot>false</tt:InvalidAfterReboot>"
                 "<tt:Timeout>PT0S</tt:Timeout></trt:MediaUri></trt:GetSnapshotUriResponse>"))
+        if op == "GetStreamUri":
+            return self.reply(200, soap(
+                f"<trt:GetStreamUriResponse><trt:MediaUri><tt:Uri>rtsp://127.0.0.1:{args.rtsp_port}/onvif/live"
+                "</tt:Uri><tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>"
+                "<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot><tt:Timeout>PT0S</tt:Timeout></trt:MediaUri>"
+                "</trt:GetStreamUriResponse>"))
         if op == "RelativeMove":
             pt = re.search(r'<(?:\w+:)?PanTilt x="([^"]+)" y="([^"]+)" space="([^"]+)"', xml)
             if not pt or pt.group(3) != FOV_SPACE or args.no_fov:
@@ -256,13 +270,16 @@ class Handler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         if url.path == "/":
             return self.reply(200, "<html><body><h1>Mock PTZ camera</h1></body></html>", "text/html")
-        if url.path not in ("/axis-cgi/com/ptz.cgi", "/axis-cgi/jpg/image.cgi", "/onvif/snapshot"):
+        if url.path not in ("/axis-cgi/com/ptz.cgi", "/axis-cgi/jpg/image.cgi", "/onvif/snapshot",
+                            "/axis-cgi/param.cgi"):
             return self.reply(404, "not found", "text/plain")
         if not self.digest_ok():
             nonce = base64.b64encode(os.urandom(12)).decode()
             return self.reply(401, "unauthorized", "text/plain", [
                 ("WWW-Authenticate", f'Digest realm="{REALM}", nonce="{nonce}", qop="auth", algorithm=MD5')])
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
+        if url.path == "/axis-cgi/param.cgi":
+            return self.reply(200, f"root.Network.RTSP.Port={args.rtsp_port}\n", "text/plain")
         if url.path != "/axis-cgi/com/ptz.cgi":
             with lock:
                 if url.path == "/onvif/snapshot":
@@ -300,5 +317,201 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply(200, body, "text/plain")
 
 
-print(f"Mock camera on http://127.0.0.1:{args.port}  user={args.user}")
+# ---- RTSP live video -----------------------------------------------------------
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests", "fixtures")
+H265 = args.video == "h265"
+
+
+def load_clip():
+    """Splits the clip into frames: lists of NAL units, parameter sets kept apart for the SDP."""
+    with open(os.path.join(FIXTURES, "live-h265.hevc" if H265 else "live-h264.h264"), "rb") as f:
+        data = f.read()
+    nals = [n.lstrip(b"\x00") for n in re.split(b"\x00\x00\x01", data)]
+    nals = [n for n in nals if n]
+    kind = (lambda n: (n[0] >> 1) & 0x3F) if H265 else (lambda n: n[0] & 0x1F)
+    params, frames, pending = {}, [], []
+    for nal in nals:
+        t = kind(nal)
+        if (32 <= t <= 34) if H265 else t in (7, 8):
+            params.setdefault(t, nal)
+        elif (t < 32) if H265 else (1 <= t <= 5):
+            frames.append((pending + [nal], (16 <= t <= 21) if H265 else t == 5))
+            pending = []
+        else:
+            pending.append(nal)
+    return params, frames
+
+
+CLIP_PARAMS, CLIP_FRAMES = load_clip() if args.video != "none" else ({}, [])
+
+
+def sdp():
+    b64 = lambda n: base64.b64encode(n).decode()
+    if H265:
+        p = CLIP_PARAMS
+        fmtp = f"sprop-vps={b64(p[32])}; sprop-sps={b64(p[33])}; sprop-pps={b64(p[34])}"
+        rtpmap = "H265/90000"
+    else:
+        fmtp = "packetization-mode=1; sprop-parameter-sets=" + ",".join(b64(CLIP_PARAMS[t]) for t in (7, 8))
+        rtpmap = "H264/90000"
+    return (f"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=Mock camera\r\nt=0 0\r\na=control:*\r\n"
+            f"m=audio 0 RTP/AVP 0\r\na=control:trackID=2\r\n"
+            f"m=video 0 RTP/AVP 96\r\na=rtpmap:96 {rtpmap}\r\na=fmtp:96 {fmtp}\r\na=control:trackID=1\r\n")
+
+
+def packets(nals):
+    """RTP payloads for one frame: parameter sets aggregated, big NAL units fragmented."""
+    out = []
+    for nal in nals:
+        if len(nal) <= 1400:
+            out.append(nal)
+            continue
+        if H265:
+            t = (nal[0] >> 1) & 0x3F
+            header, fu, body = bytes([(nal[0] & 0x81) | (49 << 1), nal[1]]), t, nal[2:]
+        else:
+            header, fu, body = bytes([(nal[0] & 0xE0) | 28]), nal[0] & 0x1F, nal[1:]
+        chunks = [body[i:i + 1400] for i in range(0, len(body), 1400)]
+        for i, chunk in enumerate(chunks):
+            flags = (0x80 if i == 0 else 0) | (0x40 if i == len(chunks) - 1 else 0)
+            out.append(header + bytes([flags | fu]) + chunk)
+    return out
+
+
+def aggregate(nals):
+    body = b"".join(struct.pack(">H", len(n)) + n for n in nals)
+    return (bytes([48 << 1, 1]) if H265 else bytes([24])) + body
+
+
+class RtspHandler(socketserver.BaseRequestHandler):
+    def setup(self):
+        self.nonce = base64.b64encode(os.urandom(12)).decode()
+        self.send_lock = threading.Lock()
+        self.playing = threading.Event()
+        self.closed = threading.Event()
+        self.channel = 0
+
+    def send(self, data):
+        with self.send_lock:
+            self.request.sendall(data)
+
+    def authorized(self, method, headers):
+        header = headers.get("authorization", "")
+        if not header.startswith("Digest "):
+            return False
+        f = dict(re.findall(r'(\w+)="?([^",]*)"?', header[7:]))
+        ha1 = hashlib.md5(f"{args.user}:{REALM}:{args.password}".encode()).hexdigest()
+        ha2 = hashlib.md5(f"{method}:{f.get('uri', '')}".encode()).hexdigest()
+        if f.get("qop"):
+            expected = hashlib.md5(
+                f"{ha1}:{f.get('nonce')}:{f.get('nc')}:{f.get('cnonce')}:{f.get('qop')}:{ha2}".encode()).hexdigest()
+        else:
+            expected = hashlib.md5(f"{ha1}:{f.get('nonce')}:{ha2}".encode()).hexdigest()
+        return f.get("username") == args.user and f.get("nonce") == self.nonce and f.get("response") == expected
+
+    def reply(self, cseq, status="200 OK", headers=(), body=b""):
+        text = f"RTSP/1.0 {status}\r\nCSeq: {cseq}\r\n"
+        for name, value in headers:
+            text += f"{name}: {value}\r\n"
+        if body:
+            text += f"Content-Length: {len(body)}\r\n"
+        self.send(text.encode() + b"\r\n" + body)
+
+    def stream(self):
+        sequence, timestamp, sent = 1000, 12345, 0
+        try:
+            while not self.closed.is_set():
+                for nals, key in CLIP_FRAMES:
+                    if self.closed.is_set():
+                        break
+                    payloads = packets(nals)
+                    if key:  # parameter sets in-band too, as many cameras send them
+                        payloads.insert(0, aggregate([CLIP_PARAMS[t] for t in sorted(CLIP_PARAMS)]))
+                    data = b""
+                    for i, payload in enumerate(payloads):
+                        marker = 0x80 if i == len(payloads) - 1 else 0
+                        rtp = struct.pack(">BBHII", 0x80, marker | 96, sequence & 0xFFFF, timestamp, 0x1234) + payload
+                        data += struct.pack(">BBH", ord("$"), self.channel, len(rtp)) + rtp
+                        sequence += 1
+                    # Sent in odd-sized pieces with pauses, so reads end partway through packets as on a real network,
+                    # but whole, so a reply to a request never lands inside a packet.
+                    with self.send_lock:
+                        for at in range(0, len(data), 777):
+                            self.request.sendall(data[at:at + 777])
+                            time.sleep(0.002)
+                    sent += 1
+                    timestamp = (timestamp + 9000) & 0xFFFFFFFF
+                    time.sleep(0.1)
+        except OSError:
+            pass
+        print(f"mock: rtsp sent {sent} frames")
+
+    def handle(self):
+        data = b""
+        while True:
+            try:
+                chunk = self.request.recv(4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            data += chunk
+            while b"\r\n\r\n" in data:
+                head, data = data.split(b"\r\n\r\n", 1)
+                lines = head.decode(errors="replace").split("\r\n")
+                method, uri = lines[0].split(" ")[:2]
+                headers = {}
+                for line in lines[1:]:
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        headers[k.strip().lower()] = v.strip()
+                cseq = headers.get("cseq", "0")
+                if method != "OPTIONS" and not self.authorized(method, headers):
+                    self.reply(cseq, "401 Unauthorized", [("WWW-Authenticate", f'Basic realm="{REALM}"'),
+                               ("WWW-Authenticate", f'Digest realm="{REALM}", nonce="{self.nonce}"')])
+                    continue
+                if method == "OPTIONS":
+                    self.reply(cseq, headers=[("Public", "OPTIONS, DESCRIBE, SETUP, PLAY, GET_PARAMETER, TEARDOWN")])
+                elif method == "DESCRIBE":
+                    path = urlsplit(uri).path
+                    if path not in ("/onvif/live", "/axis-media/media.amp"):
+                        self.reply(cseq, "404 Not Found")
+                        continue
+                    print(f"mock: rtsp describe {path}")
+                    self.reply(cseq, headers=[("Content-Type", "application/sdp"), ("Content-Base", uri + "/")],
+                               body=sdp().encode())
+                elif method == "SETUP":
+                    transport = headers.get("transport", "")
+                    if "TCP" not in transport.upper():
+                        self.reply(cseq, "461 Unsupported Transport")
+                        continue
+                    m = re.search(r"interleaved=(\d+)", transport)
+                    self.channel = int(m.group(1)) if m else 0
+                    self.reply(cseq, headers=[("Session", "MOCK42;timeout=6"), ("Transport",
+                               f"RTP/AVP/TCP;unicast;interleaved={self.channel}-{self.channel + 1}")])
+                elif method == "PLAY":
+                    print("mock: rtsp play")
+                    self.reply(cseq, headers=[("Session", "MOCK42")])
+                    if not self.playing.is_set():
+                        self.playing.set()
+                        threading.Thread(target=self.stream, daemon=True).start()
+                elif method == "GET_PARAMETER":  # the keep-alive, every 3 s with this short session timeout
+                    print("mock: rtsp keep-alive")
+                    self.reply(cseq, headers=[("Session", "MOCK42")])
+                elif method == "TEARDOWN":
+                    print("mock: rtsp teardown")
+                    self.reply(cseq)
+                    self.closed.set()
+                else:
+                    self.reply(cseq, "405 Method Not Allowed")
+        self.closed.set()
+
+
+socketserver.ThreadingTCPServer.allow_reuse_address = True
+socketserver.ThreadingTCPServer.daemon_threads = True
+if args.video != "none":
+    rtsp_server = socketserver.ThreadingTCPServer(("127.0.0.1", args.rtsp_port), RtspHandler)
+    threading.Thread(target=rtsp_server.serve_forever, daemon=True).start()
+
+print(f"Mock camera on http://127.0.0.1:{args.port} and rtsp://127.0.0.1:{args.rtsp_port}  user={args.user}")
 ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()

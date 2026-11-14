@@ -21,7 +21,7 @@ let package = Package(
             name: "PTZControl",
             dependencies: ["PTZCore"],
             path: "macos/Sources/PTZControl",
-            linkerSettings: [.linkedFramework("AppKit")]
+            linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("CoreMedia"), .linkedFramework("VideoToolbox")]
         ),
     ],
     cxxLanguageStandard: .cxx20

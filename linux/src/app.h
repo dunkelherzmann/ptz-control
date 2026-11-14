@@ -115,8 +115,21 @@ void link_picture(CameraLink *link, std::function<void(LinkResult, QImage)> done
 // Turns the camera a little on each axis and back to measure how much of its range the picture spans.
 void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done);
 void link_move_in_view(CameraLink *link, double x, double y, std::function<void(LinkResult)> done);
+// The camera's live video (live.cpp decodes it). Pictures and `ended` (it stopped by itself or can't be decoded)
+// arrive on the UI thread; `done` gets a description such as "H.264 over RTSP".
+void link_live_start(CameraLink *link, std::function<void(QImage)> picture, std::function<void(QString)> ended,
+                     std::function<void(LinkResult, QString description)> done);
+// Stops the live video, if any, and waits for its thread.
+void link_live_stop(CameraLink *link, std::function<void()> done = nullptr);
 void link_web_url(CameraLink *link, std::function<void(LinkResult, QString url, QString notice)> done);
 void link_disconnect(CameraLink *link, std::function<void()> done);
+
+// live.cpp: one stream and its decoder. `post` runs a function on the UI thread.
+using LivePost = std::function<void(std::function<void()>)>;
+class LiveVideo;
+LiveVideo *live_start(ptz_session *session, LivePost post, std::function<void(QImage)> picture,
+                      std::function<void(QString)> ended, QString *description, QString *error);
+void live_stop(LiveVideo *live);  // from any thread but the stream's own; before ptz_close
 
 // ---- saved logins (spec §17; vault.cpp) ----------------------------------------
 enum class LoginStore { Ssh = 0, Camera = 1 };

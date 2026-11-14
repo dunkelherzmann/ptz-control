@@ -66,11 +66,13 @@ final class PanelView: NSView, Themed {
     override var wantsUpdateLayer: Bool { true }
 }
 
-/// The camera's still picture with a view grid on top: the centre is where the camera points, and a point of the
+/// The camera's live video, or a still picture of its view, with a view grid on top: the centre is where the camera points, and a point of the
 /// picture is aimed at in view units (−1…1 from edge to edge, up positive). Click to aim; double-click to aim and move.
 final class PositionPlaneView: NSView, Themed {
     var picture: NSImage? { didSet { needsDisplay = true } }
     var pictureTaken: Date? { didSet { needsDisplay = true } }
+    /// Set while the picture is the camera's live video, e.g. "H.264 · 1920 × 1080".
+    var live: String? { didSet { needsDisplay = true } }
     /// The camera has moved since the picture was taken.
     var pictureStale = false { didSet { needsDisplay = true } }
     /// Shown in place of a picture: why there is none.
@@ -310,8 +312,8 @@ final class PositionPlaneView: NSView, Themed {
 
         // Status plates: when the picture was taken, or that it is out of date.
         let status = measuring ? "MEASURING THE VIEW · THE CAMERA TURNS A LITTLE AND BACK"
-            : pictureStale ? "MOVING · NEW PICTURE WHEN IT STOPS"
-            : pictureTaken.map { "PICTURE \(Self.time.string(from: $0))" } ?? "PICTURE"
+            : live.map { "● LIVE · \($0)" } ?? (pictureStale ? "MOVING · NEW PICTURE WHEN IT STOPS"
+            : pictureTaken.map { "PICTURE \(Self.time.string(from: $0))" } ?? "PICTURE")
         plate(status, at: CGPoint(x: r.minX + 6, y: r.minY + 6), color: pictureStale || measuring ? theme.warning : .white)
         if !canAim {
             plate("THIS CAMERA CAN'T AIM FROM ITS PICTURE", at: CGPoint(x: r.maxX - 6, y: r.minY + 6),

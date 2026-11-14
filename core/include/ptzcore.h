@@ -98,6 +98,43 @@ void ptz_free(void *data);
  * x and y run from -1 at the picture's left and bottom edges to 1 at its right and
  * top edges. Needs info.view_moves and a picture taken first. */
 int ptz_move_in_view(ptz_session *session, double x, double y, char *error, size_t error_size);
+/* ---- Live video -------------------------------------------------------------
+ * The camera's live video, played from its RTSP stream (ONVIF GetStreamUri for the
+ * chosen profile; Axis /axis-media/media.amp) over one TCP connection, through the SSH
+ * tunnel when there is one. The core hands over compressed frames; the host decodes them
+ * with the platform's own video decoder. */
+typedef enum { PTZ_CODEC_H264 = 1, PTZ_CODEC_H265 = 2 } ptz_codec;
+
+typedef struct {
+    ptz_codec codec;
+    const unsigned char *data; /* one frame in Annex B form (00 00 00 01 before each NAL unit);
+                                  key frames start with the parameter sets (VPS, SPS, PPS) */
+    size_t size;
+    int keyframe;
+    double time;               /* seconds since the first frame, from the camera's clock */
+} ptz_frame;
+
+typedef struct {
+    void *context;
+    /* Called on the stream's own thread for every frame, the first one a key frame. The
+     * data is valid only during the call. Must not call ptz_live_stop. */
+    void (*frame)(void *context, const ptz_frame *frame);
+    /* Called once on the stream's thread when the stream ends by itself (never after
+     * ptz_live_stop), with the reason. */
+    void (*ended)(void *context, const char *reason);
+} ptz_live_callbacks;
+
+typedef struct ptz_live ptz_live;
+
+/* Asks the camera for its video and starts it. Blocks until the camera is sending (like
+ * the other session calls, on the session's worker). Returns NULL and fills `error` on
+ * failure. `description` (may be NULL) gets e.g. "H.264 over RTSP". */
+ptz_live *ptz_live_start(ptz_session *session, const ptz_live_callbacks *callbacks, char *description,
+                         size_t description_size, char *error, size_t error_size);
+/* Stops the video and waits for its thread; callbacks have ended when it returns. Call it
+ * before ptz_close, from any thread except the stream's own. */
+void ptz_live_stop(ptz_live *live);
+
 /* How much of the pan/tilt range the picture spans, measured at one zoom: the pan change that brings a point at the
  * picture's right edge (x = 1) to its centre, and the tilt change for its top edge (y = 1). A point (x, y) of the
  * picture lies at pan + x * pan_per_x, tilt + y * tilt_per_y. */

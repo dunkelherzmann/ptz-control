@@ -66,6 +66,10 @@ struct Console {
     std::optional<Snapshot> picture_at;                                    // the reading the picture was taken at
     std::optional<std::pair<std::optional<double>, ViewScale>> measured;  // the last view measured, with its zoom
     ULONGLONG picture_due = 0, last_read = 0;  // when the camera last moved (a fresh picture is due), the last reading
+    // The live video: starting, or playing with its codec ("H.264"); `live_run` tells each start's calls apart.
+    bool live_starting = false;
+    std::wstring live_codec;
+    int live_run = 0;
     int route = 0, vendor = 0;
     std::wstring message;
     bool message_error = false;
@@ -377,6 +381,7 @@ std::optional<Settings> read_settings(std::wstring &error) {
 void refresh();
 void disconnect(std::function<void()> then = nullptr);
 void take_picture();
+void start_live();
 void update_overlay();
 
 // ---- saved logins ---------------------------------------------------------------------
@@ -532,6 +537,7 @@ void connect() {
             }
             g->picture_due = 0;
             take_picture();
+            start_live();
             show_message(L"Connected. No movement has been sent.", false);
             log_line(L"Connected: " + info.name);
             log_line(info.units);
@@ -569,6 +575,9 @@ void disconnect(std::function<void()> then) {
         plane_state(g->plane).overlay.reset();
         plane_state(g->plane).measuring = false;
         plane_state(g->plane).picture_target.reset();
+        plane_state(g->plane).live.clear();
+        g->live_codec.clear();
+        ++g->live_run;
         g->picture_due = 0;
         show_message(L"Disconnected.", false);
         log_line(L"Disconnected");
@@ -640,8 +649,14 @@ void tick() {
         bool stopped = g->last_read > g->picture_due + 800 && reported && g->current->move_status != L"MOVING";
         if (stopped || (age >= 3000 && (!reported || g->paused)) || age >= 30000) {
             g->picture_due = 0;
-            take_picture();
-            return;
+            PlaneState &s = plane_state(g->plane);
+            if (!s.live.empty()) {
+                s.picture_target.reset();  // the live view has shown the move; the aimed point is reached
+                InvalidateRect(g->plane, nullptr, FALSE);
+            } else {
+                take_picture();
+                return;
+            }
         }
     }
     if (!g->paused && now >= g->next_refresh) refresh();
@@ -704,6 +719,10 @@ void take_picture() {
         g->taking_picture = false;
         if (g->state != State::Connected) return;
         PlaneState &s = plane_state(g->plane);
+        if (result.ok && !s.live.empty()) {  // the live view is already showing
+            update_controls();
+            return;
+        }
         if (result.ok) {
             int old_w = s.picture ? s.picture_width : 0, old_h = s.picture ? s.picture_height : 0;
             bool stale = s.picture_stale;
@@ -743,6 +762,7 @@ void update_overlay() {
     PlaneState &s = plane_state(g->plane);
     auto &at = g->picture_at;
     // The first picture comes before the first reading; while the camera hasn't moved, that reading is the picture's.
+    if (!s.live.empty()) at = g->current;  // the live view shows where the camera points now
     if (s.picture && !s.picture_stale && (!at || !at->pan || !at->tilt)) at = g->current;
     InvalidateRect(g->plane, nullptr, FALSE);
     if (!s.picture || s.picture_stale || !at || !at->pan || !at->tilt) {
@@ -823,14 +843,95 @@ void measure_then_move(std::pair<float, float> point) {
     });
 }
 
-// The picture is out of date once the camera moves; a new one is taken when it stops.
+// The picture is out of date once the camera moves; a new one is taken when it stops. The live view shows the move
+// itself, and the aimed point is cleared once the camera stops.
 void camera_moved() {
     PlaneState &s = plane_state(g->plane);
     if (!s.picture) return;
-    s.picture_stale = true;
-    s.overlay.reset();
+    if (s.live.empty()) {
+        s.picture_stale = true;
+        s.overlay.reset();
+    }
     g->picture_due = GetTickCount64();
     InvalidateRect(g->plane, nullptr, FALSE);
+}
+
+void refresh_picture() {
+    if (g->state != State::Connected) return;
+    if (!g->live_codec.empty()) {
+        // Restart the live view, as when its picture has stopped changing.
+        g->live_codec.clear();
+        plane_state(g->plane).live.clear();
+        ++g->live_run;
+        log_line(L"Restarting the live view");
+        link_stop_live(g->link);
+        start_live();
+        return;
+    }
+    take_picture();
+    start_live();
+}
+
+// ---- live view ------------------------------------------------------------------------
+
+void show_live_frame(const LiveFrame &frame) {
+    if (g->state != State::Connected || (!g->live_starting && g->live_codec.empty())) return;
+    PlaneState &s = plane_state(g->plane);
+    bool reshaped = !s.picture || s.picture_width != frame.width || s.picture_height != frame.height;
+    bool first = s.live.empty();
+    if (first)
+        log_line(L"Live view playing: " + std::to_wstring(frame.width) + L" \u00d7 " + std::to_wstring(frame.height));
+    if (!plane_set_frame(g->plane, frame)) return;
+    s.picture_stale = false;
+    s.picture_note.clear();
+    s.live = frame.codec + L" \u00b7 " + std::to_wstring(frame.width) + L" \u00d7 " +
+             std::to_wstring(frame.height);
+    if (reshaped) fit_window_to_picture();
+    if (first) update_overlay();
+    InvalidateRect(g->plane, nullptr, FALSE);
+    UpdateWindow(g->plane);  // painted now, so the next frame waits for this one
+}
+
+void live_ended(const std::wstring &reason) {
+    if (g->state != State::Connected || (g->live_codec.empty() && !g->live_starting)) return;
+    g->live_codec.clear();
+    plane_state(g->plane).live.clear();
+    ++g->live_run;
+    log_line(L"Live view stopped: " + reason + L". Showing still pictures.", true);
+    link_stop_live(g->link);
+    take_picture();
+    update_controls();
+}
+
+void start_live() {
+    if (g->state != State::Connected || g->live_starting || !g->live_codec.empty()) return;
+    g->live_starting = true;
+    int run = ++g->live_run;
+    link_start_live(
+        g->link,
+        [run](std::shared_ptr<LiveFrame> frame) {
+            if (run == g->live_run) show_live_frame(*frame);
+        },
+        [run](const std::wstring &reason) {
+            if (run == g->live_run) live_ended(reason);
+        },
+        [run](LinkResult result, std::wstring description) {
+            g->live_starting = false;
+            // Disconnecting stops it; a stream that ended before this reply was already reported.
+            if (g->state != State::Connected || run != g->live_run) return;
+            if (result.ok) {
+                g->live_codec = description.substr(0, description.find(L' '));
+                log_line(L"Live view: " + description);
+            } else {
+                if (result.link_lost) {
+                    link_lost(result.error);
+                    return;
+                }
+                log_line(L"No live view: " + result.error + L". Showing still pictures.", true);
+            }
+            update_controls();
+        });
+    update_controls();
 }
 
 void aim_in_picture(float x, float y) {
@@ -965,9 +1066,10 @@ void show_help() {
                 L"\u2022 ONVIF: the camera's advertised absolute space (commonly pan/tilt \u22121\u20261, zoom 0\u20261; not degrees).\n"
                 L"\u2022 Axis: pan/tilt in degrees; zoom is an integer in the native range.\n\n"
                 L"Leave a target field blank (or type x) to keep that axis unchanged.\n"
-                L"The camera picture shows what the camera sees: click a point to aim at it, double-click (or Move) to turn "
-                L"the camera so that point comes to the centre. A new picture comes once the camera stops, or with Refresh "
-                L"Picture (Ctrl+Shift+R).\n"
+                L"The camera picture shows the camera's live video, or a still picture when the video can't play: click a "
+                L"point to aim at it, double-click (or Move) to turn the camera so that point comes to the centre. A still "
+                L"picture is renewed once the camera stops. Refresh Picture (Ctrl+Shift+R) takes a new picture, or restarts "
+                L"the live view.\n"
                 L"Measure View (Ctrl+Shift+M) turns the camera a little on each axis and back to learn how much of its range "
                 L"the picture spans at this zoom; then pan and tilt show over the picture and a click fills the target fields. "
                 L"A camera that can't move within its view by itself is measured the first time you move toward a point of its "
@@ -1550,7 +1652,7 @@ void command(int id) {
             InvalidateRect(id == ID_SAVE_SSH ? g->save_ssh : g->save_cam, nullptr, FALSE);
             return;
         case CMD_PAUSE: toggle_pause(); return;
-        case ID_REFRESH_PICTURE: case CMD_REFRESH_PICTURE: take_picture(); return;
+        case ID_REFRESH_PICTURE: case CMD_REFRESH_PICTURE: refresh_picture(); return;
         case CMD_MEASURE_VIEW: measure_view(); return;
         case CMD_QUIT: case CMD_CLOSE: PostMessageW(g->hwnd, WM_CLOSE, 0, 0); return;
         case CMD_MINIMIZE: ShowWindow(g->hwnd, SW_MINIMIZE); return;
@@ -1723,7 +1825,8 @@ void create_children() {
                 L"Logins (Ctrl+Shift+L).");
     add_tooltip(g->tips, g->save_ssh,
                 L"Save login \u2014 Once connected, save this SSH username and password to the saved SSH logins.");
-    add_tooltip(g->tips, g->refresh_picture, L"Refresh Picture: take a new picture of the camera's view now (Ctrl+Shift+R)");
+    add_tooltip(g->tips, g->refresh_picture, L"Refresh Picture: take a new picture of the camera's view now, or restart the live view "
+                L"(Ctrl+Shift+R)");
     add_tooltip(g->tips, g->save_cam,
                 L"Save login \u2014 Once connected, save this camera username and password to the saved camera logins.");
     reload_logins();
@@ -1785,7 +1888,8 @@ void snapshot_step(int step) {
             if (_wgetenv(L"PTZ_SNAPSHOT_USE_LOGIN")) choose_saved_login(LoginStore::Camera, 0);
             connect();
             // PTZ_SNAPSHOT_PICTURE: aim at a point of the picture (a picture of that is saved to PTZ_SNAPSHOT_AIM_PATH),
-            // move there, and save the window once the new picture has come.
+            // move there, and save the window once the new picture has come; PTZ_SNAPSHOT_LIVE_PATH gets the live
+            // view's plate ("H.264 · 320 × 180") or "no live view".
             SetTimer(g->hwnd, _wgetenv(L"PTZ_SNAPSHOT_PICTURE") ? kPicAim : kSnapMove, 3000, nullptr);
             return;
         case kPicAim:
@@ -1805,6 +1909,14 @@ void snapshot_step(int step) {
             return;
         case kPicCapture:
             save_png(g->hwnd, _wgetenv(L"PTZ_SNAPSHOT_PATH"));
+            if (const wchar_t *path = _wgetenv(L"PTZ_SNAPSHOT_LIVE_PATH")) {
+                const std::wstring &live = plane_state(g->plane).live;
+                std::string text = U(live.empty() ? L"no live view" : live);
+                if (FILE *f = _wfopen(path, L"wb")) {
+                    fwrite(text.data(), 1, text.size(), f);
+                    fclose(f);
+                }
+            }
             PostMessageW(g->hwnd, WM_CLOSE, 0, 0);
             return;
         case kSnapMove:

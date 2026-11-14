@@ -1,8 +1,9 @@
 # Tests PTZ Control for Windows against the mock camera without touching the user's settings or saved logins.
 #  1. The core's login vault: tests\vault-smoke.c built with MSVC and run.
-#  2. The app (dist\PTZControl.exe) three times, with its own registry key and vault file, never taking focus:
+#  2. The app (dist\PTZControl.exe) four times, with its own registry key and vault file, never taking focus:
 #     run 1 types a login, ticks Save login and connects; run 2 starts with a wrong username and fills the
-#     camera fields from the saved login; run 3 aims and moves in the camera's picture. Each run saves pictures in .build\test.
+#     camera fields from the saved login; run 3 aims and moves in the still pictures of a camera whose video can't be
+#     reached; run 4 plays the camera's live video and aims in it. Each run saves pictures in .build\test.
 # Usage: windows\scripts\test.ps1   (after windows\scripts\build.ps1)
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -44,6 +45,7 @@ $exe = Join-Path $Root 'dist\PTZControl.exe'
 $Port = 18082
 $KeyName = 'Software\PTZControl.Test'
 $mockLog = Join-Path $Work 'mock.log'
+$stillLog = Join-Path $Work 'mock-still.log'
 $mock = Start-Process python -ArgumentList @('-u', "`"$Root\tools\mock-camera.py`"", '--port', $Port) -PassThru `
     -WindowStyle Hidden -RedirectStandardOutput $mockLog -RedirectStandardError (Join-Path $Work 'mock.err')
 # A second camera without ONVIF's field-of-view moves: its view is measured from its pictures (run 4).
@@ -128,19 +130,24 @@ try {
     Check 'Manage Logins picture drawn' (Drawn $logins)
     Check 'still one camera login' (@(Get-Content $vault | Where-Object { $_ -like 'camera*' }).Count -eq 1)
 
-    # Run 3: the camera picture. A picture comes on connect, a point of it is aimed at, the camera moves toward it,
-    # and a new picture comes once it stops.
-    Settings 'admin'
+    # Run 3: still pictures, from a camera whose video can't be reached. A picture comes on connect, a point of it is
+    # aimed at, the camera moves toward it, and a new picture comes once it stops.
+    $StillPort = 18084
+    $stillMock = Start-Process python -ArgumentList @('-u', "`"$Root\tools\mock-camera.py`"", '--port', $StillPort, '--video', 'none') `
+        -PassThru -WindowStyle Hidden -RedirectStandardOutput $stillLog -RedirectStandardError (Join-Path $Work 'mock-still.err')
+    Start-Sleep -Seconds 1
+    Settings 'admin' $StillPort
     $picture = Join-Path $Out 'windows-picture.png'
     $aim = Join-Path $Out 'windows-picture-aim.png'
+    $live3 = Join-Path $Work 'live3.txt'
     Remove-Item $picture, $aim -ErrorAction SilentlyContinue
-    $picturesBefore = @(Select-String -Path $mockLog -Pattern '^mock: picture' -ErrorAction SilentlyContinue).Count
     RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PICTURE = '1'; PTZ_SNAPSHOT_PATH = $picture; PTZ_SNAPSHOT_AIM_PATH = $aim
-              PTZ_SNAPSHOT_MOVING_PATH = (Join-Path $Out 'windows-picture-moving.png') }
-    $pictures = @(Select-String -Path $mockLog -Pattern '^mock: picture' -ErrorAction SilentlyContinue).Count - $picturesBefore
+              PTZ_SNAPSHOT_MOVING_PATH = (Join-Path $Out 'windows-picture-moving.png'); PTZ_SNAPSHOT_LIVE_PATH = $live3 }
+    $pictures = @(Select-String -Path $stillLog -Pattern '^mock: picture' -ErrorAction SilentlyContinue).Count
     Check 'run 3 took a picture, then a new one after the move' ($pictures -ge 2)
     Check 'run 3 moved toward the aimed point (right and up)' `
-        (@(Select-String -Path $mockLog -Pattern '^mock: onvif view move to pan=0\.[0-9]+ tilt=0\.[0-9]+' -ErrorAction SilentlyContinue).Count -ge 1)
+        (@(Select-String -Path $stillLog -Pattern '^mock: onvif view move to pan=0\.[0-9]+ tilt=0\.[0-9]+' -ErrorAction SilentlyContinue).Count -ge 1)
+    Check 'run 3 fell back to still pictures' ((Test-Path $live3) -and ((Get-Content -Raw -Encoding UTF8 $live3) -ceq 'no live view'))
     Check 'camera-picture pictures drawn' ((Drawn $picture) -and (Drawn $aim))
 
     # Run 4: a camera that can't move within its view. Moving toward the same point first measures its view (it turns
@@ -157,14 +164,30 @@ try {
         [Math]::Abs([double]$last.Matches[0].Groups[2].Value - 0.0422) -lt 0.012
     Check "run 4 measured the view and moved to the point's coordinates ($($last.Line))" $near
     Check 'measured-view picture drawn' (Drawn $measured)
+
+    # Run 5: the live view. The camera's H.264 video plays in the plane, and aiming in it still moves the camera.
+    Settings 'admin'
+    $live = Join-Path $Out 'windows-live.png'
+    $live5 = Join-Path $Work 'live5.txt'
+    Remove-Item $live -ErrorAction SilentlyContinue
+    $viewMovesBefore = @(Select-String -Path $mockLog -Pattern '^mock: onvif view move' -ErrorAction SilentlyContinue).Count
+    RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PICTURE = '1'; PTZ_SNAPSHOT_PATH = $live; PTZ_SNAPSHOT_AIM_PATH = $null
+              PTZ_SNAPSHOT_MOVING_PATH = $null; PTZ_SNAPSHOT_LIVE_PATH = $live5 }
+    $plate = if (Test-Path $live5) { Get-Content -Raw -Encoding UTF8 $live5 } else { '' }
+    Check "run 5 played the camera's video ($plate)" ($plate -ceq "H.264 $([char]0xb7) 320 $([char]0xd7) 180")
+    Check 'run 5 started the video over RTSP' (@(Select-String -Path $mockLog -Pattern '^mock: rtsp play' -ErrorAction SilentlyContinue).Count -ge 1)
+    Check 'run 5 aimed in the live view' `
+        (@(Select-String -Path $mockLog -Pattern '^mock: onvif view move' -ErrorAction SilentlyContinue).Count -gt $viewMovesBefore)
+    Check 'live view picture drawn' (Drawn $live)
 } finally {
     Stop-Process -Id $mock.Id -ErrorAction SilentlyContinue
     Stop-Process -Id $mock2.Id -ErrorAction SilentlyContinue
+    if ($stillMock) { Stop-Process -Id $stillMock.Id -ErrorAction SilentlyContinue }
     Remove-Item -Path "HKCU:\$KeyName" -Recurse -ErrorAction SilentlyContinue
 }
 
 if ($Fail) {
-    Get-Content $mockLog -ErrorAction SilentlyContinue
+    Get-Content $mockLog, $stillLog -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $Work -ErrorAction SilentlyContinue
     exit 1
 }
