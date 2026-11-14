@@ -46,7 +46,19 @@ A box is ticked once the change has shipped. A request that covers several platf
 - [x] **A clean repository** (asked 2026-11-12, all platforms). The project moved to a new repository of the same name with a rewritten history. Pull request numbers up to #30 in these files refer to the earlier repository, which is gone; the releases were carried over with their files and notes, and `main` keeps its protection.
 - [x] **The ☰ Main Menu button in the same place on the Mac as on Linux and Windows** (asked 2026-11-13, Mac). It moves from beside the window controls to the right end of the window's header, after the status chip, and to the right of Manage Logins' top row, framed like the window's other buttons; the menu opens right-aligned under it. Done in #2.
 - [x] **Release 1.0.81 for macOS on GitHub** (asked 2026-11-13, Mac). Published as `v1.0.81` from #2's commit with the Mac zip; Windows and Linux haven't changed, and the notes point to 1.0.76 for them.
-- [ ] **Aim from the camera's picture** (asked 2026-11-13, all platforms). A still picture of the camera's current view under the position plane, with the plane's grid drawn over it: clicking a point of the picture aims at it, and the camera moves so that point comes to the centre. The window grows to fit the picture. A Range | Picture switch keeps the whole-range plane. ONVIF uses `GetSnapshotUri` and a move in the field-of-view space, Axis `image.cgi` and `center=`.
+- [x] **Aim from the camera's picture** (asked 2026-11-13, all platforms). A still picture of the camera's current view under the position plane, with the plane's grid drawn over it: clicking a point of the picture aims at it, and the camera moves so that point comes to the centre. The window grows to fit the picture. A Range | Picture switch keeps the whole-range plane. ONVIF uses `GetSnapshotUri` and a move in the field-of-view space, Axis `image.cgi` and `center=`.
   - [x] Mac (#4)
+  - [x] Linux (#5)
+  - [x] Windows (#5)
+- [x] **The camera picture by default, without Range** (asked 2026-11-14, all platforms). The plane always shows the camera's picture: the Range | Picture switch, View ▸ Whole Range and Camera Picture, and the whole-range plane are gone. The ⟳ Refresh Picture button stays.
+  - [x] Mac (#5)
+  - [x] Linux (#5)
+  - [x] Windows (#5)
+- [ ] **Live view of the camera's video** (asked 2026-11-14, all platforms), if possible, in place of the still picture.
+  - [ ] Mac
+  - [ ] Linux
+  - [ ] Windows
+- [ ] **Aim from the picture on every camera, with the coordinates drawn over it** (asked 2026-11-14, all platforms). A camera without ONVIF's field-of-view move can't aim from its picture today; measure its field of view (turn it a known amount and compare the pictures) so a point of the picture becomes a pan/tilt target, and draw the pan/tilt grid, start, target and trail over the picture.
+  - [ ] Mac
   - [ ] Linux
   - [ ] Windows

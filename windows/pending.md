@@ -24,11 +24,9 @@ No open bugs in `bugs.md`.
 
 ## To build
 
-- [ ] **Camera picture under the plane** (I9–I11, V6). The Range | Picture switch and ⟳ button at the right of the
-  plane's caption, View ▸ Whole Range (Ctrl+1) and Camera Picture (Ctrl+2), Camera ▸ Refresh Picture (Ctrl+Shift+R);
-  the picture as large as fits with the view grid, the window growing to its shape; click to aim, double-click to
-  move there (`ptz_picture`, `ptz_move_in_view`); a new picture once the camera stops. Test it like the Mac's run 3.
-  *Asked 2026-11-13.*
+- [x] **Camera picture in the plane** (I3, I4, V6; #5). The picture as large as fits with the view grid, the ⟳
+  button and Camera ▸ Refresh Picture (Ctrl+Shift+R), the window growing to its shape; click to aim, double-click to
+  move there (`ptz_picture`, `ptz_move_in_view`); a new picture once the camera stops. Tested like the Mac's run 3.
 - [x] **Saved logins.** The Login menus, Save login, the first-save choice, unlocking and Manage Logins, over the
   core's login vault, with the vault file in the app's own data folder. (§17 P1–P8; #11)
 - [x] **Copy each build to the desktop.** (#7) `windows\scripts\build.ps1` copies the new `PTZControl.exe` to the desktop as
