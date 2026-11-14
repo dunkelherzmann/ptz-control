@@ -6,7 +6,8 @@ Axis VAPIX ptz.cgi (HTTP Digest is verified) on one port, and serves a tiny
 web page at /. Positions glide toward each AbsoluteMove target. Pictures of a
 drawn scene (PNG, standard library only) follow the camera's position and zoom,
 and moves within the view (ONVIF's field-of-view space, Axis center=) aim at a
-point of the picture.
+point of the picture. --no-fov plays an ONVIF camera without that space;
+--plain-png sends uncompressed pictures a test can decode by itself.
 
     python3 tools/mock-camera.py --port 8080 --user admin --password secret
 """
@@ -27,6 +28,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--port", type=int, default=8080)
 parser.add_argument("--user", default="admin")
 parser.add_argument("--password", default="secret")
+parser.add_argument("--no-fov", action="store_true", help="ONVIF: don't offer moves in the field-of-view space")
+parser.add_argument("--plain-png", action="store_true", help="uncompressed pictures, for tests that decode them")
 args = parser.parse_args()
 
 lock = threading.Lock()
@@ -119,7 +122,7 @@ def picture(pan, tilt, half_w, half_h, scale):
     def chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
     header = struct.pack(">IIBBBBB", PICTURE_W, PICTURE_H, 8, 2, 0, 0, 0)
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b"")
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(rows), 0 if args.plain_png else 6)) + chunk(b"IEND", b"")
 Z_SPACE = "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"
 
 
@@ -187,10 +190,11 @@ class Handler(BaseHTTPRequestHandler):
                 "<tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:AbsolutePanTiltPositionSpace>"
                 f"<tt:AbsoluteZoomPositionSpace><tt:URI>{Z_SPACE}</tt:URI>"
                 "<tt:XRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:XRange></tt:AbsoluteZoomPositionSpace>"
-                f"<tt:RelativePanTiltTranslationSpace><tt:URI>{FOV_SPACE}</tt:URI>"
-                "<tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange>"
-                "<tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:RelativePanTiltTranslationSpace>"
-                "</tt:Spaces></tptz:PTZConfigurationOptions></tptz:GetConfigurationOptionsResponse>"))
+                + ("" if args.no_fov else
+                   f"<tt:RelativePanTiltTranslationSpace><tt:URI>{FOV_SPACE}</tt:URI>"
+                   "<tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange>"
+                   "<tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:RelativePanTiltTranslationSpace>")
+                + "</tt:Spaces></tptz:PTZConfigurationOptions></tptz:GetConfigurationOptionsResponse>"))
         if op == "GetStatus":
             with lock:
                 moving = glide(onvif, ("pan", "tilt", "zoom"))
@@ -212,6 +216,8 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 glide(onvif, ("pan", "tilt", "zoom"))
                 onvif.update(start=dict(onvif), target=target, since=time.time())
+            if pt:
+                print(f"mock: onvif absolute move to pan={target['pan']:.4f} tilt={target['tilt']:.4f}")
             return self.reply(200, soap("<tptz:AbsoluteMoveResponse/>"))
         if op == "GetSnapshotUri":
             return self.reply(200, soap(
@@ -220,7 +226,7 @@ class Handler(BaseHTTPRequestHandler):
                 "<tt:Timeout>PT0S</tt:Timeout></trt:MediaUri></trt:GetSnapshotUriResponse>"))
         if op == "RelativeMove":
             pt = re.search(r'<(?:\w+:)?PanTilt x="([^"]+)" y="([^"]+)" space="([^"]+)"', xml)
-            if not pt or pt.group(3) != FOV_SPACE:
+            if not pt or pt.group(3) != FOV_SPACE or args.no_fov:
                 return self.reply(400, fault("Unsupported translation space", "ter:InvalidArgVal"))
             with lock:
                 half_w, half_h = onvif_view()

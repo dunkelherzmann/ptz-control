@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 
 struct ptz_session {
     ptz::Hooks hooks;
@@ -13,6 +14,8 @@ struct ptz_session {
     std::unique_ptr<ptz::Camera> camera;
     std::unique_ptr<ptz::WebInterface> web;
     int picture_width = 0, picture_height = 0;  // the last picture's size, for aiming in it
+    std::vector<ptz::ViewScale> scales;          // measured views, one per zoom
+    std::mutex scales_mutex;                     // read from any thread, written by the measuring one
 
     std::string redact(std::string message) const {
         for (const std::string *secret : {&camera_password, &ssh_password}) {
@@ -170,6 +173,41 @@ extern "C" int ptz_move_in_view(ptz_session *session, double x, double y, char *
             throw ptz::Error("The point to aim at must lie inside the picture");
         session->camera->move_in_view(x, y, session->picture_width, session->picture_height);
     });
+}
+
+extern "C" int ptz_measure_view(ptz_session *session, ptz_grey_fn grey, void *context, ptz_view_scale *scale,
+                                char *error, size_t error_size) {
+    *scale = {};
+    return guarded(session, error, error_size, [&] {
+        if (!ptz_link_alive(session)) throw ptz::Error("SSH connection closed; the view was not measured");
+        ptz::ViewScale measured = ptz::measure_view(*session->camera, session->hooks,
+                                                    [&](const std::string &bytes, unsigned char *pixels, int w, int h) {
+            return grey(context, reinterpret_cast<const unsigned char *>(bytes.data()), bytes.size(), pixels, w, h) != 0;
+        });
+        auto same_zoom = [&](const ptz::ViewScale &v) {
+            const ptz::Range &zoom = session->camera->zoom_range;
+            double slack = zoom.available ? (zoom.max - zoom.min) * 0.005 : 1e-9;
+            return v.zoom_available == measured.zoom_available && std::fabs(v.zoom - measured.zoom) <= slack;
+        };
+        std::lock_guard<std::mutex> lock(session->scales_mutex);
+        std::erase_if(session->scales, same_zoom);
+        session->scales.push_back(measured);
+        *scale = {measured.pan_per_x, measured.tilt_per_y};
+    });
+}
+
+extern "C" int ptz_view_scale_at(ptz_session *session, const ptz_position *position, ptz_view_scale *scale) {
+    *scale = {};
+    const ptz::Range &zoom = session->camera->zoom_range;
+    double slack = zoom.available ? (zoom.max - zoom.min) * 0.005 : 1e-9;
+    std::lock_guard<std::mutex> lock(session->scales_mutex);
+    for (const ptz::ViewScale &v : session->scales)
+        if ((v.zoom_available != 0) == (position->zoom.available != 0) &&
+            (!v.zoom_available || std::fabs(v.zoom - position->zoom.value) <= slack)) {
+            *scale = {v.pan_per_x, v.tilt_per_y};
+            return 1;
+        }
+    return 0;
 }
 
 extern "C" int ptz_get_position(ptz_session *session, ptz_position *position, char *error, size_t error_size) {
