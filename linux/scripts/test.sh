@@ -89,8 +89,8 @@ check "Manage Logins and form pictures saved" \
     "$([ -s "$LOGINS" ] && [ -s "$SHOTS/flatpak-logins-form.png" ] && echo 0 || echo 1)"
 check "still one camera login" "$([ "$(grep -c '^camera' "$VAULT")" = 1 ] && echo 0 || echo 1)"
 
-# Run 3: Picture mode. A picture comes on connect, a point of it is aimed at, the camera moves toward it, and a
-# new picture comes once it stops.
+# Run 3: the camera picture. A picture comes on connect, a point of it is aimed at, the camera moves toward it, and
+# a new picture comes once it stops.
 settings admin
 PICTURE="$SHOTS/flatpak-picture.png"
 rm -f "$PICTURE" "$SHOTS/flatpak-picture-aim.png" "$SHOTS/flatpak-picture-moving.png"
@@ -101,8 +101,7 @@ check "run 3 took a picture, then a new one after the move" \
     "$([ $(( $(grep -c '^mock: picture' "$WORK/mock.log" || true) - PICTURES_BEFORE )) -ge 2 ] && echo 0 || echo 1)"
 check "run 3 moved toward the aimed point (right and up)" \
     "$(grep -E '^mock: onvif view move to pan=0\.[0-9]+ tilt=0\.[0-9]+' "$WORK/mock.log" >/dev/null && echo 0 || echo 1)"
-check "Picture mode remembered" "$(grep -qx 'PlaneMode=picture' "$WORK/config/PTZControl/PTZControl.conf" && echo 0 || echo 1)"
-check "picture-mode pictures saved" "$([ -s "$PICTURE" ] && [ -s "$SHOTS/flatpak-picture-aim.png" ] && echo 0 || echo 1)"
+check "camera-picture pictures saved" "$([ -s "$PICTURE" ] && [ -s "$SHOTS/flatpak-picture-aim.png" ] && echo 0 || echo 1)"
 observed 3
 
 if [ "$FAIL" = 0 ]; then
