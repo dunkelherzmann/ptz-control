@@ -24,7 +24,7 @@ jobs:
       # The Flatpak runtime has a newer Qt than Ubuntu 24.04 ships.
       - uses: jurplel/install-qt-action@v4
         with: { version: "6.8.*", cache: true }
-      - run: sudo apt-get update -q && sudo apt-get install -yq libcurl4-openssl-dev libgl-dev
+      - run: sudo apt-get update -q && sudo apt-get install -yq libcurl4-openssl-dev libgl-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
       - run: sh scripts/version.sh --header
       - run: cmake -S linux -B .build/linux && cmake --build .build/linux -j
   windows:

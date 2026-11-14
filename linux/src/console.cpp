@@ -444,7 +444,7 @@ private:
         auto *plane_panel = new Panel("CAMERA PICTURE // VIEW — CLICK TO AIM, DOUBLE-CLICK TO MOVE THERE");
         plane_ = new PlaneView;
         refresh_picture_ = new RefreshButton;
-        refresh_picture_->setToolTip("Refresh Picture: take a new picture of the camera's view now (Ctrl+Shift+R)");
+        refresh_picture_->setToolTip("Refresh Picture: take a new picture of the camera's view now, or restart the live view (Ctrl+Shift+R)");
         refresh_picture_->setAccessibleName("Refresh Picture");
         plane_panel->set_accessory(refresh_picture_);
         (new QVBoxLayout(plane_panel))->addWidget(plane_);
@@ -515,7 +515,7 @@ private:
         connect(start_, &QPushButton::clicked, this, [this] { return_to_start(); });
         connect(stop_, &QPushButton::clicked, this, [this] { stop_motion(); });
         connect(web_, &QPushButton::clicked, this, [this] { open_web(); });
-        connect(refresh_picture_, &QAbstractButton::clicked, this, [this] { take_picture(); });
+        connect(refresh_picture_, &QAbstractButton::clicked, this, [this] { refresh_picture(); });
         for (QLineEdit *f : fields_)
             connect(f, &QLineEdit::returnPressed, this, [this] {
                 if (state_ == State::Idle) connect_camera();
@@ -899,6 +899,7 @@ private:
                 plane_->state.picture_target.reset();
                 picture_due_ = 0;
                 take_picture();
+                start_live();
                 show_message("Connected. No movement has been sent.", false);
                 log_line("Connected: " + info.name);
                 log_line(info.units);
@@ -934,6 +935,8 @@ private:
             starting_.reset();
             plane_->state.picture = QImage();
             plane_->state.picture_target.reset();
+            plane_->state.live.clear();
+            live_codec_.clear();
             picture_due_ = 0;
             show_message("Disconnected.", false);
             log_line("Disconnected");
@@ -1004,8 +1007,13 @@ private:
             bool stopped = last_read_ > picture_due_ + 800 && reported && current_->move_status != "MOVING";
             if (stopped || (age >= 3000 && (!reported || paused_)) || age >= 30000) {
                 picture_due_ = 0;
-                take_picture();
-                return;
+                if (!plane_->state.live.isEmpty()) {
+                    plane_->state.picture_target.reset();  // the live view has shown the move; the aimed point is reached
+                    plane_->update();
+                } else {
+                    take_picture();
+                    return;
+                }
             }
         }
         if (!paused_ && now >= next_refresh_) refresh();
@@ -1115,7 +1123,9 @@ private:
             taking_picture_ = false;
             if (state_ != State::Connected) return;
             PlaneState &s = plane_->state;
-            if (result.ok) {
+            if (result.ok && !s.live.isEmpty()) {
+                // the live view is already showing
+            } else if (result.ok) {
                 bool reshaped = s.picture.size() != image.size();
                 if (s.picture_stale) s.picture_target.reset();  // the camera has moved since
                 s.picture = image;
@@ -1138,6 +1148,73 @@ private:
             plane_->update();
             update_controls();
         });
+        update_controls();
+    }
+
+    void refresh_picture() {
+        if (state_ != State::Connected) return;
+        if (!live_codec_.isEmpty()) {
+            // Restart the live view, as when its picture has stopped changing.
+            live_codec_.clear();
+            plane_->state.live.clear();
+            plane_->update();
+            log_line("Restarting the live view");
+            link_live_stop(link_);
+            start_live();
+            return;
+        }
+        take_picture();
+        start_live();
+    }
+
+    // ---- live view --------------------------------------------------------------------
+
+    void start_live() {
+        if (state_ != State::Connected || live_starting_ || !live_codec_.isEmpty()) return;
+        live_starting_ = true;
+        int id = ++live_id_;  // frames and endings of an earlier stream are ignored
+        link_live_start(
+            link_, [this, id](QImage image) { if (id == live_id_) show_live_frame(image); },
+            [this, id](QString reason) { if (id == live_id_) live_ended(reason); },
+            [this](LinkResult result, QString description) {
+                live_starting_ = false;
+                if (state_ != State::Connected) return;  // disconnecting stops it
+                if (result.ok) {
+                    live_codec_ = description.section(' ', 0, 0);
+                    log_line("Live view: " + description);
+                } else if (result.link_lost) {
+                    link_lost(result.error);
+                    return;
+                } else {
+                    log_line("No live view: " + result.error + ". Showing still pictures.", true);
+                }
+                update_controls();
+            });
+        update_controls();
+    }
+
+    void show_live_frame(const QImage &image) {
+        if (state_ != State::Connected || (!live_starting_ && live_codec_.isEmpty())) return;
+        PlaneState &s = plane_->state;
+        bool reshaped = s.picture.size() != image.size();
+        if (s.live.isEmpty()) log_line(QString("Live view playing: %1 × %2").arg(image.width()).arg(image.height()));
+        s.picture = image;
+        s.picture_stale = false;
+        s.picture_note.clear();
+        s.live = (live_codec_.isEmpty() ? QString("VIDEO") : live_codec_) +
+                 QString(" · %1 × %2").arg(image.width()).arg(image.height());
+        plane_->update();
+        if (reshaped) fit_window_to_picture();
+    }
+
+    void live_ended(const QString &reason) {
+        if (state_ != State::Connected || (live_codec_.isEmpty() && !live_starting_)) return;
+        live_codec_.clear();
+        plane_->state.live.clear();
+        plane_->update();
+        log_line("Live view stopped: " + reason + ". Showing still pictures.", true);
+        link_live_stop(link_);
+        take_picture();
         update_controls();
     }
 
@@ -1169,10 +1246,11 @@ private:
         update_controls();
     }
 
-    // The picture is out of date once the camera moves; a new one is taken when it stops.
+    // The picture is out of date once the camera moves; a new one is taken when it stops. The live view shows the
+    // move itself, and the aimed point is cleared once the camera stops.
     void camera_moved() {
         if (plane_->state.picture.isNull()) return;
-        plane_->state.picture_stale = true;
+        if (plane_->state.live.isEmpty()) plane_->state.picture_stale = true;
         picture_due_ = QDateTime::currentMSecsSinceEpoch();
         plane_->update();
     }
@@ -1227,9 +1305,9 @@ private:
             "• ONVIF: the camera's advertised absolute space (commonly pan/tilt −1…1, zoom 0…1; not degrees).\n"
             "• Axis: pan/tilt in degrees; zoom is an integer in the native range.\n\n"
             "Leave a target field blank (or type x) to keep that axis unchanged.\n"
-            "The camera picture shows what the camera sees: click a point to aim at it, double-click (or Move) to turn the "
-            "camera so that point comes to the centre. A new picture comes once the camera stops, or with Refresh Picture "
-            "(Ctrl+Shift+R).\n"
+            "The camera picture shows the camera's live video, or a still picture when the video can't play: click a point "
+            "to aim at it, double-click (or Move) to turn the camera so that point comes to the centre. A still picture is "
+            "renewed once the camera stops. Refresh Picture (Ctrl+Shift+R) takes a new picture, or restarts the live view.\n"
             "Drag along a travel meter to aim that axis alone, double-click it to aim and move.\n\n"
             "Starting coordinates are the first reading after connecting and stay fixed. "
             "Return to Start (Ctrl+B) sends an absolute move there.\n"
@@ -1277,7 +1355,7 @@ public:
         key(QKeySequence("Ctrl+."), [this] { stop_motion(); });
         key(QKeySequence("Ctrl+R"), [this] { refresh_now(); });
         key(QKeySequence("Ctrl+P"), [this] { toggle_pause(); });
-        key(QKeySequence("Ctrl+Shift+R"), [this] { take_picture(); });
+        key(QKeySequence("Ctrl+Shift+R"), [this] { refresh_picture(); });
         key(QKeySequence("Ctrl+L"), [this] { open_web(); });
         key(QKeySequence("Ctrl+Q"), [this] { close(); });
         key(QKeySequence("Ctrl+M"), [window] { window->showMinimized(); });
@@ -1328,7 +1406,7 @@ public:
         camera->addSeparator();
         item(camera, "Refresh Position", "Ctrl+R", connected, [this] { refresh_now(); });
         item(camera, paused_ ? "Resume Auto-Refresh" : "Pause Auto-Refresh", "Ctrl+P", connected, [this] { toggle_pause(); });
-        item(camera, "Refresh Picture", "Ctrl+Shift+R", connected, [this] { take_picture(); });
+        item(camera, "Refresh Picture", "Ctrl+Shift+R", connected, [this] { refresh_picture(); });
         camera->addSeparator();
         item(camera, "Open Camera Web Interface", "Ctrl+L", connected, [this] { open_web(); });
         camera->addSeparator();
@@ -1535,8 +1613,9 @@ private:
         });
     }
 
-    // PTZ_SNAPSHOT_PICTURE: Picture mode, aim at a point of the picture (a picture of that is saved to
-    // PTZ_SNAPSHOT_AIM_PATH), move there, and save the window once the new picture has come.
+    // PTZ_SNAPSHOT_PICTURE: aim at a point of the picture (a picture of that is saved to PTZ_SNAPSHOT_AIM_PATH), move
+    // there, and save the window once the new picture has come; PTZ_SNAPSHOT_LIVE_PATH gets the live view's plate
+    // ("H.264 · 320 × 180") or "no live view".
     void run_picture_script() {
         connect_camera();
         QTimer::singleShot(3000, this, [this] { if (plane_->state.on_picture_aim) plane_->state.on_picture_aim(QPointF(0.45, 0.3)); });
@@ -1549,6 +1628,11 @@ private:
         });
         QTimer::singleShot(10000, this, [this] {
             grab().save(qEnvironmentVariable("PTZ_SNAPSHOT_PATH"));
+            if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_LIVE_PATH"); !path.isEmpty()) {
+                QFile file(path);
+                if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                    file.write((plane_->state.live.isEmpty() ? QString("no live view") : plane_->state.live).toUtf8());
+            }
             close();
         });
     }
@@ -1565,6 +1649,9 @@ private:
     bool paused_ = false;
     qint64 next_refresh_ = 0;
     bool web_pending_ = false, closing_ = false, message_error_ = false, taking_picture_ = false;
+    bool live_starting_ = false;  // the live video: starting, or playing with its codec ("H.264")
+    QString live_codec_;
+    int live_id_ = 0;
     qint64 picture_due_ = 0, last_read_ = 0;  // when the camera last moved (a fresh picture is due), the last reading
     int route_ = 0, vendor_ = 0;
     std::deque<std::pair<QString, bool>> log_lines_;

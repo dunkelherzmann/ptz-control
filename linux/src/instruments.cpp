@@ -150,7 +150,8 @@ void PlaneView::paintEvent(QPaintEvent *) {
     }
 
     // Status plates: when the picture was taken, or that it is out of date.
-    QString status = s.picture_stale ? "MOVING · NEW PICTURE WHEN IT STOPS"
+    QString status = !s.live.isEmpty() ? "● LIVE · " + s.live
+                     : s.picture_stale ? "MOVING · NEW PICTURE WHEN IT STOPS"
                      : s.picture_taken.isValid() ? "PICTURE " + s.picture_taken.toString("HH:mm:ss") : QString("PICTURE");
     double plate_h = QFontMetricsF(mono_font(10, true)).height() + 4;
     plate(status, QPointF(r.x() + 6, r.bottom() - 6 - plate_h), s.picture_stale ? g_theme.warning : white);

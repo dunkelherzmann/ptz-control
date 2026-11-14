@@ -12,11 +12,12 @@
 
 void instruments_set_theme(const Theme &theme);
 
-// The camera's still picture with a view grid on top. The centre is where the camera points, and a point of the
+// The camera's live video, or a still picture of its view, with a view grid on top. The centre is where the camera points, and a point of the
 // picture is aimed at in view units (-1..1 from edge to edge, up positive).
 struct PlaneState {
     QImage picture;
     QDateTime picture_taken;
+    QString live;                // set while the picture is the camera's live video, e.g. "H.264 · 1920 × 1080"
     bool picture_stale = false;  // the camera has moved since the picture was taken
     QString picture_note;        // shown in place of a picture: why there is none
     bool view_moves = false;
