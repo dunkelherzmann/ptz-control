@@ -63,11 +63,18 @@ struct Reading {
     QString text;
 };
 
+// How much of the pan/tilt range the picture spans: the turn that brings a point at the picture's right (top) edge
+// to its centre. A point (x, y) of the picture, -1..1 with up positive, lies at pan + x * pan_per_x, tilt + y * tilt_per_y.
+struct ViewScale {
+    double pan_per_x = 0, tilt_per_y = 0;
+};
+
 struct Snapshot {
     std::optional<Reading> pan, tilt, zoom;
     QString move_status;
+    std::optional<ViewScale> view_scale;  // the view measured at this reading's zoom
     bool empty() const { return !pan && !tilt && !zoom; }
-    bool operator==(const Snapshot &o) const;
+    bool operator==(const Snapshot &o) const;  // the readings only
 };
 
 struct CameraInfo {
@@ -105,6 +112,8 @@ class QImage;
 // A still picture of the camera's current view.
 void link_picture(CameraLink *link, std::function<void(LinkResult, QImage)> done);
 // Brings the point (x, y) of the last picture to its centre; x and y run from -1 to 1, up positive.
+// Turns the camera a little on each axis and back to measure how much of its range the picture spans.
+void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done);
 void link_move_in_view(CameraLink *link, double x, double y, std::function<void(LinkResult)> done);
 void link_web_url(CameraLink *link, std::function<void(LinkResult, QString url, QString notice)> done);
 void link_disconnect(CameraLink *link, std::function<void()> done);
