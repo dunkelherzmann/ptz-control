@@ -1,8 +1,8 @@
 #!/bin/sh
 # Drives the installed Flatpak (org.ptzcontrol.app) against the mock camera, off screen, and saves screenshots.
 # Run 1 types a login, ticks Save login and connects; run 2 starts with a wrong username and fills the camera
-# fields from the saved login; run 3 aims and moves in still pictures from a camera whose video can't be reached;
-# run 4 plays the camera's live video and aims in it. It uses its own settings folder and vault file and never touches the user's PTZ
+# fields from the saved login; run 3 aims on the range plane and moves, over still pictures from a camera whose video
+# can't be reached; run 4 plays the camera's live video, turns Show Grid off and aims over it. It uses its own settings folder and vault file and never touches the user's PTZ
 # Control settings, saved logins or windows.
 # Usage: linux/scripts/test.sh [screenshot.png]   (default: .build/test/flatpak.png)
 set -eu
@@ -12,15 +12,11 @@ SHOT="$(realpath -m "${1:-$ROOT/.build/test/flatpak.png}")"
 SHOTS="$(dirname "$SHOT")"
 WORK="$(mktemp -d "$ROOT/.build/test-XXXXXX")"
 mkdir -p "$SHOTS" "$WORK/config/PTZControl"
-trap 'kill "$MOCK" "${MOCK2:-}" "${STILL_MOCK:-}" 2>/dev/null || true; rm -rf "$WORK"' EXIT
+trap 'kill "$MOCK" "${STILL_MOCK:-}" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
 PORT=18080
 python3 -u "$ROOT/tools/mock-camera.py" --port "$PORT" >"$WORK/mock.log" 2>&1 &
 MOCK=$!
-# A second camera without ONVIF's field-of-view moves: its view is measured from its pictures (run 4).
-PORT2=18085
-python3 -u "$ROOT/tools/mock-camera.py" --port "$PORT2" --no-fov >"$WORK/mock-no-fov.log" 2>&1 &
-MOCK2=$!
 settings() {  # camera username [port]
     printf '[General]\nRoute=0\nVendor=0\nCameraHost=127.0.0.1\nCameraPort=%s\nCameraUser=%s\n' "${2:-$PORT}" "$1" \
         > "$WORK/config/PTZControl/PTZControl.conf"
@@ -94,8 +90,8 @@ check "Manage Logins and form pictures saved" \
     "$([ -s "$LOGINS" ] && [ -s "$SHOTS/flatpak-logins-form.png" ] && echo 0 || echo 1)"
 check "still one camera login" "$([ "$(grep -c '^camera' "$VAULT")" = 1 ] && echo 0 || echo 1)"
 
-# Run 3: still pictures, from a camera whose video can't be reached. A picture comes on connect, a point of it is
-# aimed at, the camera moves toward it, and a new picture comes once it stops.
+# Run 3: still pictures, from a camera whose video can't be reached. A picture comes on connect, pan 0.45, tilt 0.3 is
+# aimed at on the range plane over it, the camera moves there, and a new picture comes once it stops.
 STILL_PORT=18083
 python3 -u "$ROOT/tools/mock-camera.py" --port "$STILL_PORT" --video none >"$WORK/mock-still.log" 2>&1 &
 STILL_MOCK=$!
@@ -108,42 +104,33 @@ run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PICTURE=1 --env=PTZ_SNAPSHOT_PA
     --env=PTZ_SNAPSHOT_LIVE_PATH="$WORK/live3.txt"
 check "run 3 took a picture, then a new one after the move" \
     "$([ "$(grep -c '^mock: picture' "$WORK/mock-still.log" || true)" -ge 2 ] && echo 0 || echo 1)"
-check "run 3 moved toward the aimed point (right and up)" \
-    "$(grep -E '^mock: onvif view move to pan=0\.[0-9]+ tilt=0\.[0-9]+' "$WORK/mock-still.log" >/dev/null && echo 0 || echo 1)"
+check "run 3 moved to the pan and tilt aimed at on the range plane" \
+    "$(grep -q '^mock: onvif absolute move to pan=0.4500 tilt=0.3000' "$WORK/mock-still.log" && echo 0 || echo 1)"
 check "run 3 fell back to still pictures" "$(grep -qx 'no live view' "$WORK/live3.txt" 2>/dev/null && echo 0 || echo 1)"
 check "camera-picture pictures saved" "$([ -s "$PICTURE" ] && [ -s "$SHOTS/flatpak-picture-aim.png" ] && echo 0 || echo 1)"
 observed 3
 
-# Run 4: a camera that can't move within its view. Moving toward the same point first measures its view (it turns a
-# little on each axis and back), then sends an absolute move to the point's coordinates: 0.45 × 0.25 pan and
-# 0.3 × 0.140625 tilt from where the mock starts.
-settings admin "$PORT2"
-MEASURED="$SHOTS/flatpak-measured.png"
-rm -f "$MEASURED"
-run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PICTURE=1 --env=PTZ_SNAPSHOT_PATH="$MEASURED" --env=PTZ_SNAPSHOT_WAIT=40
-LAST="$(grep '^mock: onvif absolute move to' "$WORK/mock-no-fov.log" | tail -1)"
-check "run 4 measured the view and moved to the point's coordinates ($LAST)" "$(printf '%s\n' "$LAST" | awk -F'[= ]' \
-    '{ d1 = $7 - 0.1125; d2 = $9 - 0.0422; exit !(d1 < 0.02 && d1 > -0.02 && d2 < 0.012 && d2 > -0.012) }' && echo 0 || echo 1)"
-check "measured-view picture saved" "$([ -s "$MEASURED" ] && echo 0 || echo 1)"
-
-# Run 5: the live view. The camera's H.264 video plays in the plane, and aiming in it still moves the camera.
+# Run 4: the live view. The camera's H.264 video plays under the range plane, and aiming on it moves the camera. Show
+# Grid is turned off first (the window picture shows the plane without its grid), and stays off for the next launch.
 settings admin
 LIVE="$SHOTS/flatpak-live.png"
 rm -f "$LIVE"
-VIEW_MOVES_BEFORE="$(grep -c '^mock: onvif view move' "$WORK/mock.log" || true)"
-run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PICTURE=1 --env=PTZ_SNAPSHOT_PATH="$LIVE" \
-    --env=PTZ_SNAPSHOT_LIVE_PATH="$WORK/live5.txt"
-check "run 5 played the camera's video ($(cat "$WORK/live5.txt" 2>/dev/null))" \
-    "$(grep -qx 'H.264 · 320 × 180' "$WORK/live5.txt" 2>/dev/null; echo $?)"
-check "run 5 started the video over RTSP" "$(grep -q '^mock: rtsp play' "$WORK/mock.log" && echo 0 || echo 1)"
-check "run 5 aimed in the live view" \
-    "$([ "$(grep -c '^mock: onvif view move' "$WORK/mock.log" || true)" -gt "$VIEW_MOVES_BEFORE" ] && echo 0 || echo 1)"
+MOVES_BEFORE="$(grep -c '^mock: onvif absolute move to' "$WORK/mock.log" || true)"
+run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PICTURE=1 --env=PTZ_SNAPSHOT_PATH="$LIVE" --env=PTZ_SNAPSHOT_HIDE_GRID=1 \
+    --env=PTZ_SNAPSHOT_LIVE_PATH="$WORK/live4.txt"
+check "run 4 played the camera's video ($(cat "$WORK/live4.txt" 2>/dev/null))" \
+    "$(grep -qx 'H.264 · 320 × 180' "$WORK/live4.txt" 2>/dev/null; echo $?)"
+check "run 4 started the video over RTSP" "$(grep -q '^mock: rtsp play' "$WORK/mock.log" && echo 0 || echo 1)"
+check "run 4 aimed on the range plane over the video" \
+    "$([ "$(grep -c '^mock: onvif absolute move to' "$WORK/mock.log" || true)" -gt "$MOVES_BEFORE" ] && echo 0 || echo 1)"
+check "Show Grid off is remembered" \
+    "$(grep -qx 'ShowGrid=false' "$WORK/config/PTZControl/PTZControl.conf" && echo 0 || echo 1)"
 check "live view picture saved" "$([ -s "$LIVE" ] && echo 0 || echo 1)"
 observed 4
 
 if [ "$FAIL" = 0 ]; then
     printf 'PASS %s %s: pictures in %s\n' "$ID" "$(flatpak info "$ID" | sed -n 's/^ *Version: //p')" "$SHOTS"
 else
-    cat "$WORK/app.log" "$WORK/mock.log" "$WORK/mock-still.log" "$WORK/mock-no-fov.log"
+    cat "$WORK/app.log" "$WORK/mock.log" "$WORK/mock-still.log"
     exit 1
 fi
