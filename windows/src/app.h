@@ -153,6 +153,9 @@ struct PlaneState {
     bool show_grid = true;
     AxisRange pan_range, tilt_range;
     std::optional<Snapshot> current, starting;
+    // The target of a move under way: the plane is centred on it until the camera stops, so it doesn't wait for the
+    // readings; the reticle still shows the readings, closing in on the centre.
+    std::optional<std::pair<double, double>> heading;  // pan, tilt
     std::optional<double> target_pan, target_tilt;
     std::vector<std::optional<std::pair<double, double>>> trail;  // pan, tilt; empty entries mark gaps in measurements
     bool enabled = false;

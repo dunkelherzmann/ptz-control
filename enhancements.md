@@ -74,3 +74,7 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [x] Mac (#9)
   - [x] Linux (#9)
   - [x] Windows (#9)
+- [x] **Centre the plane on a move's target at once** (asked 2026-11-14, all platforms): when a move is sent, centre the plane on its target straight away instead of waiting for the camera's readings, and let the readings correct it once the camera stops.
+  - [x] Mac (#10)
+  - [x] Linux (#10)
+  - [x] Windows (#10)

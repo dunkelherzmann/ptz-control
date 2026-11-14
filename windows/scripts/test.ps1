@@ -136,13 +136,17 @@ try {
     $picture = Join-Path $Out 'windows-picture.png'
     $aim = Join-Path $Out 'windows-picture-aim.png'
     $live3 = Join-Path $Work 'live3.txt'
-    Remove-Item $picture, $aim -ErrorAction SilentlyContinue
+    $heading3 = Join-Path $Work 'heading3.txt'
+    Remove-Item $picture, $aim, $heading3 -ErrorAction SilentlyContinue
     RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PICTURE = '1'; PTZ_SNAPSHOT_PATH = $picture; PTZ_SNAPSHOT_AIM_PATH = $aim
-              PTZ_SNAPSHOT_MOVING_PATH = (Join-Path $Out 'windows-picture-moving.png'); PTZ_SNAPSHOT_LIVE_PATH = $live3 }
+              PTZ_SNAPSHOT_MOVING_PATH = (Join-Path $Out 'windows-picture-moving.png'); PTZ_SNAPSHOT_LIVE_PATH = $live3
+              PTZ_SNAPSHOT_HEADING_PATH = $heading3 }
     $pictures = @(Select-String -Path $stillLog -Pattern '^mock: picture' -ErrorAction SilentlyContinue).Count
     Check 'run 3 took a picture, then a new one after the move' ($pictures -ge 2)
     Check 'run 3 moved to the pan and tilt aimed at on the range plane' `
         (@(Select-String -Path $stillLog -Pattern '^mock: onvif absolute move to pan=0\.4500 tilt=0\.3000' -ErrorAction SilentlyContinue).Count -ge 1)
+    $heading = if (Test-Path $heading3) { Get-Content -Raw -Encoding UTF8 $heading3 } else { '' }
+    Check "run 3 centred the plane on the target while the camera moved ($heading)" ($heading -ceq '0.45 0.3')
     Check 'run 3 fell back to still pictures' ((Test-Path $live3) -and ((Get-Content -Raw -Encoding UTF8 $live3) -ceq 'no live view'))
     Check 'camera-picture pictures drawn' ((Drawn $picture) -and (Drawn $aim))
 

@@ -85,6 +85,9 @@ final class PositionPlaneView: NSView, Themed {
     var panRange: AxisRange? { didSet { needsDisplay = true } }
     var tiltRange: AxisRange? { didSet { needsDisplay = true } }
     var current: PositionSnapshot? { didSet { recordTrail(); needsDisplay = true } }
+    /// The target of a move under way: the plane is centred on it until the camera stops, so it doesn't wait for the
+    /// readings; the reticle still shows the readings, closing in on the centre.
+    var heading: (pan: Double, tilt: Double)? { didSet { needsDisplay = true } }
     var starting: PositionSnapshot? { didSet { needsDisplay = true } }
     var target: (pan: Double?, tilt: Double?) = (nil, nil) { didSet { needsDisplay = true } }
     var enabled = false { didSet { if !enabled { hover = nil }; needsDisplay = true } }
@@ -129,11 +132,12 @@ final class PositionPlaneView: NSView, Themed {
         return CGRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h).integral
     }
 
-    /// Where the whole range lies: the picture's size, shifted so the current position is at the picture's centre (the
-    /// picture itself until there is a position).
+    /// Where the whole range lies: the picture's size, shifted so the target of a move under way, or else the current
+    /// position, is at the picture's centre (the picture itself until there is a position).
     private var rangeRect: CGRect {
         let r = plot
-        guard let panRange, let tiltRange, let pan = current?.pan?.value, let tilt = current?.tilt?.value,
+        guard let panRange, let tiltRange, let pan = heading?.pan ?? current?.pan?.value,
+              let tilt = heading?.tilt ?? current?.tilt?.value,
               let fx = panRange.fraction(pan), let fy = tiltRange.fraction(tilt) else { return r }
         return CGRect(x: r.midX - r.width * fx, y: r.midY - r.height * fy, width: r.width, height: r.height)
     }

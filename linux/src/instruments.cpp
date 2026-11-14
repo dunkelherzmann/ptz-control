@@ -58,13 +58,16 @@ QRectF PlaneView::plot_rect() const {
     return QRectF(std::round(area.center().x() - w / 2), std::round(area.center().y() - h / 2), w, h);
 }
 
-// Where the whole range lies: the picture's size, shifted so the current position is at the picture's centre (the
-// picture itself until there is a position).
+// Where the whole range lies: the picture's size, shifted so the target of a move under way, or else the current
+// position, is at the picture's centre (the picture itself until there is a position).
 QRectF PlaneView::range_rect() const {
     QRectF r = plot_rect();
     const auto &c = state.current;
-    if (!c || !c->pan || !c->tilt) return r;
-    auto fx = state.pan.fraction(c->pan->value), fy = state.tilt.fraction(c->tilt->value);
+    std::optional<double> pan, tilt;
+    if (state.heading) pan = state.heading->x(), tilt = state.heading->y();
+    else if (c && c->pan && c->tilt) pan = c->pan->value, tilt = c->tilt->value;
+    if (!pan || !tilt) return r;
+    auto fx = state.pan.fraction(*pan), fy = state.tilt.fraction(*tilt);
     if (!fx || !fy) return r;
     return QRectF(r.center().x() - r.width() * *fx, r.center().y() + r.height() * *fy - r.height(), r.width(), r.height());
 }

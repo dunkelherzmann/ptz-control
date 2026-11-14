@@ -64,6 +64,7 @@ struct Console {
     bool closing = false;
     bool taking_picture = false;
     ULONGLONG picture_due = 0, last_read = 0;  // when the camera last moved (a fresh picture is due), the last reading
+    ULONGLONG heading_since = 0;  // when a move was accepted: the plane is centred on its target until the camera stops
     // The live video: starting, or playing with its codec ("H.264"); `live_run` tells each start's calls apart.
     bool live_starting = false;
     std::wstring live_codec;
@@ -530,8 +531,10 @@ void connect() {
                 plane.trail.clear();
                 plane.picture.reset();
                 plane.picture_note.clear();
+                plane.heading.reset();
             }
             g->picture_due = 0;
+            g->heading_since = 0;
             take_picture();
             start_live();
             show_message(L"Connected. No movement has been sent.", false);
@@ -574,6 +577,8 @@ void disconnect(std::function<void()> then) {
         g->live_codec.clear();
         ++g->live_run;
         g->picture_due = 0;
+        g->heading_since = 0;
+        plane_state(g->plane).heading.reset();
         show_message(L"Disconnected.", false);
         log_line(L"Disconnected");
         update_controls();
@@ -632,21 +637,29 @@ void refresh() {
     update_controls();
 }
 
+// Whether the camera has stopped since `since`: a reading taken after it that says it isn't moving, or, when the
+// camera doesn't say, three seconds (or 30 at most).
+bool stopped_since(ULONGLONG since) {
+    ULONGLONG age = GetTickCount64() - since;
+    bool reported = g->current && !g->current->move_status.empty();
+    bool stopped = g->last_read > since + 800 && reported && g->current->move_status != L"MOVING";
+    return stopped || (age >= 3000 && (!reported || g->paused)) || age >= 30000;
+}
+
 void tick() {
     if (g->state != State::Connected || link_busy(g->link)) return;
     ULONGLONG now = GetTickCount64();
-    if (g->picture_due) {
-        // A fresh picture once the camera has stopped: a reading taken after the move that says it isn't moving,
-        // or, when the camera doesn't say, three seconds.
-        ULONGLONG age = now - g->picture_due;
-        bool reported = g->current && !g->current->move_status.empty();
-        bool stopped = g->last_read > g->picture_due + 800 && reported && g->current->move_status != L"MOVING";
-        if (stopped || (age >= 3000 && (!reported || g->paused)) || age >= 30000) {
-            g->picture_due = 0;
-            if (plane_state(g->plane).live.empty()) {
-                take_picture();
-                return;
-            }
+    if (g->heading_since && stopped_since(g->heading_since)) {
+        // The camera has arrived: centre on where it says it is, which corrects a move that stopped short.
+        g->heading_since = 0;
+        plane_state(g->plane).heading.reset();
+        InvalidateRect(g->plane, nullptr, FALSE);
+    }
+    if (g->picture_due && stopped_since(g->picture_due)) {
+        g->picture_due = 0;  // a fresh still picture once the camera has stopped
+        if (plane_state(g->plane).live.empty()) {
+            take_picture();
+            return;
         }
     }
     if (!g->paused && now >= g->next_refresh) refresh();
@@ -847,15 +860,29 @@ void start_live() {
     update_controls();
 }
 
+// Centres the plane on a move's target at once (an axis left unchanged keeps its reading), without waiting for the
+// camera's readings; they take over again once it stops.
+void head_to(const Target &t) {
+    std::optional<double> pan = t.pan, tilt = t.tilt;
+    if (!pan && g->current && g->current->pan) pan = g->current->pan->value;
+    if (!tilt && g->current && g->current->tilt) tilt = g->current->tilt->value;
+    if (!pan || !tilt || !g->info) return;
+    auto clamp = [](double v, const AxisRange &r) { return r.available ? (v < r.min ? r.min : v > r.max ? r.max : v) : v; };
+    plane_state(g->plane).heading = std::pair{clamp(*pan, g->info->pan), clamp(*tilt, g->info->tilt)};
+    g->heading_since = GetTickCount64();
+    InvalidateRect(g->plane, nullptr, FALSE);
+}
+
 void send(const Target &t, const std::wstring &what) {
     if (link_busy(g->link)) log_line(L"Request in progress; move queued behind it");
     std::wstring summary;
     for (auto [name, v] : {std::pair{L"pan", t.pan}, std::pair{L"tilt", t.tilt}, std::pair{L"zoom", t.zoom}})
         if (v) summary += (summary.empty() ? L"" : L", ") + std::wstring(name) + L"=" + format_value(*v);
-    link_move(g->link, t.pan, t.tilt, t.zoom, [what, summary](LinkResult result) {
+    link_move(g->link, t.pan, t.tilt, t.zoom, [t, what, summary](LinkResult result) {
         if (result.ok) {
             log_line(what + L" accepted: " + summary + L" (movement may still be in progress)");
             g->next_refresh = 0;
+            head_to(t);
             camera_moved();
         } else if (result.link_lost) {
             link_lost(result.error);
@@ -912,6 +939,8 @@ void stop_motion() {
     link_stop(g->link, [](LinkResult result) {
         if (result.ok) {
             log_line(L"Stop accepted");
+            g->heading_since = 0;
+            plane_state(g->plane).heading.reset();  // centre on where the camera stopped
             camera_moved();
         } else if (result.link_lost) { link_lost(result.error); return; }
         else log_line(L"Stop failed: " + result.error, true);
@@ -1800,6 +1829,14 @@ void snapshot_step(int step) {
             return;
         case kPicMoving:
             if (const wchar_t *path = _wgetenv(L"PTZ_SNAPSHOT_MOVING_PATH")) save_png(g->hwnd, path);
+            if (const wchar_t *path = _wgetenv(L"PTZ_SNAPSHOT_HEADING_PATH")) {  // where the plane is centred while it moves
+                const auto &heading = plane_state(g->plane).heading;
+                std::string text = heading ? U(format_value(heading->first) + L" " + format_value(heading->second)) : "none";
+                if (FILE *f = _wfopen(path, L"wb")) {
+                    fwrite(text.data(), 1, text.size(), f);
+                    fclose(f);
+                }
+            }
             SetTimer(g->hwnd, kPicCapture, 5600, nullptr);
             return;
         case kPicCapture:

@@ -64,6 +64,8 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
     private var takingPicture = false
     /// When the camera last moved and a fresh picture is wanted once it stops.
     private var pictureDue: Date?
+    /// When a move was accepted: the plane is centred on its target until the camera stops, then on its readings again.
+    private var headingSince: Date?
     /// The live video: starting, or playing with its codec ("H.264"). Each start gets a new generation, so news from
     /// a stream that has since been stopped or restarted is ignored.
     private var liveStarting = false
@@ -412,6 +414,8 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             self.liveCodec = nil
             self.liveGeneration += 1
             self.pictureDue = nil
+            self.headingSince = nil
+            self.plane.heading = nil
             self.connection.show(message: "Disconnected.", error: false)
             self.eventLog.append("Disconnected")
             self.updateControls()
@@ -427,19 +431,26 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
 
     // MARK: Position refresh
 
+    /// Whether the camera has stopped since `since`: a reading taken after it that says it isn't moving, or, when the
+    /// camera doesn't say, three seconds (or 30 at most).
+    private func stoppedSince(_ since: Date) -> Bool {
+        let age = Date().timeIntervalSince(since)
+        let stopped = lastRead > since.addingTimeInterval(0.8) && current?.moveStatus != nil && current?.moveStatus != "MOVING"
+        return stopped || (age >= 3 && (current?.moveStatus == nil || paused)) || age >= 30
+    }
+
     private func tick() {
         guard state == .connected, !link.isBusy else { return }
-        if let due = pictureDue {
-            // A fresh picture once the camera has stopped: a reading taken after the move that says it isn't moving,
-            // or, when the camera doesn't say, three seconds.
-            let age = Date().timeIntervalSince(due)
-            let stopped = lastRead > due.addingTimeInterval(0.8) && current?.moveStatus != nil && current?.moveStatus != "MOVING"
-            if stopped || (age >= 3 && (current?.moveStatus == nil || paused)) || age >= 30 {
-                pictureDue = nil
-                if plane.live == nil {
-                    takePicture()
-                    return
-                }
+        if let since = headingSince, stoppedSince(since) {
+            // The camera has arrived: centre on where it says it is, which corrects a move that stopped short.
+            headingSince = nil
+            plane.heading = nil
+        }
+        if let due = pictureDue, stoppedSince(due) {
+            pictureDue = nil  // a fresh still picture once the camera has stopped
+            if plane.live == nil {
+                takePicture()
+                return
             }
         }
         guard !paused, Date() >= nextRefresh else { return }
@@ -563,6 +574,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             case .success:
                 self.eventLog.append("\(describe) accepted: \(summary) (movement may still be in progress)")
                 self.nextRefresh = .distantPast
+                self.head(to: target)
                 self.cameraMoved()
             case .failure(let error):
                 if error.linkLost { self.linkLost(error.message); return }
@@ -571,6 +583,15 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             self.updateControls()
         }
         updateControls()
+    }
+
+    /// Centres the plane on a move's target at once (an axis left unchanged keeps its reading), without waiting for
+    /// the camera's readings; they take over again once it stops.
+    private func head(to target: Target) {
+        func clamp(_ v: Double, _ range: AxisRange?) -> Double { range.map { min(max(v, $0.min), $0.max) } ?? v }
+        guard let pan = target.pan ?? current?.pan?.value, let tilt = target.tilt ?? current?.tilt?.value else { return }
+        plane.heading = (clamp(pan, info?.pan), clamp(tilt, info?.tilt))
+        headingSince = Date()
     }
 
     // MARK: Picture
@@ -720,6 +741,8 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             switch result {
             case .success:
                 self.eventLog.append("Stop accepted")
+                self.headingSince = nil
+                self.plane.heading = nil  // centre on where the camera stopped
                 self.cameraMoved()
             case .failure(let error):
                 if error.linkLost { self.linkLost(error.message); return }
@@ -930,6 +953,10 @@ extension ConsoleWindowController {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.4) {
             if let movingPath = env["PTZ_SNAPSHOT_MOVING_PATH"] { save(movingPath) }
+            if let headingPath = env["PTZ_SNAPSHOT_HEADING_PATH"] {  // where the plane is centred while it moves
+                let text = self.plane.heading.map { "\(format($0.pan)) \(format($0.tilt))" } ?? "none"
+                try? text.write(toFile: headingPath, atomically: true, encoding: .utf8)
+            }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
             save(path)
