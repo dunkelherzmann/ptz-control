@@ -2,8 +2,9 @@
 #  1. The core's login vault: tests\vault-smoke.c built with MSVC and run.
 #  2. The app (dist\PTZControl.exe) four times, with its own registry key and vault file, never taking focus:
 #     run 1 types a login, ticks Save login and connects; run 2 starts with a wrong username and fills the
-#     camera fields from the saved login; run 3 aims and moves in the still pictures of a camera whose video can't be
-#     reached; run 4 plays the camera's live video and aims in it. Each run saves pictures in .build\test.
+#     camera fields from the saved login; run 3 aims on the range plane and moves over the still pictures of a camera
+#     whose video can't be reached; run 4 plays the camera's live video, aims on the plane over it and turns Show Grid
+#     off. Each run saves pictures in .build\test.
 # Usage: windows\scripts\test.ps1   (after windows\scripts\build.ps1)
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -48,11 +49,6 @@ $mockLog = Join-Path $Work 'mock.log'
 $stillLog = Join-Path $Work 'mock-still.log'
 $mock = Start-Process python -ArgumentList @('-u', "`"$Root\tools\mock-camera.py`"", '--port', $Port) -PassThru `
     -WindowStyle Hidden -RedirectStandardOutput $mockLog -RedirectStandardError (Join-Path $Work 'mock.err')
-# A second camera without ONVIF's field-of-view moves: its view is measured from its pictures (run 4).
-$Port2 = 18086
-$mockLog2 = Join-Path $Work 'mock-no-fov.log'
-$mock2 = Start-Process python -ArgumentList @('-u', "`"$Root\tools\mock-camera.py`"", '--port', $Port2, '--no-fov') -PassThru `
-    -WindowStyle Hidden -RedirectStandardOutput $mockLog2 -RedirectStandardError (Join-Path $Work 'mock-no-fov.err')
 Start-Sleep -Seconds 1
 $vault = Join-Path $Work 'logins.vault'
 [IO.File]::WriteAllText($vault, "PTZ Control logins 1`nplain`n")
@@ -130,8 +126,8 @@ try {
     Check 'Manage Logins picture drawn' (Drawn $logins)
     Check 'still one camera login' (@(Get-Content $vault | Where-Object { $_ -like 'camera*' }).Count -eq 1)
 
-    # Run 3: still pictures, from a camera whose video can't be reached. A picture comes on connect, a point of it is
-    # aimed at, the camera moves toward it, and a new picture comes once it stops.
+    # Run 3: still pictures, from a camera whose video can't be reached. A picture comes on connect, pan 0.45 and tilt
+    # 0.3 are aimed at on the range plane over it, the camera moves there, and a new picture comes once it stops.
     $StillPort = 18084
     $stillMock = Start-Process python -ArgumentList @('-u', "`"$Root\tools\mock-camera.py`"", '--port', $StillPort, '--video', 'none') `
         -PassThru -WindowStyle Hidden -RedirectStandardOutput $stillLog -RedirectStandardError (Join-Path $Work 'mock-still.err')
@@ -145,43 +141,29 @@ try {
               PTZ_SNAPSHOT_MOVING_PATH = (Join-Path $Out 'windows-picture-moving.png'); PTZ_SNAPSHOT_LIVE_PATH = $live3 }
     $pictures = @(Select-String -Path $stillLog -Pattern '^mock: picture' -ErrorAction SilentlyContinue).Count
     Check 'run 3 took a picture, then a new one after the move' ($pictures -ge 2)
-    Check 'run 3 moved toward the aimed point (right and up)' `
-        (@(Select-String -Path $stillLog -Pattern '^mock: onvif view move to pan=0\.[0-9]+ tilt=0\.[0-9]+' -ErrorAction SilentlyContinue).Count -ge 1)
+    Check 'run 3 moved to the pan and tilt aimed at on the range plane' `
+        (@(Select-String -Path $stillLog -Pattern '^mock: onvif absolute move to pan=0\.4500 tilt=0\.3000' -ErrorAction SilentlyContinue).Count -ge 1)
     Check 'run 3 fell back to still pictures' ((Test-Path $live3) -and ((Get-Content -Raw -Encoding UTF8 $live3) -ceq 'no live view'))
     Check 'camera-picture pictures drawn' ((Drawn $picture) -and (Drawn $aim))
 
-    # Run 4: a camera that can't move within its view. Moving toward the same point first measures its view (it turns
-    # a little on each axis and back), then sends an absolute move to the point's coordinates: 0.45 x 0.25 pan and
-    # 0.3 x 0.140625 tilt from where the mock starts.
-    Settings 'admin' $Port2
-    $measured = Join-Path $Out 'windows-measured.png'
-    Remove-Item $measured -ErrorAction SilentlyContinue
-    RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PICTURE = '1'; PTZ_SNAPSHOT_PATH = $measured; PTZ_SNAPSHOT_WAIT = '40'
-              PTZ_SNAPSHOT_AIM_PATH = $null; PTZ_SNAPSHOT_MOVING_PATH = $null }
-    $last = @(Select-String -Path $mockLog2 -Pattern '^mock: onvif absolute move to pan=(\S+) tilt=(\S+)' -ErrorAction SilentlyContinue) |
-        Select-Object -Last 1
-    $near = $last -and [Math]::Abs([double]$last.Matches[0].Groups[1].Value - 0.1125) -lt 0.02 -and
-        [Math]::Abs([double]$last.Matches[0].Groups[2].Value - 0.0422) -lt 0.012
-    Check "run 4 measured the view and moved to the point's coordinates ($($last.Line))" $near
-    Check 'measured-view picture drawn' (Drawn $measured)
-
-    # Run 5: the live view. The camera's H.264 video plays in the plane, and aiming in it still moves the camera.
+    # Run 4: the live view. The camera's H.264 video plays under the range plane, and aiming on it moves the camera.
+    # Show Grid is turned off first (the window picture shows the plane without its grid), and stays off for the next
+    # launch.
     Settings 'admin'
     $live = Join-Path $Out 'windows-live.png'
-    $live5 = Join-Path $Work 'live5.txt'
+    $live4 = Join-Path $Work 'live4.txt'
     Remove-Item $live -ErrorAction SilentlyContinue
-    $viewMovesBefore = @(Select-String -Path $mockLog -Pattern '^mock: onvif view move' -ErrorAction SilentlyContinue).Count
+    $before = Moves
     RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PICTURE = '1'; PTZ_SNAPSHOT_PATH = $live; PTZ_SNAPSHOT_AIM_PATH = $null
-              PTZ_SNAPSHOT_MOVING_PATH = $null; PTZ_SNAPSHOT_LIVE_PATH = $live5 }
-    $plate = if (Test-Path $live5) { Get-Content -Raw -Encoding UTF8 $live5 } else { '' }
-    Check "run 5 played the camera's video ($plate)" ($plate -ceq "H.264 $([char]0xb7) 320 $([char]0xd7) 180")
-    Check 'run 5 started the video over RTSP' (@(Select-String -Path $mockLog -Pattern '^mock: rtsp play' -ErrorAction SilentlyContinue).Count -ge 1)
-    Check 'run 5 aimed in the live view' `
-        (@(Select-String -Path $mockLog -Pattern '^mock: onvif view move' -ErrorAction SilentlyContinue).Count -gt $viewMovesBefore)
+              PTZ_SNAPSHOT_MOVING_PATH = $null; PTZ_SNAPSHOT_LIVE_PATH = $live4; PTZ_SNAPSHOT_HIDE_GRID = '1' }
+    $plate = if (Test-Path $live4) { Get-Content -Raw -Encoding UTF8 $live4 } else { '' }
+    Check "run 4 played the camera's video ($plate)" ($plate -ceq "H.264 $([char]0xb7) 320 $([char]0xd7) 180")
+    Check 'run 4 started the video over RTSP' (@(Select-String -Path $mockLog -Pattern '^mock: rtsp play' -ErrorAction SilentlyContinue).Count -ge 1)
+    Check 'run 4 aimed on the range plane over the video' ((Moves) -gt $before)
+    Check 'Show Grid off is remembered' ((Get-ItemProperty "HKCU:\$KeyName" -Name ShowGrid -ErrorAction SilentlyContinue).ShowGrid -eq 0)
     Check 'live view picture drawn' (Drawn $live)
 } finally {
     Stop-Process -Id $mock.Id -ErrorAction SilentlyContinue
-    Stop-Process -Id $mock2.Id -ErrorAction SilentlyContinue
     if ($stillMock) { Stop-Process -Id $stillMock.Id -ErrorAction SilentlyContinue }
     Remove-Item -Path "HKCU:\$KeyName" -Recurse -ErrorAction SilentlyContinue
 }

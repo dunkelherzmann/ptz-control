@@ -2,9 +2,6 @@
 #include <cstdlib>
 #include "app.h"
 
-#include <gdiplus.h>
-#include <shlwapi.h>
-
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
@@ -181,6 +178,7 @@ Settings Settings::load() {
     s.ssh_port = reg_int(key, L"SshPort", s.ssh_port);
     s.theme = reg_int(key, L"Theme", s.theme);
     if (s.theme < 0 || s.theme > 4) s.theme = 0;
+    s.show_grid = reg_int(key, L"ShowGrid", 1) != 0;
     RegCloseKey(key);
     return s;
 }
@@ -210,6 +208,7 @@ void Settings::save() const {
     put_string(L"SshIdentity", ssh_identity);
     put_int(L"SshPort", ssh_port);
     put_int(L"Theme", theme);
+    put_int(L"ShowGrid", show_grid ? 1 : 0);
     RegCloseKey(key);
 }
 
@@ -399,7 +398,6 @@ void link_connect(CameraLink *link, const Settings &s, const std::wstring &camer
             info.tilt = range(raw.tilt);
             info.zoom = range(raw.zoom);
             info.zoom_integer = raw.zoom_integer != 0;
-            info.view_moves = raw.view_moves != 0;
             result.ok = true;
         }
         return [done, result, info] { done(result, info); };
@@ -426,8 +424,6 @@ void link_position(CameraLink *link, std::function<void(LinkResult, Snapshot)> d
                 snapshot.tilt = reading(raw.tilt);
                 snapshot.zoom = reading(raw.zoom);
                 snapshot.move_status = field(raw.move_status);
-                ptz_view_scale scale;
-                if (ptz_view_scale_at(link->session_, &raw, &scale)) snapshot.view_scale = ViewScale{scale.pan_per_x, scale.tilt_per_y};
                 result.ok = true;
             }
         }
@@ -488,73 +484,6 @@ void link_picture(CameraLink *link, std::function<void(LinkResult, std::string)>
             }
         }
         return [done, result, bytes] { done(result, bytes); };
-    });
-}
-
-// A JPEG or PNG picture as width x height grey pixels (GDI+ decodes and scales it): the host's part of measuring.
-static int grey_picture(void *, const unsigned char *data, size_t size, unsigned char *out, int width, int height) {
-    IStream *stream = SHCreateMemStream(data, static_cast<UINT>(size));
-    if (!stream) return 0;
-    int ok = 0;
-    {
-        Gdiplus::Bitmap picture(stream);
-        Gdiplus::Bitmap scaled(width, height, PixelFormat32bppARGB);
-        if (picture.GetLastStatus() == Gdiplus::Ok && scaled.GetLastStatus() == Gdiplus::Ok) {
-            {
-                Gdiplus::Graphics g(&scaled);
-                g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBilinear);
-                g.DrawImage(&picture, 0, 0, width, height);
-            }
-            Gdiplus::BitmapData pixels;
-            Gdiplus::Rect all(0, 0, width, height);
-            if (scaled.LockBits(&all, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &pixels) == Gdiplus::Ok) {
-                for (int y = 0; y < height; ++y) {
-                    auto *row = static_cast<const BYTE *>(pixels.Scan0) + static_cast<size_t>(y) * pixels.Stride;
-                    for (int x = 0; x < width; ++x) {  // BGRA in memory
-                        const BYTE *p = row + 4 * x;
-                        out[static_cast<size_t>(y) * width + x] = static_cast<unsigned char>((114 * p[0] + 587 * p[1] + 299 * p[2]) / 1000);
-                    }
-                }
-                scaled.UnlockBits(&pixels);
-                ok = 1;
-            }
-        }
-    }
-    stream->Release();
-    return ok;
-}
-
-void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done) {
-    link->run([=]() -> std::function<void()> {
-        LinkResult result;
-        ViewScale view;
-        if (!link->session_) {
-            result.error = L"Not connected";
-        } else {
-            ptz_view_scale scale;
-            char error[1024] = {};
-            if (ptz_measure_view(link->session_, grey_picture, nullptr, &scale, error, sizeof error)) {
-                view = ViewScale{scale.pan_per_x, scale.tilt_per_y};
-                result.ok = true;
-            } else {
-                result = failure(link->session_, error);
-            }
-        }
-        return [done, result, view] { done(result, view); };
-    });
-}
-
-void link_move_in_view(CameraLink *link, double x, double y, std::function<void(LinkResult)> done) {
-    link->run([=]() -> std::function<void()> {
-        LinkResult result;
-        if (!link->session_) {
-            result.error = L"Not connected";
-        } else {
-            char error[1024] = {};
-            if (ptz_move_in_view(link->session_, x, y, error, sizeof error)) result.ok = true;
-            else result = failure(link->session_, error);
-        }
-        return [done, result] { done(result); };
     });
 }
 

@@ -24,9 +24,11 @@ No open bugs in `bugs.md`.
 
 ## To build
 
-- [x] **Camera picture in the plane** (I3, I4, V6; #5). The picture as large as fits with the view grid, the ⟳
-  button and Camera ▸ Refresh Picture (Ctrl+Shift+R), the window growing to its shape; click to aim, double-click to
-  move there (`ptz_picture`, `ptz_move_in_view`); a new picture once the camera stops. Tested like the Mac's run 3.
+- [x] **Camera picture in the plane** (I3, I4, V6; #5). The picture as large as fits, the ⟳ button and Camera ▸
+  Refresh Picture (Ctrl+Shift+R), the window growing to its shape (`ptz_picture`); a new picture once the camera
+  stops. The pan/tilt range plane over it (grid, zero axes, limits, trail, start, target, current position) with
+  View ▸ Show Grid (Ctrl+') and the caption's grid button; click to aim at a pan and tilt, double-click to move there
+  (an absolute move). Tested like the Mac's run 3.
 - [x] **Live view in the plane** (I3, V6). The camera's H.264 or H.265 video plays in the plane once connected
   (`ptz_live_start`, decoded with Media Foundation's own decoders; H.265 needs HEVC Video Extensions), with the
   "● LIVE · H.264 · 320 × 180" plate, aiming on top and Refresh Picture restarting it; still pictures when it can't
