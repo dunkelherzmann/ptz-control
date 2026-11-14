@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -76,6 +77,7 @@ struct CameraInfo {
     std::wstring name, units;
     AxisRange pan, tilt, zoom;
     bool zoom_integer = false;
+    bool view_moves = false;  // a point of the picture can be brought to its centre
 };
 
 struct LinkResult {
@@ -106,6 +108,10 @@ void link_position(CameraLink *link, std::function<void(LinkResult, Snapshot)> d
 void link_move(CameraLink *link, std::optional<double> pan, std::optional<double> tilt, std::optional<double> zoom,
                std::function<void(LinkResult)> done);
 void link_stop(CameraLink *link, std::function<void(LinkResult)> done);
+// A still picture of the camera's current view (JPEG or PNG bytes).
+void link_picture(CameraLink *link, std::function<void(LinkResult, std::string bytes)> done);
+// Brings the point (x, y) of the last picture to its centre; x and y run from -1 to 1, up positive.
+void link_move_in_view(CameraLink *link, double x, double y, std::function<void(LinkResult)> done);
 void link_web_url(CameraLink *link, std::function<void(LinkResult, std::wstring url, std::wstring notice)> done);
 void link_disconnect(CameraLink *link, std::function<void()> done);
 
@@ -114,16 +120,22 @@ void register_instrument_classes(HINSTANCE instance);
 HWND create_plane(HWND parent, int id);
 HWND create_meter(HWND parent, int id, const wchar_t *title);
 
+namespace Gdiplus { class Bitmap; }
+// The camera's still picture with a view grid on top. The centre is where the camera points, and a point of the
+// picture is aimed at in view units (-1..1 from edge to edge, up positive).
 struct PlaneState {
-    AxisRange pan, tilt;
-    std::optional<Snapshot> current, starting;
-    std::optional<double> target_pan, target_tilt;
+    std::shared_ptr<Gdiplus::Bitmap> picture;
+    int picture_width = 0, picture_height = 0;
+    std::wstring picture_taken;  // HH:MM:SS
+    bool picture_stale = false;  // the camera has moved since the picture was taken
+    std::wstring picture_note;   // shown in place of a picture: why there is none
+    bool view_moves = false;
+    std::optional<std::pair<float, float>> picture_target;  // view units
     bool enabled = false;
-    std::function<void(double, double)> on_aim, on_aim_and_move;
+    std::function<void(float, float)> on_picture_aim, on_picture_aim_and_move;
 };
 PlaneState &plane_state(HWND plane);
-void plane_reset_trail(HWND plane);
-void plane_record(HWND plane);  // append current measurement (or a gap) to the trail
+bool plane_set_picture(HWND plane, const std::string &bytes);  // JPEG or PNG; false when it can't be read
 
 struct MeterState {
     AxisRange range;

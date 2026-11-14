@@ -64,7 +64,7 @@ Invoke-Tool rc.exe @('/nologo', "/I$Root\windows\res", "/I$Root\core\include", "
 $exe = Join-Path $Dist 'PTZControl.exe'
 Invoke-Tool link.exe ($objects + @($res, '/nologo', "/OUT:$exe", '/SUBSYSTEM:WINDOWS', '/MACHINE:X64',
     '/OPT:REF', '/OPT:ICF', '/MANIFEST:NO', '/INCREMENTAL:NO',
-    'winhttp.lib', 'ws2_32.lib', 'bcrypt.lib', 'gdiplus.lib', 'comctl32.lib', 'dwmapi.lib', 'uxtheme.lib',
+    'winhttp.lib', 'ws2_32.lib', 'bcrypt.lib', 'gdiplus.lib', 'shlwapi.lib', 'comctl32.lib', 'dwmapi.lib', 'uxtheme.lib',
     'shell32.lib', 'advapi32.lib', 'gdi32.lib', 'user32.lib', 'ole32.lib'))
 Write-Output 'Built dist\PTZControl.exe'
 

@@ -3,9 +3,12 @@
 
 #include <windowsx.h>
 #include <gdiplus.h>
+#include <shlwapi.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cwchar>
+#include <memory>
 #include <vector>
 
 using namespace Gdiplus;
@@ -72,123 +75,152 @@ void track_leave(HWND hwnd) {
     TrackMouseEvent(&t);
 }
 
-// ---- position plane ------------------------------------------------------------
+// ---- position plane: the camera picture -----------------------------------------------
 
 struct Plane {
     PlaneState state;
-    std::vector<std::optional<PointF>> trail;  // camera units; nullopt marks a gap
-    std::optional<PointF> hover;               // client pixels
+    std::optional<PointF> hover;  // client pixels
     bool dragging = false;
 };
 
-RectF plot_rect(float w, float h) { return RectF(S(46), S(10), std::max(1.0f, w - S(58)), std::max(1.0f, h - S(34))); }
-
-std::optional<PointF> to_view(const PlaneState &s, const RectF &r, double pan, double tilt) {
-    auto fx = s.pan.fraction(pan), fy = s.tilt.fraction(tilt);
-    if (!fx || !fy) return std::nullopt;
-    return PointF(r.X + r.Width * static_cast<float>(*fx), r.GetBottom() - r.Height * static_cast<float>(*fy));
+// The picture's frame: as large as fits, in the picture's shape (16:9 until there is one), centred.
+RectF picture_rect(const PlaneState &s, float w, float h) {
+    RectF area(1, 1, std::max(1.0f, w - 2), std::max(1.0f, h - 2));
+    float pw = s.picture ? static_cast<float>(s.picture_width) : 16, ph = s.picture ? static_cast<float>(s.picture_height) : 9;
+    if (pw <= 0 || ph <= 0) return area;
+    float scale = std::min(area.Width / pw, area.Height / ph), pw2 = std::round(pw * scale), ph2 = std::round(ph * scale);
+    return RectF(std::round(area.X + (area.Width - pw2) / 2), std::round(area.Y + (area.Height - ph2) / 2), pw2, ph2);
 }
+
+PointF picture_point(const RectF &r, float x, float y) {  // client pixels -> view units (up positive)
+    return PointF((x - r.X) / r.Width * 2 - 1, 1 - (y - r.Y) / r.Height * 2);
+}
+
+// A label on a dark plate, readable on any picture; `x`, `y` is its top-left (or top-right) corner. Returns its height.
+float plate(Graphics &g, const std::wstring &text, float x, float y, COLORREF color, bool align_right = false) {
+    SizeF size = measure(g, text, 10, true);
+    float w = size.Width + S(8), h = size.Height + S(4);
+    if (align_right) x -= w;
+    GraphicsPath path;
+    float d = S(6);
+    path.AddArc(x, y, d, d, 180, 90);
+    path.AddArc(x + w - d, y, d, d, 270, 90);
+    path.AddArc(x + w - d, y + h - d, d, d, 0, 90);
+    path.AddArc(x, y + h - d, d, d, 90, 90);
+    path.CloseFigure();
+    SolidBrush fill(Color(140, 0, 0, 0));
+    g.FillPath(&fill, &path);
+    draw_text(g, text, x + S(4), y + S(2), 10, color, true);
+    return h;
+}
+
+float plate_height(Graphics &g) { return measure(g, L"PICTURE", 10, true).Height + S(4); }
 
 void paint_plane(Plane &p, Graphics &g, float w, float h) {
     const PlaneState &s = p.state;
-    RectF r = plot_rect(w, h);
-    Pen grid(C(g_theme.grid), 1);
-    for (int i = 0; i <= 10; ++i) {
+    RectF r = picture_rect(s, w, h);
+    const COLORREF white = RGB(255, 255, 255);
+    SolidBrush black(Color(255, 0, 0, 0));
+    g.FillRectangle(&black, r);
+    if (!s.picture) {
+        Pen grid(C(g_theme.grid), 1);
+        for (int i = 0; i <= 10; ++i) {
+            float x = r.X + r.Width * i / 10, y = r.Y + r.Height * i / 10;
+            g.DrawLine(&grid, x, r.Y, x, r.GetBottom());
+            g.DrawLine(&grid, r.X, y, r.GetRight(), y);
+        }
+        std::wstring title = !s.enabled ? L"NO CAMERA LINK" : s.picture_note.empty() ? L"TAKING A PICTURE…" : L"NO PICTURE";
+        SizeF size = measure(g, title, 12, true);
+        draw_text(g, title, r.X + (r.Width - size.Width) / 2, r.Y + r.Height / 2 - size.Height - S(2), 12, g_theme.secondary, true);
+        if (s.enabled && !s.picture_note.empty()) {
+            Font font(L"Segoe UI", S(11), FontStyleRegular, UnitPixel);
+            SolidBrush brush(C(g_theme.secondary));
+            StringFormat format;
+            format.SetAlignment(StringAlignmentCenter);
+            RectF box(r.X + S(24), r.Y + r.Height / 2 + S(4), r.Width - S(48), S(40));
+            g.DrawString(s.picture_note.c_str(), -1, &font, box, &format, &brush);
+        }
+        return;
+    }
+    g.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+    if (s.picture_stale) {
+        ColorMatrix dim = {{{1, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 0, 0, 0.45f, 0}, {0, 0, 0, 0, 1}}};
+        ImageAttributes attributes;
+        attributes.SetColorMatrix(&dim);
+        g.DrawImage(s.picture.get(), r, 0, 0, static_cast<REAL>(s.picture_width), static_cast<REAL>(s.picture_height),
+                    UnitPixel, &attributes);
+    } else {
+        g.DrawImage(s.picture.get(), r);
+    }
+
+    // View grid: tenths of the picture, the centre lines stronger.
+    Pen grid(C(white, 41), S(0.5f));
+    for (int i = 1; i <= 9; ++i) {
+        if (i == 5) continue;
         float x = r.X + r.Width * i / 10, y = r.Y + r.Height * i / 10;
         g.DrawLine(&grid, x, r.Y, x, r.GetBottom());
         g.DrawLine(&grid, r.X, y, r.GetRight(), y);
     }
-    Pen frame(C(g_theme.border), 1);
-    g.DrawRectangle(&frame, r);
+    PointF c(r.X + r.Width / 2, r.Y + r.Height / 2);
+    Pen axes(C(white, 77), S(0.75f));
+    g.DrawLine(&axes, c.X, r.Y, c.X, r.GetBottom());
+    g.DrawLine(&axes, r.X, c.Y, r.GetRight(), c.Y);
 
-    if (!s.pan.available || !s.tilt.available) {
-        std::wstring text = s.enabled ? L"PAN/TILT RANGE UNAVAILABLE" : L"NO CAMERA LINK";
-        SizeF size = measure(g, text, 12, true);
-        draw_text(g, text, r.X + (r.Width - size.Width) / 2, r.Y + (r.Height - size.Height) / 2, 12, g_theme.secondary, true);
-        return;
+    // Where the camera points: the picture's centre.
+    Pen ring(C(g_theme.primary), S(1.5f));
+    g.DrawEllipse(&ring, c.X - S(10), c.Y - S(10), S(20), S(20));
+    SolidBrush dot(C(g_theme.primary));
+    g.FillEllipse(&dot, c.X - S(3), c.Y - S(3), S(6), S(6));
+
+    // Target: dashed crosshair, with a line from the centre.
+    if (s.picture_target) {
+        PointF t(r.X + (s.picture_target->first + 1) / 2 * r.Width, r.Y + (1 - s.picture_target->second) / 2 * r.Height);
+        Pen dashed(C(g_theme.target), S(1.5f));
+        REAL dash[] = {4 / 1.5f, 2 / 1.5f};
+        dashed.SetDashPattern(dash, 2);
+        g.DrawLine(&dashed, t.X - S(14), t.Y, t.X + S(14), t.Y);
+        g.DrawLine(&dashed, t.X, t.Y - S(14), t.X, t.Y + S(14));
+        g.DrawEllipse(&dashed, t.X - S(8), t.Y - S(8), S(16), S(16));
+        Pen dotted(C(g_theme.target, 178), S(1));
+        REAL dots[] = {2, 3};
+        dotted.SetDashPattern(dots, 2);
+        g.DrawLine(&dotted, c, t);
     }
 
-    Pen axis(C(g_theme.axis), 1);
-    if (auto zero = to_view(s, r, 0, s.tilt.min)) g.DrawLine(&axis, zero->X, r.Y, zero->X, r.GetBottom());
-    if (auto zero = to_view(s, r, s.pan.min, 0)) g.DrawLine(&axis, r.X, zero->Y, r.GetRight(), zero->Y);
+    // Status plates: when the picture was taken, or that it is out of date.
+    float ph = plate_height(g);
+    std::wstring status = s.picture_stale ? L"MOVING · NEW PICTURE WHEN IT STOPS"
+                          : s.picture_taken.empty() ? L"PICTURE" : L"PICTURE " + s.picture_taken;
+    plate(g, status, r.X + S(6), r.GetBottom() - S(6) - ph, s.picture_stale ? g_theme.warning : white);
+    if (!s.view_moves) plate(g, L"THIS CAMERA CAN'T AIM FROM ITS PICTURE", r.GetRight() - S(6), r.GetBottom() - S(6) - ph, g_theme.warning, true);
 
-    float label = 9;
-    draw_text(g, format_value(s.pan.min), r.X, r.GetBottom() + S(4), label, g_theme.secondary);
-    draw_text(g, format_value(s.pan.max), r.GetRight(), r.GetBottom() + S(4), label, g_theme.secondary, false, true);
-    draw_text(g, L"PAN", r.X + r.Width / 2 - S(9), r.GetBottom() + S(4), label, g_theme.secondary);
-    draw_text(g, format_value(s.tilt.max), r.X - S(6), r.Y - S(2), label, g_theme.secondary, false, true);
-    draw_text(g, format_value(s.tilt.min), r.X - S(6), r.GetBottom() - S(12), label, g_theme.secondary, false, true);
-    draw_text(g, L"TILT", r.X - S(6), r.Y + r.Height / 2 - S(6), label, g_theme.secondary, false, true);
-
-    // Measured path; gaps stay gaps.
-    Pen trail(C(g_theme.primary, 90), S(1.5f));
-    std::optional<PointF> last;
-    for (const auto &sample : p.trail) {
-        std::optional<PointF> point = sample ? to_view(s, r, sample->X, sample->Y) : std::nullopt;
-        if (point && last) g.DrawLine(&trail, *last, *point);
-        last = point;
-    }
-
-    if (s.starting && s.starting->pan && s.starting->tilt) {
-        if (auto pt = to_view(s, r, s.starting->pan->value, s.starting->tilt->value)) {
-            Pen start(C(g_theme.start), S(1.5f));
-            g.DrawRectangle(&start, pt->X - S(5), pt->Y - S(5), S(10), S(10));
-            draw_text(g, L"S", pt->X + S(7), pt->Y - S(16), label, g_theme.secondary);
-        }
-    }
-
-    if (s.target_pan || s.target_tilt) {
-        std::optional<double> pan = s.target_pan, tilt = s.target_tilt;
-        if (!pan && s.current && s.current->pan) pan = s.current->pan->value;
-        if (!tilt && s.current && s.current->tilt) tilt = s.current->tilt->value;
-        if (pan && tilt) {
-            if (auto pt = to_view(s, r, *pan, *tilt)) {
-                Pen target(C(g_theme.target), S(1));
-                target.SetDashStyle(DashStyleDash);
-                g.DrawLine(&target, pt->X - S(12), pt->Y, pt->X + S(12), pt->Y);
-                g.DrawLine(&target, pt->X, pt->Y - S(12), pt->X, pt->Y + S(12));
-                g.DrawEllipse(&target, pt->X - S(7), pt->Y - S(7), S(14), S(14));
-            }
-        }
-    }
-
-    if (s.current && s.current->pan && s.current->tilt) {
-        if (auto pt = to_view(s, r, s.current->pan->value, s.current->tilt->value)) {
-            SolidBrush dot(C(g_theme.primary));
-            g.FillEllipse(&dot, pt->X - S(4.5f), pt->Y - S(4.5f), S(9), S(9));
-            Pen ring(C(g_theme.primary), S(1.5f));
-            g.DrawEllipse(&ring, pt->X - S(10), pt->Y - S(10), S(20), S(20));
-        }
-    } else if (s.current) {
-        draw_text(g, L"POSITION UNAVAILABLE", r.X + S(6), r.Y + S(4), label, g_theme.secondary);
-    }
-
-    if (p.hover && s.enabled) {
-        PointF h = *p.hover;
-        Pen guide(C(g_theme.axis), 1);
-        g.DrawLine(&guide, h.X, r.Y, h.X, r.GetBottom());
-        g.DrawLine(&guide, r.X, h.Y, r.GetRight(), h.Y);
-        double pan = s.pan.value_at((h.X - r.X) / r.Width), tilt = s.tilt.value_at((r.GetBottom() - h.Y) / r.Height);
-        std::wstring text = format_value(pan) + L", " + format_value(tilt);
-        SizeF size = measure(g, text, 10);
-        float x = h.X + S(8), y = h.Y - size.Height - S(4);
-        if (x + size.Width > r.GetRight()) x = h.X - size.Width - S(8);
-        if (y < r.Y) y = h.Y + S(6);
-        draw_text(g, text, x, y, 10, g_theme.text);
+    // Hover: guides and the point in view units.
+    if (p.hover && s.view_moves && r.Contains(*p.hover)) {
+        PointF hv = *p.hover;
+        Pen guide(C(white, 89), S(0.5f));
+        g.DrawLine(&guide, hv.X, r.Y, hv.X, r.GetBottom());
+        g.DrawLine(&guide, r.X, hv.Y, r.GetRight(), hv.Y);
+        PointF v = picture_point(r, hv.X, hv.Y);
+        wchar_t text[64];
+        swprintf(text, 64, L"%s %.2f  %s %.2f", v.X < 0 ? L"◀" : L"▶", std::fabs(v.X), v.Y < 0 ? L"▼" : L"▲", std::fabs(v.Y));
+        float x = hv.X + S(10), y = hv.Y - S(8) - ph;
+        if (x + S(110) > r.GetRight()) x = hv.X - S(120);
+        if (y < r.Y) y = hv.Y + S(8);
+        plate(g, text, x, y, white);
     }
 }
 
 void plane_aim(HWND hwnd, Plane &p, int x, int y, bool commit) {
-    if (!p.state.enabled || !p.state.pan.available || !p.state.tilt.available) return;
+    const PlaneState &s = p.state;
     RECT rc;
     GetClientRect(hwnd, &rc);
-    RectF r = plot_rect(static_cast<float>(rc.right), static_cast<float>(rc.bottom));
-    float fx = std::clamp((x - r.X) / r.Width, 0.0f, 1.0f), fy = std::clamp((r.GetBottom() - y) / r.Height, 0.0f, 1.0f);
-    double pan = p.state.pan.value_at(fx), tilt = p.state.tilt.value_at(fy);
+    RectF r = picture_rect(s, static_cast<float>(rc.right), static_cast<float>(rc.bottom));
+    if (!s.enabled || !s.picture || !s.view_moves || !r.Contains(static_cast<float>(x), static_cast<float>(y))) return;
+    PointF point = picture_point(r, static_cast<float>(x), static_cast<float>(y));
     if (commit) {
-        if (p.state.on_aim_and_move) p.state.on_aim_and_move(pan, tilt);
-    } else if (p.state.on_aim) {
-        p.state.on_aim(pan, tilt);
+        if (s.on_picture_aim_and_move) s.on_picture_aim_and_move(point.X, point.Y);
+    } else if (s.on_picture_aim) {
+        s.on_picture_aim(point.X, point.Y);
     }
 }
 
@@ -213,7 +245,7 @@ LRESULT CALLBACK plane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
             RECT rc;
             GetClientRect(hwnd, &rc);
-            RectF r = plot_rect(static_cast<float>(rc.right), static_cast<float>(rc.bottom));
+            RectF r = picture_rect(p->state, static_cast<float>(rc.right), static_cast<float>(rc.bottom));
             p->hover = r.Contains(static_cast<float>(x), static_cast<float>(y)) ? std::optional<PointF>(PointF(
                                                                                     static_cast<float>(x), static_cast<float>(y)))
                                                                               : std::nullopt;
@@ -409,19 +441,17 @@ HWND create_meter(HWND parent, int id, const wchar_t *title) {
 
 PlaneState &plane_state(HWND plane) { return reinterpret_cast<Plane *>(GetWindowLongPtrW(plane, GWLP_USERDATA))->state; }
 
-void plane_reset_trail(HWND plane) { reinterpret_cast<Plane *>(GetWindowLongPtrW(plane, GWLP_USERDATA))->trail.clear(); }
-
-void plane_record(HWND plane) {
-    auto *p = reinterpret_cast<Plane *>(GetWindowLongPtrW(plane, GWLP_USERDATA));
-    const auto &current = p->state.current;
-    if (!current || !current->pan || !current->tilt) {
-        if (!p->trail.empty() && p->trail.back()) p->trail.push_back(std::nullopt);
-        return;
-    }
-    PointF point(static_cast<float>(current->pan->value), static_cast<float>(current->tilt->value));
-    if (!p->trail.empty() && p->trail.back() && p->trail.back()->Equals(point)) return;
-    p->trail.push_back(point);
-    if (p->trail.size() > 120) p->trail.erase(p->trail.begin(), p->trail.end() - 120);
+bool plane_set_picture(HWND plane, const std::string &bytes) {
+    PlaneState &s = plane_state(plane);
+    IStream *stream = SHCreateMemStream(reinterpret_cast<const BYTE *>(bytes.data()), static_cast<UINT>(bytes.size()));
+    if (!stream) return false;
+    auto bitmap = std::make_shared<Bitmap>(stream);
+    stream->Release();
+    if (bitmap->GetLastStatus() != Ok || bitmap->GetWidth() == 0) return false;
+    s.picture = bitmap;
+    s.picture_width = static_cast<int>(bitmap->GetWidth());
+    s.picture_height = static_cast<int>(bitmap->GetHeight());
+    return true;
 }
 
 MeterState &meter_state(HWND meter) { return reinterpret_cast<Meter *>(GetWindowLongPtrW(meter, GWLP_USERDATA))->state; }
