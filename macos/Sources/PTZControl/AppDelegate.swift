@@ -177,7 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         Leave a target field blank (or type x) to keep that axis unchanged.
         The camera picture shows the camera's live video, or a still picture when the video can't play. Click on it to aim at that pan and tilt of the camera's range (it fills the target fields); double-click (or Move) to move there. A still picture is renewed once the camera stops. Refresh Picture (⇧⌘R) takes a new picture, or restarts the live view.
-        The plane over the picture is the camera's whole pan/tilt range: its grid, the zero axes and the range limits, the trail of recent positions, the starting position (S), the target and, as a solid reticle, where the camera points now. Show Grid (⌘') shows or hides the grid, axes and limits.
+        The plane over the picture is the camera's whole pan/tilt range, centred on where the camera points: the reticle at the picture's centre is the current position, and the grid, the zero axes (pan 0, tilt 0), the range's edges and limits, the trail of recent positions, the starting position (S) and the target move under it as the camera moves. Show Grid (⌘') shows or hides the grid, axes and limits.
         Drag along a travel meter to aim that axis alone, double-click it to aim and move.
 
         Starting coordinates are the first reading after connecting and stay fixed. Return to Start (⌘B) sends an absolute move there.

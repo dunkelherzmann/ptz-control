@@ -94,7 +94,25 @@ RectF picture_rect(const PlaneState &s, float w, float h) {
     return RectF(std::round(area.X + (area.Width - pw2) / 2), std::round(area.Y + (area.Height - ph2) / 2), pw2, ph2);
 }
 
-// Pan and tilt -> client pixels: the pan range spans the picture left to right, tilt bottom to top.
+// Where the whole range lies: the picture's size, shifted so the current position is at the picture's centre (the
+// picture itself until there is a position inside the range).
+RectF range_rect(const PlaneState &s, const RectF &r) {
+    if (!s.current || !s.current->pan || !s.current->tilt) return r;
+    auto fx = s.pan_range.fraction(s.current->pan->value), fy = s.tilt_range.fraction(s.current->tilt->value);
+    if (!fx || !fy) return r;
+    float x = r.X + r.Width / 2 - r.Width * static_cast<float>(*fx);
+    float bottom = r.Y + r.Height / 2 + r.Height * static_cast<float>(*fy);
+    return RectF(x, bottom - r.Height, r.Width, r.Height);
+}
+
+// Where clicks and the hover readout reach: the part of the picture the range covers.
+RectF reach_rect(const PlaneState &s, const RectF &r) {
+    RectF reach;
+    RectF::Intersect(reach, r, range_rect(s, r));
+    return reach;
+}
+
+// Pan and tilt -> client pixels: the pan range spans `r` (the range rect) left to right, tilt bottom to top.
 std::optional<PointF> range_point(const PlaneState &s, const RectF &r, double pan, double tilt) {
     auto fx = s.pan_range.fraction(pan), fy = s.tilt_range.fraction(tilt);
     if (!fx || !fy) return std::nullopt;
@@ -183,24 +201,55 @@ void paint_plane(Plane &p, Graphics &g, float w, float h) {
         return;
     }
 
-    // The range plane's grid: tenths of the range, the zero axes when zero is in range, and the limits.
+    // Everything on the plane stays inside the picture.
+    g.SetClip(r);
+    const RectF range = range_rect(s, r);
+
+    // Beyond the range's edges the camera can't point: shaded.
+    {
+        Region outside(r);
+        outside.Exclude(range);
+        SolidBrush shade(Color(102, 0, 0, 0));
+        g.FillRegion(&shade, &outside);
+    }
+
+    // The range plane's grid: tenths of the range, its edges, the zero axes when zero is in range, and the limits.
     if (s.show_grid) {
         Pen grid(C(white, 46), S(0.5f));
         for (int i = 1; i <= 9; ++i) {
-            float x = r.X + r.Width * i / 10, y = r.Y + r.Height * i / 10;
-            g.DrawLine(&grid, x, r.Y, x, r.GetBottom());
-            g.DrawLine(&grid, r.X, y, r.GetRight(), y);
+            float x = range.X + range.Width * i / 10, y = range.Y + range.Height * i / 10;
+            g.DrawLine(&grid, x, range.Y, x, range.GetBottom());
+            g.DrawLine(&grid, range.X, y, range.GetRight(), y);
         }
         Pen axes(C(white, 115), S(1));
-        if (auto zero = range_point(s, r, 0, s.tilt_range.min)) g.DrawLine(&axes, zero->X, r.Y, zero->X, r.GetBottom());
-        if (auto zero = range_point(s, r, s.pan_range.min, 0)) g.DrawLine(&axes, r.X, zero->Y, r.GetRight(), zero->Y);
-        // Pan limits along the top edge, tilt limits down the right one.
-        float lh = plate_height(g, 9);
-        plate(g, L"PAN " + format_value(s.pan_range.min), r.X + S(4), r.Y + S(19) - lh, white, false, 9);
-        plate(g, format_value(s.pan_range.max), r.GetRight() - S(4), r.Y + S(19) - lh, white, true, 9);
-        plate(g, L"TILT " + format_value(s.tilt_range.max), r.GetRight() - S(4), r.Y + S(39) - lh, white, true, 9);
-        plate(g, format_value(s.tilt_range.min), r.GetRight() - S(4), r.GetBottom() - S(30) - lh, white, true, 9);
+        if (auto zero = range_point(s, range, 0, s.tilt_range.min)) g.DrawLine(&axes, zero->X, range.Y, zero->X, range.GetBottom());
+        if (auto zero = range_point(s, range, s.pan_range.min, 0)) g.DrawLine(&axes, range.X, zero->Y, range.GetRight(), zero->Y);
+        Pen edge(C(white, 153), 1);
+        g.DrawRectangle(&edge, range.X + 0.5f, range.Y + 0.5f, range.Width - 1, range.Height - 1);
     }
+    g.ResetClip();
+    if (s.show_grid) {
+        // The limits at the range's edges, where they show: pan along the top, tilt down the right side.
+        float lh = plate_height(g, 9);
+        auto width = [&](const std::wstring &text) { return measure(g, text, 9, true).Width + S(8); };
+        auto visible = [](float edge, float low, float high) { return edge >= low - 1 && edge <= high + 1; };
+        std::wstring low = L"PAN " + format_value(s.pan_range.min), high = L"PAN " + format_value(s.pan_range.max);
+        float pan_y = r.Y + S(19) - lh;
+        if (visible(range.X, r.X, r.GetRight()))
+            plate(g, low, std::min(range.X + S(4), r.GetRight() - S(4) - width(low)), pan_y, white, false, 9);
+        if (visible(range.GetRight(), r.X, r.GetRight()))
+            plate(g, high, std::max(range.GetRight() - S(4) - width(high), r.X + S(4)), pan_y, white, false, 9);
+        // Each tilt plate's bottom edge, kept below the pan plates and above the lower plates.
+        auto tilt_bottom = [&](float y) { return std::max(std::min(y, r.GetBottom() - S(26)), r.Y + S(40)); };
+        if (visible(range.Y, r.Y, r.GetBottom()))
+            plate(g, L"TILT " + format_value(s.tilt_range.max), r.GetRight() - S(4), tilt_bottom(range.Y + S(19)) - lh, white, true, 9);
+        if (visible(range.GetBottom(), r.Y, r.GetBottom()))
+            plate(g, L"TILT " + format_value(s.tilt_range.min), r.GetRight() - S(4), tilt_bottom(range.GetBottom() - S(4)) - lh, white,
+                  true, 9);
+    }
+
+    // The markers stay inside the picture too.
+    g.SetClip(r);
 
     // Markers: each stroke is drawn first wide and dark, a halo that keeps it readable on any picture.
     const Color halo(200, 0, 0, 0);
@@ -213,7 +262,7 @@ void paint_plane(Plane &p, Graphics &g, float w, float h) {
             pen->SetLineJoin(LineJoinRound);
             std::optional<PointF> last;
             for (const auto &sample : s.trail) {
-                std::optional<PointF> point = sample ? range_point(s, r, sample->first, sample->second) : std::nullopt;
+                std::optional<PointF> point = sample ? range_point(s, range, sample->first, sample->second) : std::nullopt;
                 if (point && last) g.DrawLine(pen, *last, *point);
                 last = point;
             }
@@ -222,7 +271,7 @@ void paint_plane(Plane &p, Graphics &g, float w, float h) {
 
     // Starting position: hollow square marked S.
     if (s.starting && s.starting->pan && s.starting->tilt) {
-        if (auto sp = range_point(s, r, s.starting->pan->value, s.starting->tilt->value)) {
+        if (auto sp = range_point(s, range, s.starting->pan->value, s.starting->tilt->value)) {
             Pen dark(halo, S(1.5f) + rim), ink(C(g_theme.start), S(1.5f));
             for (Pen *pen : {&dark, &ink}) g.DrawRectangle(pen, sp->X - S(5), sp->Y - S(5), S(10), S(10));
             GraphicsPath letter;
@@ -239,12 +288,12 @@ void paint_plane(Plane &p, Graphics &g, float w, float h) {
     // Target: dashed crosshair and ring (an axis left blank keeps the current value), with a dotted line from where
     // the camera points.
     std::optional<PointF> now;
-    if (s.current && s.current->pan && s.current->tilt) now = range_point(s, r, s.current->pan->value, s.current->tilt->value);
+    if (s.current && s.current->pan && s.current->tilt) now = range_point(s, range, s.current->pan->value, s.current->tilt->value);
     if (s.target_pan || s.target_tilt) {
         std::optional<double> pan = s.target_pan, tilt = s.target_tilt;
         if (!pan && s.current && s.current->pan) pan = s.current->pan->value;
         if (!tilt && s.current && s.current->tilt) tilt = s.current->tilt->value;
-        if (auto t = pan && tilt ? range_point(s, r, *pan, *tilt) : std::nullopt) {
+        if (auto t = pan && tilt ? range_point(s, range, *pan, *tilt) : std::nullopt) {
             Pen dark(halo, S(1.5f) + rim), ink(C(g_theme.target), S(1.5f));
             for (Pen *pen : {&dark, &ink}) {
                 dash(*pen, 4, 2);
@@ -276,9 +325,9 @@ void paint_plane(Plane &p, Graphics &g, float w, float h) {
     draw_status(g, s, r);
 
     // Hover: guides and the pan and tilt under the pointer.
-    if (p.hover && s.enabled && r.Contains(*p.hover)) {
+    if (p.hover && s.enabled && reach_rect(s, r).Contains(*p.hover)) {
         PointF hv = *p.hover;
-        auto camera = camera_point(s, r, hv.X, hv.Y);
+        auto camera = camera_point(s, range, hv.X, hv.Y);
         Pen guide(C(white, 89), S(0.5f));
         g.DrawLine(&guide, hv.X, r.Y, hv.X, r.GetBottom());
         g.DrawLine(&guide, r.X, hv.Y, r.GetRight(), hv.Y);
@@ -290,6 +339,7 @@ void paint_plane(Plane &p, Graphics &g, float w, float h) {
         if (y < r.Y) y = hv.Y + S(8);
         plate(g, text, x, y, white);
     }
+    g.ResetClip();
 }
 
 void plane_aim(HWND hwnd, Plane &p, int x, int y, bool commit) {
@@ -297,9 +347,11 @@ void plane_aim(HWND hwnd, Plane &p, int x, int y, bool commit) {
     if (!s.enabled) return;
     RECT rc;
     GetClientRect(hwnd, &rc);
-    RectF r = picture_rect(s, static_cast<float>(rc.right), static_cast<float>(rc.bottom));
+    RectF picture = picture_rect(s, static_cast<float>(rc.right), static_cast<float>(rc.bottom));
+    RectF r = reach_rect(s, picture);
+    if (r.IsEmptyArea()) return;
     float px = std::clamp(static_cast<float>(x), r.X, r.GetRight()), py = std::clamp(static_cast<float>(y), r.Y, r.GetBottom());
-    auto camera = camera_point(s, r, px, py);
+    auto camera = camera_point(s, range_rect(s, picture), px, py);
     if (!camera) return;
     if (commit) {
         if (s.on_aim_and_move) s.on_aim_and_move(camera->first, camera->second);
@@ -329,7 +381,7 @@ LRESULT CALLBACK plane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
             RECT rc;
             GetClientRect(hwnd, &rc);
-            RectF r = picture_rect(p->state, static_cast<float>(rc.right), static_cast<float>(rc.bottom));
+            RectF r = reach_rect(p->state, picture_rect(p->state, static_cast<float>(rc.right), static_cast<float>(rc.bottom)));
             PointF point(static_cast<float>(x), static_cast<float>(y));
             p->hover = p->state.enabled && r.Contains(point) ? std::optional<PointF>(point) : std::nullopt;
             if (p->dragging) plane_aim(hwnd, *p, x, y, false);

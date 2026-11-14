@@ -12,10 +12,11 @@
 
 void instruments_set_theme(const Theme &theme);
 
-// The camera's live video, or a still picture of its view, with the pan/tilt range plane on top: the whole range spans
-// the picture (pan across, tilt up), with its grid, zero axes and limits (hidden with Show Grid off), the trail of
-// recent positions, the starting position, the target and the current position. Click or drag to aim at a pan and
-// tilt; double-click to aim and move. Only measured positions are drawn: no reading, no marker.
+// The camera's live video, or a still picture of its view, with the pan/tilt range plane on top, the size of the
+// picture (pan across, tilt up) and centred on where the camera points: the current position stays at the picture's
+// centre as a crosshair, and the grid, zero axes, range edges and limits (hidden with Show Grid off), the trail, the
+// starting position and the target move under it. Click or drag to aim at a pan and tilt; double-click to aim and
+// move. Only measured positions are drawn: no reading, no marker.
 struct PlaneState {
     QImage picture;
     QDateTime picture_taken;
@@ -46,7 +47,8 @@ protected:
     void leaveEvent(QEvent *) override;
 
 private:
-    QRectF plot_rect() const;  // the picture's frame, which the range plane spans
+    QRectF plot_rect() const;   // the picture's frame
+    QRectF range_rect() const;  // where the whole range lies: the picture's size, centred on the current position
     std::optional<QPointF> view_point(double pan, double tilt) const;    // camera units -> widget pixels
     std::optional<QPointF> camera_point(QPointF at) const;               // widget pixels -> pan, tilt
     void aim(QPointF at, bool commit);

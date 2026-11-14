@@ -70,3 +70,7 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [x] Mac (#8)
   - [x] Linux (#8)
   - [x] Windows (#8)
+- [x] **The range plane follows the camera, its crosshair at the picture's centre** (asked 2026-11-14, all platforms). Pan 0, tilt 0 stays fixed in the camera's coordinates; the plane is drawn around where the camera points, so the reticle stays where the picture's width and height meet, and the grid, zero axes, range edges, start and target move under it as the camera moves.
+  - [x] Mac (#9)
+  - [x] Linux (#9)
+  - [x] Windows (#9)
