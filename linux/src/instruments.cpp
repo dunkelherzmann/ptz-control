@@ -49,7 +49,22 @@ PlaneView::PlaneView(QWidget *parent) : QWidget(parent) {
 }
 
 QRectF PlaneView::plot_rect() const {
+    if (state.mode == PlaneMode::Picture) return picture_rect();
     return QRectF(46, 10, std::max(1.0, width() - 58.0), std::max(1.0, height() - 34.0));
+}
+
+// The picture's frame: as large as fits, in the picture's shape (16:9 until there is one), centred.
+QRectF PlaneView::picture_rect() const {
+    QRectF area = QRectF(rect()).adjusted(1, 1, -1, -1);
+    double pw = state.picture.isNull() ? 16 : state.picture.width(), ph = state.picture.isNull() ? 9 : state.picture.height();
+    if (pw <= 0 || ph <= 0 || area.width() <= 0 || area.height() <= 0) return area;
+    double scale = std::min(area.width() / pw, area.height() / ph), w = std::round(pw * scale), h = std::round(ph * scale);
+    return QRectF(std::round(area.center().x() - w / 2), std::round(area.center().y() - h / 2), w, h);
+}
+
+QPointF PlaneView::picture_point(QPointF at) const {
+    QRectF r = picture_rect();
+    return QPointF((at.x() - r.x()) / r.width() * 2 - 1, 1 - (at.y() - r.y()) / r.height() * 2);
 }
 
 std::optional<QPointF> PlaneView::to_view(const QRectF &r, double pan, double tilt) const {
@@ -62,6 +77,10 @@ void PlaneView::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     p.fillRect(rect(), g_theme.panel);
+    if (state.mode == PlaneMode::Picture) {
+        paint_picture(p);
+        return;
+    }
     const PlaneState &s = state;
     QRectF r = plot_rect();
     p.setPen(pen(g_theme.grid, 1));
@@ -152,7 +171,125 @@ void PlaneView::paintEvent(QPaintEvent *) {
     }
 }
 
+void PlaneView::paint_picture(QPainter &p) {
+    const PlaneState &s = state;
+    QRectF r = picture_rect();
+    const QColor white(255, 255, 255);
+    auto centred = [&](const QString &text, double y, double size, bool bold, const QColor &color) {
+        draw_text(p, text, r.center().x() - text_width(text, size, bold) / 2, y, size, color, bold);
+    };
+    // A label on a dark plate, readable on any picture. `at` is the plate's top-left (or top-right) corner.
+    auto plate = [&](const QString &text, QPointF at, const QColor &color, bool align_right = false) {
+        QFontMetricsF m(mono_font(10, true));
+        double w = m.horizontalAdvance(text) + 8, h = m.height() + 4;
+        if (align_right) at.rx() -= w;
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 140));
+        p.drawRoundedRect(QRectF(at.x(), at.y(), w, h), 3, 3);
+        p.setBrush(Qt::NoBrush);
+        draw_text(p, text, at.x() + 4, at.y() + 2, 10, color, true);
+        return h;
+    };
+
+    p.fillRect(r, Qt::black);
+    if (s.picture.isNull()) {
+        p.setPen(pen(g_theme.grid, 1));
+        for (int i = 0; i <= 10; ++i) {
+            double x = r.x() + r.width() * i / 10, y = r.y() + r.height() * i / 10;
+            p.drawLine(QPointF(x, r.y()), QPointF(x, r.bottom()));
+            p.drawLine(QPointF(r.x(), y), QPointF(r.right(), y));
+        }
+        QString title = !s.enabled ? "NO CAMERA LINK" : s.picture_note.isEmpty() ? "TAKING A PICTURE…" : "NO PICTURE";
+        double th = QFontMetricsF(mono_font(12, true)).height();
+        centred(title, r.center().y() - th - 2, 12, true, g_theme.secondary);
+        if (s.enabled && !s.picture_note.isEmpty()) {
+            p.setFont(QFont());
+            QFont f = p.font();
+            f.setPixelSize(11);
+            p.setFont(f);
+            p.setPen(g_theme.secondary);
+            p.drawText(QRectF(r.x() + 24, r.center().y() + 4, r.width() - 48, 40), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
+                       s.picture_note);
+        }
+        return;
+    }
+    p.save();
+    p.setRenderHint(QPainter::SmoothPixmapTransform);
+    p.setOpacity(s.picture_stale ? 0.45 : 1);
+    p.drawImage(r, s.picture);
+    p.restore();
+
+    // View grid: tenths of the picture, the centre lines stronger.
+    p.setPen(pen(alpha(white, 41), 0.5));
+    for (int i = 1; i <= 9; ++i) {
+        if (i == 5) continue;
+        double x = r.x() + r.width() * i / 10, y = r.y() + r.height() * i / 10;
+        p.drawLine(QPointF(x, r.y()), QPointF(x, r.bottom()));
+        p.drawLine(QPointF(r.x(), y), QPointF(r.right(), y));
+    }
+    QPointF c = r.center();
+    p.setPen(pen(alpha(white, 77), 0.75));
+    p.drawLine(QPointF(c.x(), r.y()), QPointF(c.x(), r.bottom()));
+    p.drawLine(QPointF(r.x(), c.y()), QPointF(r.right(), c.y()));
+
+    // Where the camera points: the picture's centre.
+    p.setPen(pen(g_theme.primary, 1.5));
+    p.drawEllipse(c, 10, 10);
+    p.setPen(Qt::NoPen);
+    p.setBrush(g_theme.primary);
+    p.drawEllipse(c, 3, 3);
+    p.setBrush(Qt::NoBrush);
+
+    // Target: dashed crosshair, with a line from the centre.
+    if (s.picture_target) {
+        QPointF t(r.x() + (s.picture_target->x() + 1) / 2 * r.width(), r.y() + (1 - s.picture_target->y()) / 2 * r.height());
+        QPen dashed = pen(g_theme.target, 1.5);
+        dashed.setDashPattern({4 / 1.5, 2 / 1.5});
+        p.setPen(dashed);
+        p.drawLine(QPointF(t.x() - 14, t.y()), QPointF(t.x() + 14, t.y()));
+        p.drawLine(QPointF(t.x(), t.y() - 14), QPointF(t.x(), t.y() + 14));
+        p.drawEllipse(t, 8, 8);
+        QPen dotted = pen(alpha(g_theme.target, 178), 1);
+        dotted.setDashPattern({2, 3});
+        p.setPen(dotted);
+        p.drawLine(c, t);
+    }
+
+    // Status plates: when the picture was taken, or that it is out of date.
+    QString status = s.picture_stale ? "MOVING · NEW PICTURE WHEN IT STOPS"
+                     : s.picture_taken.isValid() ? "PICTURE " + s.picture_taken.toString("HH:mm:ss") : QString("PICTURE");
+    double plate_h = QFontMetricsF(mono_font(10, true)).height() + 4;
+    plate(status, QPointF(r.x() + 6, r.bottom() - 6 - plate_h), s.picture_stale ? g_theme.warning : white);
+    if (!s.view_moves)
+        plate("THIS CAMERA CAN'T AIM FROM ITS PICTURE", QPointF(r.right() - 6, r.bottom() - 6 - plate_h), g_theme.warning, true);
+
+    // Hover: guides and the point in view units.
+    if (hover_ && s.view_moves && r.contains(*hover_)) {
+        QPointF h = *hover_;
+        p.setPen(pen(alpha(white, 89), 0.5));
+        p.drawLine(QPointF(h.x(), r.y()), QPointF(h.x(), r.bottom()));
+        p.drawLine(QPointF(r.x(), h.y()), QPointF(r.right(), h.y()));
+        QPointF v = picture_point(h);
+        QString text = QString::asprintf("%s %.2f  %s %.2f", v.x() < 0 ? "◀" : "▶", std::abs(v.x()), v.y() < 0 ? "▼" : "▲",
+                                         std::abs(v.y()));
+        QPointF at(h.x() + 10, h.y() - 8 - plate_h);
+        if (at.x() + 110 > r.right()) at.setX(h.x() - 120);
+        if (at.y() < r.y()) at.setY(h.y() + 8);
+        plate(text, at, white);
+    }
+}
+
 void PlaneView::aim(QPointF at, bool commit) {
+    if (state.mode == PlaneMode::Picture) {
+        if (!state.enabled || state.picture.isNull() || !state.view_moves || !picture_rect().contains(at)) return;
+        QPointF point = picture_point(at);
+        if (commit) {
+            if (state.on_picture_aim_and_move) state.on_picture_aim_and_move(point);
+        } else if (state.on_picture_aim) {
+            state.on_picture_aim(point);
+        }
+        return;
+    }
     if (!state.enabled || !state.pan.available || !state.tilt.available) return;
     QRectF r = plot_rect();
     double fx = std::clamp((at.x() - r.x()) / r.width(), 0.0, 1.0), fy = std::clamp((r.bottom() - at.y()) / r.height(), 0.0, 1.0);

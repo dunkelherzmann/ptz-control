@@ -42,6 +42,7 @@ struct Settings {
     QString ssh_host, ssh_user, ssh_identity;
     int ssh_port = 22;
     int theme = 0;
+    QString plane_mode = "range";  // "range" or "picture"
 
     static Settings load();
     void save() const;
@@ -74,6 +75,7 @@ struct CameraInfo {
     QString name, units;
     AxisRange pan, tilt, zoom;
     bool zoom_integer = false;
+    bool view_moves = false;  // a point of the picture can be brought to its centre
 };
 
 struct LinkResult {
@@ -100,6 +102,11 @@ void link_position(CameraLink *link, std::function<void(LinkResult, Snapshot)> d
 void link_move(CameraLink *link, std::optional<double> pan, std::optional<double> tilt, std::optional<double> zoom,
                std::function<void(LinkResult)> done);
 void link_stop(CameraLink *link, std::function<void(LinkResult)> done);
+class QImage;
+// A still picture of the camera's current view.
+void link_picture(CameraLink *link, std::function<void(LinkResult, QImage)> done);
+// Brings the point (x, y) of the last picture to its centre; x and y run from -1 to 1, up positive.
+void link_move_in_view(CameraLink *link, double x, double y, std::function<void(LinkResult)> done);
 void link_web_url(CameraLink *link, std::function<void(LinkResult, QString url, QString notice)> done);
 void link_disconnect(CameraLink *link, std::function<void()> done);
 
