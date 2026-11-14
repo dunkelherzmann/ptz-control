@@ -145,6 +145,7 @@ public:
         if (at >= end) return;
         if (have_sequence_ && sequence != static_cast<uint16_t>(last_sequence_ + 1)) {
             nals_.clear();  // a lost packet spoils the frame being built
+            frame_bytes_ = 0;
             fragment_.clear();
             broken_ = true;
         }
@@ -171,6 +172,7 @@ private:
                     in_fragment_ = true;
                 }
                 if (!in_fragment_) return;
+                if (fragment_.size() > kMaxFrame) { in_fragment_ = false; fragment_.clear(); return; }
                 fragment_.append(reinterpret_cast<const char *>(p + 2), n - 2);
                 if (stop) {
                     add(fragment_);
@@ -194,6 +196,7 @@ private:
                     in_fragment_ = true;
                 }
                 if (!in_fragment_) return;
+                if (fragment_.size() > kMaxFrame) { in_fragment_ = false; fragment_.clear(); return; }
                 fragment_.append(reinterpret_cast<const char *>(p + 3), n - 3);
                 if (stop) {
                     add(fragment_);
@@ -233,12 +236,20 @@ private:
     void add(const std::string &nal) {
         if (nal.empty()) return;
         remember(nal);
+        frame_bytes_ += nal.size();
+        if (frame_bytes_ > kMaxFrame) {  // a frame that never ends: drop it and wait for a key frame
+            nals_.clear();
+            frame_bytes_ = 0;
+            broken_ = true;
+            return;
+        }
         nals_.push_back(nal);
     }
 
     void finish(const std::function<void(const std::string &, bool, double)> &on_frame) {
         std::vector<std::string> nals;
         nals.swap(nals_);
+        frame_bytes_ = 0;
         fragment_.clear();
         in_fragment_ = false;
         bool key = false, has_picture = false;
@@ -266,7 +277,9 @@ private:
         on_frame(frame, key, time);
     }
 
+    static constexpr size_t kMaxFrame = 32 * 1024 * 1024;
     Codec codec_;
+    size_t frame_bytes_ = 0;
     std::map<int, std::string> parameter_sets_;  // by NAL type, so VPS, SPS, PPS keep their order
     std::vector<std::string> nals_;
     std::string fragment_;

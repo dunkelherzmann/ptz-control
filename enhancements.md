@@ -54,7 +54,7 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [x] Mac (#5)
   - [x] Linux (#5)
   - [x] Windows (#5)
-- [ ] **Live view of the camera's video** (asked 2026-11-14, all platforms), if possible, in place of the still picture.
+- [ ] **Live view of the camera's video** (asked 2026-11-14, all platforms), if possible, in place of the still picture. Built as real video: the camera's H.264 or H.265 RTSP stream, played by the core and decoded with each system's own decoder, with still pictures when there's no video.
   - [ ] Mac
   - [ ] Linux
   - [ ] Windows
