@@ -2,7 +2,8 @@
 # Drives the installed Flatpak (org.ptzcontrol.app) against the mock camera, off screen, and saves screenshots.
 # Run 1 types a login, ticks Save login and connects; run 2 starts with a wrong username and fills the camera
 # fields from the saved login; run 3 aims on the range plane and moves, over still pictures from a camera whose video
-# can't be reached; run 4 plays the camera's live video, turns Show Grid off and aims over it. It uses its own settings folder and vault file and never touches the user's PTZ
+# can't be reached; run 4 plays the camera's live video, turns Show Grid off and aims over it; run 5 double-clicks
+# a point of an Axis camera's picture before its view is measured, which measures it and moves there. It uses its own settings folder and vault file and never touches the user's PTZ
 # Control settings, saved logins or windows.
 # Usage: linux/scripts/test.sh [screenshot.png]   (default: .build/test/flatpak.png)
 set -eu
@@ -17,8 +18,8 @@ trap 'kill "$MOCK" "${STILL_MOCK:-}" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 PORT=18080
 python3 -u "$ROOT/tools/mock-camera.py" --port "$PORT" >"$WORK/mock.log" 2>&1 &
 MOCK=$!
-settings() {  # camera username [port]
-    printf '[General]\nRoute=0\nVendor=0\nCameraHost=127.0.0.1\nCameraPort=%s\nCameraUser=%s\n' "${2:-$PORT}" "$1" \
+settings() {  # camera username [port] [vendor: 0 ONVIF, 1 Axis]
+    printf '[General]\nRoute=0\nVendor=%s\nCameraHost=127.0.0.1\nCameraPort=%s\nCameraUser=%s\n' "${3:-0}" "${2:-$PORT}" "$1" \
         > "$WORK/config/PTZControl/PTZControl.conf"
 }
 VAULT="$WORK/logins.vault"
@@ -101,13 +102,11 @@ PICTURE="$SHOTS/flatpak-picture.png"
 rm -f "$PICTURE" "$SHOTS/flatpak-picture-aim.png" "$SHOTS/flatpak-picture-moving.png"
 run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PICTURE=1 --env=PTZ_SNAPSHOT_PATH="$PICTURE" \
     --env=PTZ_SNAPSHOT_AIM_PATH="$SHOTS/flatpak-picture-aim.png" --env=PTZ_SNAPSHOT_MOVING_PATH="$SHOTS/flatpak-picture-moving.png" \
-    --env=PTZ_SNAPSHOT_LIVE_PATH="$WORK/live3.txt" --env=PTZ_SNAPSHOT_HEADING_PATH="$WORK/heading3.txt"
+    --env=PTZ_SNAPSHOT_LIVE_PATH="$WORK/live3.txt"
 check "run 3 took a picture, then a new one after the move" \
     "$([ "$(grep -c '^mock: picture' "$WORK/mock-still.log" || true)" -ge 2 ] && echo 0 || echo 1)"
 check "run 3 moved to the pan and tilt aimed at on the range plane" \
     "$(grep -q '^mock: onvif absolute move to pan=0.4500 tilt=0.3000' "$WORK/mock-still.log" && echo 0 || echo 1)"
-check "run 3 centred the plane on the target while the camera moved ($(cat "$WORK/heading3.txt" 2>/dev/null))" \
-    "$(grep -qx '0.45 0.3' "$WORK/heading3.txt" 2>/dev/null; echo $?)"
 check "run 3 fell back to still pictures" "$(grep -qx 'no live view' "$WORK/live3.txt" 2>/dev/null && echo 0 || echo 1)"
 check "camera-picture pictures saved" "$([ -s "$PICTURE" ] && [ -s "$SHOTS/flatpak-picture-aim.png" ] && echo 0 || echo 1)"
 observed 3
@@ -130,9 +129,27 @@ check "Show Grid off is remembered" \
 check "live view picture saved" "$([ -s "$LIVE" ] && echo 0 || echo 1)"
 observed 4
 
+# Run 5: an Axis camera whose view isn't measured yet. Double-clicking a point of its picture (half way to the right
+# edge, a quarter of the way to the bottom) measures the view, then moves so that point comes to the centre: the mock
+# draws a 60 x 35 degree view through a lens, so that point is pan 16.10, tilt -4.46 from pan 0, tilt 0.
+settings admin "$STILL_PORT" 1
+printf 'ShowGrid=true\n' >>"$WORK/config/PTZControl/PTZControl.conf"
+MEASURED="$SHOTS/flatpak-measured.png"
+rm -f "$MEASURED"
+run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PICTURE=1 --env=PTZ_SNAPSHOT_PATH="$MEASURED" \
+    --env=PTZ_SNAPSHOT_MEASURE_AT=0.5,-0.25 --env=PTZ_SNAPSHOT_WAIT=45
+LAST="$(grep '^mock: axis absolute move' "$WORK/mock-still.log" | tail -1)"
+check "run 5 measured the view and moved to the point double-clicked ($LAST)" "$(printf '%s\n' "$LAST" | awk '{
+    for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
+    exit !(v["pan"] > 15.7 && v["pan"] < 16.5 && v["tilt"] < -4.3 && v["tilt"] > -4.65) }'; echo $?)"
+check "run 5 remembered the measured view for this camera" \
+    "$(grep -q "^Views%20axis%20127.0.0.1%3A$STILL_PORT=." "$WORK/config/PTZControl/PTZControl.conf" && echo 0 || echo 1)"
+check "measured-view picture saved" "$([ -s "$MEASURED" ] && echo 0 || echo 1)"
+observed 5
+
 if [ "$FAIL" = 0 ]; then
     printf 'PASS %s %s: pictures in %s\n' "$ID" "$(flatpak info "$ID" | sed -n 's/^ *Version: //p')" "$SHOTS"
 else
-    cat "$WORK/app.log" "$WORK/mock.log" "$WORK/mock-still.log"
+    cat "$WORK/app.log" "$WORK/mock.log" "$WORK/mock-still.log" "$WORK/config/PTZControl/PTZControl.conf"
     exit 1
 fi

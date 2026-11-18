@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace {
 
@@ -58,31 +59,73 @@ QRectF PlaneView::plot_rect() const {
     return QRectF(std::round(area.center().x() - w / 2), std::round(area.center().y() - h / 2), w, h);
 }
 
-// Where the whole range lies: the picture's size, shifted so the target of a move under way, or else the current
-// position, is at the picture's centre (the picture itself until there is a position).
-QRectF PlaneView::range_rect() const {
-    QRectF r = plot_rect();
+namespace {
+
+// A point of the widget as a point of the picture, -1…1 with up positive, and back.
+QPointF picture_point(QPointF p, const QRectF &r) {
+    return QPointF((p.x() - r.center().x()) / (r.width() / 2), (r.center().y() - p.y()) / (r.height() / 2));
+}
+QPointF widget_point(QPointF p, const QRectF &r) {
+    return QPointF(r.center().x() + p.x() * r.width() / 2, r.center().y() - p.y() * r.height() / 2);
+}
+
+}  // namespace
+
+std::optional<ptz_view> PlaneView::view() const {
     const auto &c = state.current;
-    std::optional<double> pan, tilt;
-    if (state.heading) pan = state.heading->x(), tilt = state.heading->y();
-    else if (c && c->pan && c->tilt) pan = c->pan->value, tilt = c->tilt->value;
-    if (!pan || !tilt) return r;
-    auto fx = state.pan.fraction(*pan), fy = state.tilt.fraction(*tilt);
-    if (!fx || !fy) return r;
-    return QRectF(r.center().x() - r.width() * *fx, r.center().y() + r.height() * *fy - r.height(), r.width(), r.height());
+    if (!state.scale || !c || !c->pan || !c->tilt) return std::nullopt;
+    auto range = [](const AxisRange &r) { return ptz_range{r.available ? 1 : 0, r.min, r.max}; };
+    return ptz_view{{state.scale->half_x, state.scale->half_y}, state.degrees ? 1 : 0, c->pan->value, c->tilt->value,
+                    range(state.pan), range(state.tilt)};
 }
 
-std::optional<QPointF> PlaneView::view_point(double pan, double tilt) const {
-    auto fx = state.pan.fraction(pan), fy = state.tilt.fraction(tilt);
-    if (!fx || !fy) return std::nullopt;
-    QRectF r = range_rect();
-    return QPointF(r.x() + r.width() * *fx, r.bottom() - r.height() * *fy);
+std::optional<QPointF> PlaneView::camera_point(QPointF at, const QRectF &r) const {
+    auto v = view();
+    if (!v) return std::nullopt;
+    QPointF q = picture_point(at, r);
+    double pan = 0, tilt = 0;
+    ptz_view_point(&*v, q.x(), q.y(), &pan, &tilt);
+    return QPointF(pan, tilt);
 }
 
-std::optional<QPointF> PlaneView::camera_point(QPointF at) const {
-    if (!state.pan.available || !state.tilt.available) return std::nullopt;
-    QRectF r = range_rect();
-    return QPointF(state.pan.value_at((at.x() - r.x()) / r.width()), state.tilt.value_at((r.bottom() - at.y()) / r.height()));
+std::optional<QPointF> PlaneView::locate(double pan, double tilt, const QRectF &r) const {
+    auto v = view();
+    if (!v) return std::nullopt;
+    double x = 0, y = 0;
+    if (!ptz_view_locate(&*v, pan, tilt, &x, &y)) return std::nullopt;
+    return widget_point(QPointF(x, y), r);
+}
+
+// The plane's lines for the current view, worked out by the core and kept until the view changes.
+const std::vector<PlaneLine> &PlaneView::lines() {
+    auto v = view();
+    if (!v) {
+        lines_key_.clear();
+        lines_.clear();
+        return lines_;
+    }
+    std::vector<double> key{v->scale.half_x, v->scale.half_y, double(v->degrees), v->pan, v->tilt,
+                            v->pan_range.min, v->pan_range.max, double(v->pan_range.available),
+                            v->tilt_range.min, v->tilt_range.max, double(v->tilt_range.available)};
+    if (key == lines_key_) return lines_;
+    std::vector<ptz_plane_line> raw(160);
+    int count = ptz_view_lines(&*v, raw.data(), static_cast<int>(raw.size()));
+    lines_.clear();
+    for (int i = 0; i < count; ++i) {
+        const ptz_plane_line &l = raw[i];
+        PlaneLine line;
+        line.kind = l.kind == PTZ_LINE_PAN_LIMIT || l.kind == PTZ_LINE_TILT_LIMIT ? PlaneLine::Limit
+                    : l.kind == PTZ_LINE_PAN_ZERO || l.kind == PTZ_LINE_TILT_ZERO ? PlaneLine::Zero
+                                                                                  : PlaneLine::Grid;
+        line.pan = l.kind == PTZ_LINE_PAN || l.kind == PTZ_LINE_PAN_ZERO || l.kind == PTZ_LINE_PAN_LIMIT;
+        line.label = QString::fromUtf8(l.label, static_cast<int>(strnlen(l.label, sizeof l.label)));
+        line.labelled = l.labelled != 0;
+        line.label_at = QPointF(l.label_x, l.label_y);
+        for (int j = 0; j < l.count && j < PTZ_LINE_POINTS; ++j) line.points.emplace_back(l.x[j], l.y[j]);
+        lines_.push_back(std::move(line));
+    }
+    lines_key_ = key;
+    return lines_;
 }
 
 void PlaneView::record() {
@@ -160,52 +203,7 @@ void PlaneView::paintEvent(QPaintEvent *) {
         return;
     }
 
-    // Everything on the plane stays inside the picture.
-    p.save();
-    p.setClipRect(r);
-    const QRectF range = range_rect();
-
-    // Beyond the range's edges the camera can't point: shaded.
-    QPainterPath outside;
-    outside.setFillRule(Qt::OddEvenFill);
-    outside.addRect(r);
-    outside.addRect(range);
-    p.fillPath(outside, QColor(0, 0, 0, 102));
-
-    // The range plane's grid: tenths of the range, its edges, the zero axes when zero is in range, and the limits.
-    if (s.show_grid) {
-        p.setPen(pen(alpha(white, 46), 0.5));
-        for (int i = 1; i <= 9; ++i) {
-            double x = range.x() + range.width() * i / 10, y = range.y() + range.height() * i / 10;
-            p.drawLine(QPointF(x, range.y()), QPointF(x, range.bottom()));
-            p.drawLine(QPointF(range.x(), y), QPointF(range.right(), y));
-        }
-        p.setPen(pen(alpha(white, 115), 1));
-        if (auto zero = view_point(0, s.tilt.min)) p.drawLine(QPointF(zero->x(), range.y()), QPointF(zero->x(), range.bottom()));
-        if (auto zero = view_point(s.pan.min, 0)) p.drawLine(QPointF(range.x(), zero->y()), QPointF(range.right(), zero->y()));
-        p.setPen(pen(alpha(white, 153), 1));
-        p.drawRect(range.adjusted(0.5, 0.5, -0.5, -0.5));
-    }
-    p.restore();
-    if (s.show_grid) {
-        // The limits at the range's edges, where they show: pan along the top, tilt down the right side.
-        auto width = [](const QString &text) { return QFontMetricsF(mono_font(9, true)).horizontalAdvance(text) + 8; };
-        auto visible = [](double edge, double low, double high) { return edge >= low - 1 && edge <= high + 1; };
-        const double h = plate_height(9), top = r.y() + 4;
-        const QString low = "PAN " + format_value(s.pan.min), high = "PAN " + format_value(s.pan.max);
-        if (visible(range.left(), r.left(), r.right()))
-            plate(low, QPointF(std::min(range.left() + 4, r.right() - 4 - width(low)), top), white, false, 9);
-        if (visible(range.right(), r.left(), r.right()))
-            plate(high, QPointF(std::max(range.right() - 4 - width(high), r.left() + 4), top), white, false, 9);
-        if (visible(range.top(), r.top(), r.bottom()))
-            plate("TILT " + format_value(s.tilt.max),
-                  QPointF(r.right() - 4, std::min(std::max(range.top() + 4, r.top() + 24), r.bottom() - 26 - h)), white, true, 9);
-        if (visible(range.bottom(), r.top(), r.bottom()))
-            plate("TILT " + format_value(s.tilt.min),
-                  QPointF(r.right() - 4, std::max(std::min(range.bottom() - 4 - h, r.bottom() - 26 - h), r.top() + 24)), white, true, 9);
-    }
-
-    // A dark halo under each marker keeps it readable on any picture.
+    // A dark halo under each line and marker keeps it readable on any picture.
     auto stroke = [&](const QPainterPath &path, QPen ink) {
         QPen halo = ink;
         halo.setColor(QColor(0, 0, 0, 110));
@@ -219,13 +217,37 @@ void PlaneView::paintEvent(QPaintEvent *) {
         p.strokePath(path, ink);
     };
 
-    // Recent measured path; gaps stay gaps.
+    // Everything on the plane stays inside the picture.
     p.save();
     p.setClipRect(r);
+
+    // The grid, the zero axes and the range's limits, where they fall in the picture.
+    const std::vector<PlaneLine> no_lines;
+    const std::vector<PlaneLine> &plane_lines = s.enabled ? lines() : no_lines;
+    if (s.show_grid) {
+        for (const PlaneLine &line : plane_lines) {
+            if (line.points.size() < 2) continue;
+            QPainterPath path;
+            path.moveTo(widget_point(line.points[0], r));
+            for (size_t i = 1; i < line.points.size(); ++i) path.lineTo(widget_point(line.points[i], r));
+            switch (line.kind) {
+                case PlaneLine::Grid: stroke(path, pen(alpha(white, 115), 0.75)); break;
+                case PlaneLine::Zero: stroke(path, pen(alpha(white, 178), 1)); break;
+                case PlaneLine::Limit: {
+                    QPen dashed = pen(alpha(g_theme.warning, 230), 1.5);
+                    dashed.setDashPattern({6 / 1.5, 3 / 1.5});
+                    stroke(path, dashed);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Recent measured path; gaps stay gaps.
     QPainterPath trail;
     bool pen_down = false;
     for (const auto &sample : trail_) {
-        std::optional<QPointF> point = sample ? view_point(sample->x(), sample->y()) : std::nullopt;
+        std::optional<QPointF> point = sample ? locate(sample->x(), sample->y(), r) : std::nullopt;
         if (!point) {
             pen_down = false;
             continue;
@@ -239,7 +261,7 @@ void PlaneView::paintEvent(QPaintEvent *) {
 
     // Starting position: hollow square marked S.
     if (s.starting && s.starting->pan && s.starting->tilt) {
-        if (auto sp = view_point(s.starting->pan->value, s.starting->tilt->value)) {
+        if (auto sp = locate(s.starting->pan->value, s.starting->tilt->value, r)) {
             QPainterPath square;
             square.addRect(QRectF(sp->x() - 5, sp->y() - 5, 10, 10));
             stroke(square, pen(g_theme.start, 1.5));
@@ -251,16 +273,14 @@ void PlaneView::paintEvent(QPaintEvent *) {
         }
     }
 
-    // Target: dashed crosshair and ring (an axis left blank keeps the current value), with a dotted line from the
-    // current position.
-    std::optional<QPointF> current;
-    if (s.current && s.current->pan && s.current->tilt) current = view_point(s.current->pan->value, s.current->tilt->value);
+    // Target: dashed crosshair and ring (an axis left blank keeps the current value), with a line from the centre.
+    const QPointF centre = r.center();
     if (s.target_pan || s.target_tilt) {
         std::optional<double> pan = s.target_pan, tilt = s.target_tilt;
         if (!pan && s.current && s.current->pan) pan = s.current->pan->value;
         if (!tilt && s.current && s.current->tilt) tilt = s.current->tilt->value;
         if (pan && tilt) {
-            if (auto t = view_point(*pan, *tilt)) {
+            if (auto t = locate(*pan, *tilt, r)) {
                 QPainterPath cross;
                 cross.moveTo(t->x() - 14, t->y());
                 cross.lineTo(t->x() + 14, t->y());
@@ -270,38 +290,88 @@ void PlaneView::paintEvent(QPaintEvent *) {
                 QPen dashed = pen(g_theme.target, 1.5);
                 dashed.setDashPattern({4 / 1.5, 2 / 1.5});
                 stroke(cross, dashed);
-                if (current) {
-                    QPainterPath line;
-                    line.moveTo(*current);
-                    line.lineTo(*t);
-                    QPen dotted = pen(alpha(g_theme.target, 178), 1);
-                    dotted.setDashPattern({2, 3});
-                    stroke(line, dotted);
-                }
+                QPainterPath line;
+                line.moveTo(centre);
+                line.lineTo(*t);
+                QPen dotted = pen(alpha(g_theme.target, 178), 1);
+                dotted.setDashPattern({2, 3});
+                stroke(line, dotted);
             }
         }
     }
 
-    // Current measured position: solid reticle.
-    if (current) {
+    // Where the camera points: the picture's centre, a solid reticle once the view is measured.
+    bool positioned = s.current && s.current->pan && s.current->tilt;
+    if (s.enabled && positioned) {
         QPainterPath ring;
-        ring.addEllipse(*current, 10, 10);
-        stroke(ring, pen(g_theme.primary, 1.5));
+        ring.addEllipse(centre, 10, 10);
+        QPen ring_pen = pen(g_theme.primary, 1.5);
+        if (!s.scale) ring_pen.setDashPattern({3 / 1.5, 3 / 1.5});
+        stroke(ring, ring_pen);
         QPainterPath dot;
-        dot.addEllipse(*current, 4.5, 4.5);
+        dot.addEllipse(centre, 2.5, 2.5);
         p.strokePath(dot, QPen(QColor(0, 0, 0, 110), 2));
         p.fillPath(dot, g_theme.primary);
     }
     p.restore();
-    if (!current && s.current) {
+
+    // The lines' values: pan along the top edge, tilt down the right one, each where its line crosses the edge.
+    const double label_h = plate_height(9);
+    if (s.show_grid) {
+        std::vector<const PlaneLine *> pans, tilts;
+        for (const PlaneLine &line : plane_lines)
+            if (line.labelled) (line.pan ? pans : tilts).push_back(&line);
+        std::sort(pans.begin(), pans.end(), [](auto a, auto b) { return a->label_at.x() < b->label_at.x(); });
+        std::sort(tilts.begin(), tilts.end(), [](auto a, auto b) { return a->label_at.y() > b->label_at.y(); });
+        auto width = [](const QString &text) { return text_width(text, 9, true) + 8; };
+        double last_pan = -1e9;
+        std::vector<QRectF> pan_plates;
+        for (const PlaneLine *line : pans) {
+            QString text = "PAN " + line->label + (line->kind == PlaneLine::Limit ? " LIMIT" : "");
+            double w = width(text);
+            QPointF at = widget_point(line->label_at, r);
+            double x = std::min(std::max(at.x() - w / 2, r.left() + 4), r.right() - 4 - w);
+            if (x <= last_pan + 4) continue;
+            double y = std::min(std::max(at.y(), r.top()) + 4, r.bottom() - 26 - label_h);
+            plate(text, QPointF(x, y), line->kind == PlaneLine::Limit ? g_theme.warning : white, false, 9);
+            pan_plates.emplace_back(x, y, w, label_h);
+            last_pan = x + w;
+        }
+        double last_tilt = -1e9;
+        for (const PlaneLine *line : tilts) {
+            QString text = "TILT " + line->label + (line->kind == PlaneLine::Limit ? " LIMIT" : "");
+            double w = width(text);
+            QPointF at = widget_point(line->label_at, r);
+            double right = std::min(at.x(), r.right()) - 4;
+            double y = std::max(std::min(at.y() - label_h / 2, r.bottom() - 26 - label_h), r.top() + 24);
+            // Below any pan label it would cover.
+            for (bool moved = true; moved;) {
+                moved = false;
+                for (const QRectF &hit : pan_plates)
+                    if (hit.intersects(QRectF(right - w, y, w, label_h))) {
+                        y = hit.bottom() + 2;
+                        moved = true;
+                    }
+            }
+            if (y < last_tilt + label_h + 2 || y > r.bottom() - 26 - label_h) continue;
+            plate(text, QPointF(right, y), line->kind == PlaneLine::Limit ? g_theme.warning : white, true, 9);
+            last_tilt = y;
+        }
+    }
+    if (s.enabled && s.current && !positioned) {
         plate("POSITION UNAVAILABLE", QPointF(r.right() - 6, r.bottom() - 6 - plate_height()), g_theme.warning, true);
+    } else if (s.enabled && s.measuring) {
+        plate("MEASURING THE VIEW · THE CAMERA TURNS A LITTLE AND BACK", QPointF(r.x() + 6, r.top() + 26), g_theme.warning);
+    } else if (s.enabled && !s.scale && positioned) {
+        plate("VIEW NOT MEASURED AT THIS ZOOM · DOUBLE-CLICK TO MEASURE AND MOVE (Ctrl+Shift+M)",
+              QPointF(r.x() + 6, r.top() + 26), g_theme.warning);
     }
 
     status();
 
     // Hover: guides and the pan and tilt under the pointer.
     if (hover_ && s.enabled && r.contains(*hover_)) {
-        if (auto camera = camera_point(*hover_)) {
+        if (auto camera = camera_point(*hover_, r)) {
             QPointF h = *hover_;
             p.setPen(pen(alpha(white, 89), 0.5));
             p.drawLine(QPointF(h.x(), r.y()), QPointF(h.x(), r.bottom()));
@@ -317,22 +387,24 @@ void PlaneView::paintEvent(QPaintEvent *) {
 }
 
 void PlaneView::aim(QPointF at, bool commit) {
-    if (!state.enabled) return;
-    QRectF r = plot_rect().intersected(range_rect());
+    if (!state.enabled || state.measuring || !state.pan.available || !state.tilt.available) return;
+    QRectF r = plot_rect();
     if (r.isEmpty()) return;
     at = QPointF(std::clamp(at.x(), r.left(), r.right()), std::clamp(at.y(), r.top(), r.bottom()));
-    auto camera = camera_point(at);
-    if (!camera) return;
-    if (commit) {
-        if (state.on_aim_and_move) state.on_aim_and_move(camera->x(), camera->y());
-    } else if (state.on_aim) {
-        state.on_aim(camera->x(), camera->y());
+    if (auto camera = camera_point(at, r)) {
+        if (commit) {
+            if (state.on_aim_and_move) state.on_aim_and_move(camera->x(), camera->y());
+        } else if (state.on_aim) {
+            state.on_aim(camera->x(), camera->y());
+        }
+    } else if (commit && state.on_measure_and_move) {
+        state.on_measure_and_move(picture_point(at, r));
     }
 }
 
 void PlaneView::mouseMoveEvent(QMouseEvent *e) {
     QPointF at = e->position();
-    hover_ = state.enabled && plot_rect().intersected(range_rect()).contains(at) ? std::optional<QPointF>(at) : std::nullopt;
+    hover_ = state.enabled && plot_rect().contains(at) ? std::optional<QPointF>(at) : std::nullopt;
     if (dragging_) aim(at, false);
     update();
 }

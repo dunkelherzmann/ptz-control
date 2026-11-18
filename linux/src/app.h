@@ -64,9 +64,16 @@ struct Reading {
     QString text;
 };
 
+// How wide the picture is at one zoom (ptz_view_scale): with degrees, the tangents of half its width and height;
+// otherwise the pan (tilt) change from its centre to its right (top) edge.
+struct ViewScale {
+    double half_x = 0, half_y = 0;
+};
+
 struct Snapshot {
     std::optional<Reading> pan, tilt, zoom;
     QString move_status;
+    std::optional<ViewScale> view_scale;  // the view measured at this reading's zoom, when there is one
     bool empty() const { return !pan && !tilt && !zoom; }
     bool operator==(const Snapshot &o) const;  // the readings only
 };
@@ -75,6 +82,7 @@ struct CameraInfo {
     QString name, units;
     AxisRange pan, tilt, zoom;
     bool zoom_integer = false;
+    bool degrees = false;  // pan and tilt are angles in degrees (Axis): the picture is projected as the lens sees it
 };
 
 struct LinkResult {
@@ -110,6 +118,15 @@ void link_live_start(CameraLink *link, std::function<void(QImage)> picture, std:
                      std::function<void(LinkResult, QString description)> done);
 // Stops the live video, if any, and waits for its thread.
 void link_live_stop(CameraLink *link, std::function<void()> done = nullptr);
+// Measures how wide the picture is at the current zoom: the camera turns a little on each axis and back, and the
+// core compares still pictures. Takes several seconds.
+void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done);
+// The measured views as text, to keep for this camera, and loading them back.
+void link_saved_views(CameraLink *link, std::function<void(QString)> done);
+void link_load_views(CameraLink *link, const QString &text);
+// Measured views kept per camera in the app's settings, under `key` ("Views axis host:port").
+QString stored_views(const QString &key);
+void store_views(const QString &key, const QString &text);
 void link_web_url(CameraLink *link, std::function<void(LinkResult, QString url, QString notice)> done);
 void link_disconnect(CameraLink *link, std::function<void()> done);
 

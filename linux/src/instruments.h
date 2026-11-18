@@ -12,11 +12,12 @@
 
 void instruments_set_theme(const Theme &theme);
 
-// The camera's live video, or a still picture of its view, with the pan/tilt range plane on top, the size of the
-// picture (pan across, tilt up) and centred on where the camera points: the current position stays at the picture's
-// centre as a crosshair, and the grid, zero axes, range edges and limits (hidden with Show Grid off), the trail, the
-// starting position and the target move under it. Click or drag to aim at a pan and tilt; double-click to aim and
-// move. Only measured positions are drawn: no reading, no marker.
+// The camera's live video, or a still picture of its view, with the pan/tilt plane drawn over it at the picture's own
+// scale: once the view is measured at the current zoom, every point of the picture is the pan and tilt it shows, so
+// the grid, the zero axes, the range's limits, the trail, the starting position and the target sit on what they point
+// at, and the current position is the picture's centre. Click or drag to aim at the pan and tilt under the pointer;
+// double-click to aim and move, which brings that point to the centre. Until the view is measured, a double-click
+// measures it first. Nothing covers the picture but thin lines and small labels.
 struct PlaneState {
     QImage picture;
     QDateTime picture_taken;
@@ -27,11 +28,22 @@ struct PlaneState {
     AxisRange pan, tilt;
     std::optional<Snapshot> current, starting;
     std::optional<double> target_pan, target_tilt;
-    // The target of a move under way: the plane is centred on it until the camera stops, so it doesn't wait for the
-    // readings; the crosshair still shows the readings, closing in on the centre.
-    std::optional<QPointF> heading;  // pan, tilt
+    bool degrees = false;              // pan and tilt are angles in degrees: the plane is projected as the lens sees it
+    std::optional<ViewScale> scale;    // how wide the picture is at the current zoom; none until measured
+    bool measuring = false;            // the camera is turning a little and back to measure its view
     bool enabled = false;
     std::function<void(double, double)> on_aim, on_aim_and_move;
+    std::function<void(QPointF)> on_measure_and_move;  // a double-click before the view is measured: -1…1, up positive
+};
+
+// One of the plane's lines from the core, in picture points (-1…1, up positive).
+struct PlaneLine {
+    enum Kind { Grid, Zero, Limit } kind;
+    bool pan;
+    QString label;
+    bool labelled;
+    QPointF label_at;
+    std::vector<QPointF> points;
 };
 
 class PlaneView : public QWidget {
@@ -50,15 +62,18 @@ protected:
     void leaveEvent(QEvent *) override;
 
 private:
-    QRectF plot_rect() const;   // the picture's frame
-    QRectF range_rect() const;  // where the whole range lies: the picture's size, centred on the heading or current position
-    std::optional<QPointF> view_point(double pan, double tilt) const;    // camera units -> widget pixels
-    std::optional<QPointF> camera_point(QPointF at) const;               // widget pixels -> pan, tilt
+    QRectF plot_rect() const;  // the picture's frame
+    std::optional<ptz_view> view() const;  // where the camera points and how wide the picture is, once both are known
+    std::optional<QPointF> locate(double pan, double tilt, const QRectF &r) const;  // camera units -> widget pixels
+    std::optional<QPointF> camera_point(QPointF at, const QRectF &r) const;         // widget pixels -> pan, tilt
+    const std::vector<PlaneLine> &lines();
     void aim(QPointF at, bool commit);
 
     std::vector<std::optional<QPointF>> trail_;  // camera units; nullopt marks a gap
     std::optional<QPointF> hover_;               // widget pixels
     bool dragging_ = false;
+    std::vector<double> lines_key_;
+    std::vector<PlaneLine> lines_;
 };
 
 struct MeterState {

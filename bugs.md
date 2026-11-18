@@ -14,5 +14,6 @@ Items marked *found in testing* were found while testing other work, not reporte
 - [ ] **Windows: the target row overlaps at the smallest window width** (*found in testing* 2026-11-14, Windows). At about 1020 px wide, Return to Start covers the Move button and the Zoom field; the fields and buttons should shrink or wrap as on the Mac.
 - [ ] **The range plane doesn't match the picture, so a double-click moves the camera somewhere else** (reported 2026-11-18, Axis on the Mac; all platforms share the design). The plane squeezes the camera's whole range (360° of pan, 90° of tilt) into the picture's frame, while the picture shows only the camera's field of view, so a point of the picture and the pan/tilt under it disagree, and the shading beyond the range's edges covers part of the picture. The picture should be a window onto a much larger plane, 0,0 fixed on it, at the picture's own scale, with nothing covering the video. The core now measures the picture's width per zoom (Camera ▸ Measure View, or on the first double-click at a zoom) and draws the plane through a lens model at the picture's own scale.
   - [x] Mac (#11)
-  - [ ] Linux
+  - [x] Linux (#12)
   - [ ] Windows
+- [ ] **`scripts/test-core.sh` doesn't build on Linux** (*found in testing* 2026-11-18, Linux). `tests/core-smoke.c` calls `usleep`, which glibc hides under `-std=c11`, so clang stops with an implicit-declaration error. With `-D_DEFAULT_SOURCE` added (or `#define _DEFAULT_SOURCE` at the top of the test) every check passes.
