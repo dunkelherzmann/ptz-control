@@ -1,4 +1,5 @@
 import AppKit
+import PTZCore
 
 /// Outlined instrument panel with a caption, e.g. "POSITION PLANE // XY".
 final class PanelView: NSView, Themed {
@@ -66,11 +67,12 @@ final class PanelView: NSView, Themed {
     override var wantsUpdateLayer: Bool { true }
 }
 
-/// The camera's live video, or a still picture of its view, with the pan/tilt range plane on top, the size of the
-/// picture (pan across, tilt up) and centred on where the camera points: the current position stays at the picture's
-/// centre as a crosshair, and the grid, zero axes, range edges and limits (hidden with Show Grid off), the trail, the
-/// starting position and the target move under it. Click or drag to aim at a pan and tilt; double-click to aim and move.
-/// Only measured positions are drawn: no reading, no marker.
+/// The camera's live video, or a still picture of its view, with the pan/tilt plane drawn over it at the picture's own
+/// scale: once the view is measured at the current zoom, every point of the picture is the pan and tilt it shows, so
+/// the grid, the zero axes, the range's limits, the trail, the starting position and the target sit on what they
+/// point at, and the current position is the picture's centre. Click or drag to aim at the pan and tilt under the
+/// pointer; double-click to aim and move, which brings that point to the centre. Until the view is measured, a
+/// double-click measures it first. Nothing covers the picture but thin lines and small labels.
 final class PositionPlaneView: NSView, Themed {
     var picture: NSImage? { didSet { needsDisplay = true } }
     var pictureTaken: Date? { didSet { needsDisplay = true } }
@@ -84,21 +86,27 @@ final class PositionPlaneView: NSView, Themed {
 
     var panRange: AxisRange? { didSet { needsDisplay = true } }
     var tiltRange: AxisRange? { didSet { needsDisplay = true } }
+    /// Pan and tilt are angles in degrees: the plane is projected as the lens sees it.
+    var degrees = false { didSet { needsDisplay = true } }
+    /// How wide the picture is at the current zoom; nil until measured.
+    var scale: ViewScale? { didSet { needsDisplay = true } }
+    /// The camera is turning a little and back to measure its view.
+    var measuring = false { didSet { needsDisplay = true } }
     var current: PositionSnapshot? { didSet { recordTrail(); needsDisplay = true } }
-    /// The target of a move under way: the plane is centred on it until the camera stops, so it doesn't wait for the
-    /// readings; the reticle still shows the readings, closing in on the centre.
-    var heading: (pan: Double, tilt: Double)? { didSet { needsDisplay = true } }
     var starting: PositionSnapshot? { didSet { needsDisplay = true } }
     var target: (pan: Double?, tilt: Double?) = (nil, nil) { didSet { needsDisplay = true } }
     var enabled = false { didSet { if !enabled { hover = nil }; needsDisplay = true } }
 
     var onAim: ((Double, Double) -> Void)?
     var onAimAndMove: ((Double, Double) -> Void)?
+    /// A double-click before the view is measured: the point of the picture, −1…1 with up positive.
+    var onMeasureAndMove: ((CGPoint) -> Void)?
 
     private var trail: [CGPoint?] = []  // camera units; nil marks a gap in measurements
     private var hover: CGPoint?
     private var theme = PhosphorTheme.system
     private var tracking: NSTrackingArea?
+    private var linesCache: (key: [Double], lines: [PlaneLine])?
 
     override var isFlipped: Bool { false }
     override var acceptsFirstResponder: Bool { true }
@@ -121,8 +129,7 @@ final class PositionPlaneView: NSView, Themed {
         if trail.count > 120 { trail.removeFirst(trail.count - 120) }
     }
 
-    /// The picture's frame, which the range plane spans: as large as fits, in the picture's shape (16:9 until there is
-    /// one), centred.
+    /// The picture's frame: as large as fits, in the picture's shape (16:9 until there is one), centred.
     private var plot: CGRect {
         let area = bounds.insetBy(dx: 1, dy: 1)
         let size = picture?.size ?? NSSize(width: 16, height: 9)
@@ -132,26 +139,48 @@ final class PositionPlaneView: NSView, Themed {
         return CGRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h).integral
     }
 
-    /// Where the whole range lies: the picture's size, shifted so the target of a move under way, or else the current
-    /// position, is at the picture's centre (the picture itself until there is a position).
-    private var rangeRect: CGRect {
-        let r = plot
-        guard let panRange, let tiltRange, let pan = heading?.pan ?? current?.pan?.value,
-              let tilt = heading?.tilt ?? current?.tilt?.value,
-              let fx = panRange.fraction(pan), let fy = tiltRange.fraction(tilt) else { return r }
-        return CGRect(x: r.midX - r.width * fx, y: r.midY - r.height * fy, width: r.width, height: r.height)
+    /// Where the camera points and how wide the picture is, once both are known.
+    var view: ptz_view? {
+        guard let scale, let pan = current?.pan?.value, let tilt = current?.tilt?.value else { return nil }
+        func range(_ r: AxisRange?) -> ptz_range { r.map { ptz_range(available: 1, min: $0.min, max: $0.max) } ?? ptz_range() }
+        return ptz_view(scale: ptz_view_scale(half_x: scale.halfX, half_y: scale.halfY), degrees: degrees ? 1 : 0,
+                        pan: pan, tilt: tilt, pan_range: range(panRange), tilt_range: range(tiltRange))
     }
 
-    private func viewPoint(pan: Double, tilt: Double) -> CGPoint? {
-        guard let panRange, let tiltRange, let fx = panRange.fraction(pan), let fy = tiltRange.fraction(tilt) else { return nil }
-        let r = rangeRect
-        return CGPoint(x: r.minX + r.width * fx, y: r.minY + r.height * fy)
+    /// A point of the view (points) as a point of the picture, −1…1 with up positive, and back.
+    private func picturePoint(_ p: CGPoint, in r: CGRect) -> CGPoint {
+        CGPoint(x: (p.x - r.midX) / (r.width / 2), y: (p.y - r.midY) / (r.height / 2))
+    }
+    private func viewPoint(_ p: CGPoint, in r: CGRect) -> CGPoint {
+        CGPoint(x: r.midX + p.x * r.width / 2, y: r.midY + p.y * r.height / 2)
     }
 
-    private func cameraPoint(_ point: CGPoint) -> (Double, Double)? {
-        guard let panRange, let tiltRange else { return nil }
-        let r = rangeRect
-        return (panRange.value(at: (point.x - r.minX) / r.width), tiltRange.value(at: (point.y - r.minY) / r.height))
+    private func cameraPoint(_ p: CGPoint, in r: CGRect) -> (Double, Double)? {
+        guard var v = view else { return nil }
+        let q = picturePoint(p, in: r)
+        var pan = 0.0, tilt = 0.0
+        ptz_view_point(&v, Double(q.x), Double(q.y), &pan, &tilt)
+        return (pan, tilt)
+    }
+
+    private func locate(pan: Double, tilt: Double, in r: CGRect) -> CGPoint? {
+        guard var v = view else { return nil }
+        var x = 0.0, y = 0.0
+        guard ptz_view_locate(&v, pan, tilt, &x, &y) != 0 else { return nil }
+        return viewPoint(CGPoint(x: x, y: y), in: r)
+    }
+
+    /// The plane's lines for the current view, worked out by the core and kept until the view changes.
+    private func lines() -> [PlaneLine] {
+        guard var v = view else { return [] }
+        let key = [v.scale.half_x, v.scale.half_y, Double(v.degrees), v.pan, v.tilt, v.pan_range.min, v.pan_range.max,
+                   Double(v.pan_range.available), v.tilt_range.min, v.tilt_range.max, Double(v.tilt_range.available)]
+        if let linesCache, linesCache.key == key { return linesCache.lines }
+        var raw = [ptz_plane_line](repeating: ptz_plane_line(), count: 160)
+        let count = Int(ptz_view_lines(&v, &raw, Int32(raw.count)))
+        let lines = raw.prefix(count).map(PlaneLine.init)
+        linesCache = (key, lines)
+        return lines
     }
 
     override func updateTrackingAreas() {
@@ -164,7 +193,7 @@ final class PositionPlaneView: NSView, Themed {
 
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        hover = plot.intersection(rangeRect).contains(p) && enabled ? p : nil
+        hover = plot.contains(p) && enabled ? p : nil
         needsDisplay = true
     }
 
@@ -177,14 +206,16 @@ final class PositionPlaneView: NSView, Themed {
     override func mouseDragged(with event: NSEvent) { aim(event, commit: false) }
 
     private func aim(_ event: NSEvent, commit: Bool) {
-        guard enabled else { return }
+        guard enabled, !measuring, panRange != nil, tiltRange != nil else { return }
+        let r = plot
         var p = convert(event.locationInWindow, from: nil)
-        let r = plot.intersection(rangeRect)
-        guard !r.isNull else { return }
         p.x = min(max(p.x, r.minX), r.maxX)
         p.y = min(max(p.y, r.minY), r.maxY)
-        guard let (pan, tilt) = cameraPoint(p) else { return }
-        commit ? onAimAndMove?(pan, tilt) : onAim?(pan, tilt)
+        if let (pan, tilt) = cameraPoint(p, in: r) {
+            commit ? onAimAndMove?(pan, tilt) : onAim?(pan, tilt)
+        } else if commit {
+            onMeasureAndMove?(picturePoint(p, in: r))
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -227,89 +258,50 @@ final class PositionPlaneView: NSView, Themed {
         NSColor.white.withAlphaComponent(0.25).setStroke()
         NSBezierPath(rect: r.insetBy(dx: 0.5, dy: 0.5)).stroke()
 
-        guard let panRange, let tiltRange else {
+        guard panRange != nil, tiltRange != nil else {
             if enabled { plate("PAN/TILT RANGE UNAVAILABLE", at: CGPoint(x: r.maxX - 6, y: r.minY + 6), color: theme.warning,
                                alignRight: true) }
             drawStatus(plate, in: r)
             return
         }
 
-        // Everything on the plane stays inside the picture.
+        // Everything on the plane stays inside the picture, on a dark halo that keeps it readable on any picture.
         NSGraphicsContext.current?.saveGraphicsState()
         NSBezierPath(rect: r).addClip()
-        let range = rangeRect
-
-        // Beyond the range's edges the camera can't point: shaded.
-        let outside = NSBezierPath(rect: r)
-        outside.appendRect(range)
-        outside.windingRule = .evenOdd
-        NSColor.black.withAlphaComponent(0.4).setFill()
-        outside.fill()
-
-        // The range plane's grid: tenths of the range, its edges, the zero axes when zero is in range, and the limits.
-        if showGrid {
-            let grid = NSBezierPath()
-            for i in 1...9 {
-                let x = range.minX + range.width * CGFloat(i) / 10, y = range.minY + range.height * CGFloat(i) / 10
-                grid.move(to: CGPoint(x: x, y: range.minY)); grid.line(to: CGPoint(x: x, y: range.maxY))
-                grid.move(to: CGPoint(x: range.minX, y: y)); grid.line(to: CGPoint(x: range.maxX, y: y))
-            }
-            NSColor.white.withAlphaComponent(0.18).setStroke()
-            grid.lineWidth = 0.5
-            grid.stroke()
-            let axes = NSBezierPath()
-            if let zx = viewPoint(pan: 0, tilt: tiltRange.min)?.x {
-                axes.move(to: CGPoint(x: zx, y: range.minY)); axes.line(to: CGPoint(x: zx, y: range.maxY))
-            }
-            if let zy = viewPoint(pan: panRange.min, tilt: 0)?.y {
-                axes.move(to: CGPoint(x: range.minX, y: zy)); axes.line(to: CGPoint(x: range.maxX, y: zy))
-            }
-            NSColor.white.withAlphaComponent(0.45).setStroke()
-            axes.lineWidth = 1
-            axes.stroke()
-            NSColor.white.withAlphaComponent(0.6).setStroke()
-            let edge = NSBezierPath(rect: range.insetBy(dx: 0.5, dy: 0.5))
-            edge.lineWidth = 1
-            edge.stroke()
-        }
-        NSGraphicsContext.current?.restoreGraphicsState()
-        if showGrid {
-            // The limits at the range's edges, where they show: pan along the top, tilt down the right side.
-            func width(_ text: String) -> CGFloat {
-                NSAttributedString(string: text, attributes: [.font: mono(9, .medium)]).size().width + 8
-            }
-            func visible(_ edge: CGFloat, _ low: CGFloat, _ high: CGFloat) -> Bool { edge >= low - 1 && edge <= high + 1 }
-            let low = "PAN \(format(panRange.min))", high = "PAN \(format(panRange.max))"
-            if visible(range.minX, r.minX, r.maxX) {
-                plate(low, at: CGPoint(x: min(range.minX + 4, r.maxX - 4 - width(low)), y: r.maxY - 19), size: 9)
-            }
-            if visible(range.maxX, r.minX, r.maxX) {
-                plate(high, at: CGPoint(x: max(range.maxX - 4 - width(high), r.minX + 4), y: r.maxY - 19), size: 9)
-            }
-            if visible(range.maxY, r.minY, r.maxY) {
-                plate("TILT \(format(tiltRange.max))", at: CGPoint(x: r.maxX - 4, y: max(min(range.maxY - 19, r.maxY - 40), r.minY + 26)),
-                      alignRight: true, size: 9)
-            }
-            if visible(range.minY, r.minY, r.maxY) {
-                plate("TILT \(format(tiltRange.min))", at: CGPoint(x: r.maxX - 4, y: min(max(range.minY + 4, r.minY + 26), r.maxY - 40)),
-                      alignRight: true, size: 9)
-            }
-        }
-
-        // A dark halo keeps the markers readable on any picture.
-        NSGraphicsContext.current?.saveGraphicsState()
         let halo = NSShadow()
         halo.shadowColor = NSColor.black.withAlphaComponent(0.85)
         halo.shadowBlurRadius = 2.5
         halo.shadowOffset = .zero
         halo.set()
-        NSBezierPath(rect: r).addClip()
+
+        // The grid, the zero axes and the range's limits, where they fall in the picture.
+        let lines = enabled ? lines() : []
+        if showGrid {
+            for line in lines where line.points.count > 1 {
+                let path = NSBezierPath()
+                path.move(to: viewPoint(line.points[0], in: r))
+                for point in line.points.dropFirst() { path.line(to: viewPoint(point, in: r)) }
+                switch line.kind {
+                case .grid:
+                    NSColor.white.withAlphaComponent(0.45).setStroke()
+                    path.lineWidth = 0.75
+                case .zero:
+                    NSColor.white.withAlphaComponent(0.7).setStroke()
+                    path.lineWidth = 1
+                case .limit:
+                    theme.warning.withAlphaComponent(0.9).setStroke()
+                    path.lineWidth = 1.5
+                    path.setLineDash([6, 3], count: 2, phase: 0)
+                }
+                path.stroke()
+            }
+        }
 
         // Recent measured path; gaps stay gaps.
         let path = NSBezierPath()
         var penDown = false
         for sample in trail {
-            guard let sample, let p = viewPoint(pan: sample.x, tilt: sample.y) else { penDown = false; continue }
+            guard let sample, let p = locate(pan: sample.x, tilt: sample.y, in: r) else { penDown = false; continue }
             penDown ? path.line(to: p) : path.move(to: p)
             penDown = true
         }
@@ -318,7 +310,7 @@ final class PositionPlaneView: NSView, Themed {
         path.stroke()
 
         // Starting position: hollow square marked S.
-        if let pan = starting?.pan?.value, let tilt = starting?.tilt?.value, let p = viewPoint(pan: pan, tilt: tilt) {
+        if let pan = starting?.pan?.value, let tilt = starting?.tilt?.value, let p = locate(pan: pan, tilt: tilt, in: r) {
             let square = NSBezierPath(rect: CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10))
             theme.start.setStroke()
             square.lineWidth = 1.5
@@ -327,13 +319,10 @@ final class PositionPlaneView: NSView, Themed {
                 .draw(at: CGPoint(x: p.x + 7, y: p.y + 3))
         }
 
-        // Target: dashed crosshair and ring (an axis left blank keeps the current value).
-        let currentPoint = current.flatMap { c -> CGPoint? in
-            guard let pan = c.pan?.value, let tilt = c.tilt?.value else { return nil }
-            return viewPoint(pan: pan, tilt: tilt)
-        }
+        // Target: dashed crosshair and ring (an axis left blank keeps the current value), with a line from the centre.
+        let centre = CGPoint(x: r.midX, y: r.midY)
         if target.pan != nil || target.tilt != nil, let pan = target.pan ?? current?.pan?.value,
-           let tilt = target.tilt ?? current?.tilt?.value, let p = viewPoint(pan: pan, tilt: tilt) {
+           let tilt = target.tilt ?? current?.tilt?.value, let p = locate(pan: pan, tilt: tilt, in: r) {
             theme.target.setStroke()
             let cross = NSBezierPath()
             cross.move(to: CGPoint(x: p.x - 14, y: p.y)); cross.line(to: CGPoint(x: p.x + 14, y: p.y))
@@ -342,34 +331,71 @@ final class PositionPlaneView: NSView, Themed {
             cross.lineWidth = 1.5
             cross.setLineDash([4, 2], count: 2, phase: 0)
             cross.stroke()
-            if let c = currentPoint {
-                let line = NSBezierPath()
-                line.move(to: c); line.line(to: p)
-                line.lineWidth = 1
-                line.setLineDash([2, 3], count: 2, phase: 0)
-                theme.target.withAlphaComponent(0.7).setStroke()
-                line.stroke()
-            }
+            let line = NSBezierPath()
+            line.move(to: centre); line.line(to: p)
+            line.lineWidth = 1
+            line.setLineDash([2, 3], count: 2, phase: 0)
+            theme.target.withAlphaComponent(0.7).setStroke()
+            line.stroke()
         }
 
-        // Current measured position: solid reticle.
-        if let p = currentPoint {
+        // Where the camera points: the picture's centre, a solid reticle once the view is measured.
+        if enabled, current?.pan != nil, current?.tilt != nil {
             theme.primary.setStroke()
-            let ring = NSBezierPath(ovalIn: CGRect(x: p.x - 10, y: p.y - 10, width: 20, height: 20))
+            let ring = NSBezierPath(ovalIn: CGRect(x: centre.x - 10, y: centre.y - 10, width: 20, height: 20))
             ring.lineWidth = 1.5
+            if scale == nil { ring.setLineDash([3, 3], count: 2, phase: 0) }
             ring.stroke()
             theme.primary.setFill()
-            NSBezierPath(ovalIn: CGRect(x: p.x - 4.5, y: p.y - 4.5, width: 9, height: 9)).fill()
+            NSBezierPath(ovalIn: CGRect(x: centre.x - 2.5, y: centre.y - 2.5, width: 5, height: 5)).fill()
         }
         NSGraphicsContext.current?.restoreGraphicsState()
-        if current != nil, currentPoint == nil {
+
+        // The lines' values: pan along the top edge, tilt down the right one, each where its line crosses the edge.
+        if showGrid {
+            var lastPan = -CGFloat.infinity, lastTilt = CGFloat.infinity
+            var panPlates: [CGRect] = []
+            let font = mono(9, .medium)
+            for line in lines.sorted(by: { $0.labelAt.x < $1.labelAt.x }) where line.labelled && line.isPan {
+                let text = line.kind == .limit ? "PAN \(line.label) LIMIT" : "PAN \(line.label)"
+                let w = NSAttributedString(string: text, attributes: [.font: font]).size().width + 8
+                let at = viewPoint(line.labelAt, in: r)
+                let x = min(max(at.x - w / 2, r.minX + 4), r.maxX - 4 - w)
+                guard x > lastPan + 4 else { continue }
+                let y = max(min(at.y, r.maxY) - 19, r.minY + 26)
+                plate(text, at: CGPoint(x: x, y: y), color: line.kind == .limit ? theme.warning : .white, size: 9)
+                panPlates.append(CGRect(x: x, y: y, width: w, height: 16))
+                lastPan = x + w
+            }
+            for line in lines.sorted(by: { $0.labelAt.y > $1.labelAt.y }) where line.labelled && !line.isPan {
+                let text = line.kind == .limit ? "TILT \(line.label) LIMIT" : "TILT \(line.label)"
+                let at = viewPoint(line.labelAt, in: r)
+                var y = min(max(at.y - 8, r.minY + 26), r.maxY - 40)
+                let w = NSAttributedString(string: text, attributes: [.font: font]).size().width + 8
+                // Below any pan label it would cover.
+                while let hit = panPlates.first(where: { $0.intersects(CGRect(x: min(at.x, r.maxX) - 4 - w, y: y, width: w, height: 16)) }) {
+                    y = hit.minY - 18
+                }
+                guard y < lastTilt - 18, y >= r.minY + 26 else { continue }
+                plate(text, at: CGPoint(x: min(at.x, r.maxX) - 4, y: y), color: line.kind == .limit ? theme.warning : .white,
+                      alignRight: true, size: 9)
+                lastTilt = y
+            }
+        }
+        if enabled, current != nil, current?.pan == nil || current?.tilt == nil {
             plate("POSITION UNAVAILABLE", at: CGPoint(x: r.maxX - 6, y: r.minY + 6), color: theme.warning, alignRight: true)
+        } else if enabled, measuring {
+            plate("MEASURING THE VIEW · THE CAMERA TURNS A LITTLE AND BACK", at: CGPoint(x: r.minX + 6, y: r.maxY - 42),
+                  color: theme.warning)
+        } else if enabled, scale == nil, current?.pan != nil {
+            plate("VIEW NOT MEASURED AT THIS ZOOM · DOUBLE-CLICK TO MEASURE AND MOVE (⇧⌘M)",
+                  at: CGPoint(x: r.minX + 6, y: r.maxY - 42), color: theme.warning)
         }
 
         drawStatus(plate, in: r)
 
         // Hover: guides and the pan and tilt under the pointer.
-        if let hover, let (pan, tilt) = cameraPoint(hover) {
+        if let hover, let (pan, tilt) = cameraPoint(hover, in: r) {
             let guide = NSBezierPath()
             guide.move(to: CGPoint(x: hover.x, y: r.minY)); guide.line(to: CGPoint(x: hover.x, y: r.maxY))
             guide.move(to: CGPoint(x: r.minX, y: hover.y)); guide.line(to: CGPoint(x: r.maxX, y: hover.y))
@@ -398,6 +424,30 @@ final class PositionPlaneView: NSView, Themed {
         f.dateFormat = "HH:mm:ss"
         return f
     }()
+}
+
+/// One of the plane's lines from the core, in picture points (−1…1, up positive).
+struct PlaneLine {
+    enum Kind { case grid, zero, limit }
+    let kind: Kind
+    let isPan: Bool
+    let label: String
+    let labelled: Bool
+    let labelAt: CGPoint
+    let points: [CGPoint]
+
+    init(_ line: ptz_plane_line) {
+        let k = Int(line.kind)
+        kind = k == PTZ_LINE_PAN_LIMIT || k == PTZ_LINE_TILT_LIMIT ? .limit
+            : k == PTZ_LINE_PAN_ZERO || k == PTZ_LINE_TILT_ZERO ? .zero : .grid
+        isPan = k == PTZ_LINE_PAN || k == PTZ_LINE_PAN_ZERO || k == PTZ_LINE_PAN_LIMIT
+        label = withUnsafeBytes(of: line.label) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
+        labelled = line.labelled != 0
+        labelAt = CGPoint(x: line.label_x, y: line.label_y)
+        let xs = withUnsafeBytes(of: line.x) { Array($0.bindMemory(to: Double.self)) }
+        let ys = withUnsafeBytes(of: line.y) { Array($0.bindMemory(to: Double.self)) }
+        points = (0..<Int(line.count)).map { CGPoint(x: xs[$0], y: ys[$0]) }
+    }
 }
 
 /// Horizontal travel meter: fill = position within the advertised limits.

@@ -3,6 +3,7 @@
 #include "internal.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -18,6 +19,19 @@ struct ptz_session {
     std::string camera_user;
     double timeout = 15;
     std::map<int, int> video_forwards;  // camera port -> local port, so restarting the video adds no forwards
+    std::vector<ptz::ViewScale> scales;          // measured views, one per zoom
+    std::mutex scales_mutex;                     // read from any thread, written by the measuring one
+
+    bool same_zoom(const ptz::ViewScale &v, bool available, double zoom) const {
+        const ptz::Range &range = camera->zoom_range;
+        double slack = range.available ? (range.max - range.min) * 0.005 : 1e-9;
+        return v.zoom_available == available && (!available || std::fabs(v.zoom - zoom) <= slack);
+    }
+    void keep(const ptz::ViewScale &measured) {
+        std::lock_guard<std::mutex> lock(scales_mutex);
+        std::erase_if(scales, [&](const ptz::ViewScale &v) { return same_zoom(v, measured.zoom_available, measured.zoom); });
+        scales.push_back(measured);
+    }
 
     std::string redact(std::string message) const {
         for (const std::string *secret : {&camera_password, &ssh_password}) {
@@ -147,6 +161,7 @@ extern "C" void ptz_info_get(ptz_session *session, ptz_info *info) {
     info->tilt = export_range(session->camera->tilt_range);
     info->zoom = export_range(session->camera->zoom_range);
     info->zoom_integer = session->camera->zoom_integer();
+    info->degrees = session->camera->degrees();
 }
 
 extern "C" int ptz_picture(ptz_session *session, unsigned char **data, size_t *size, int *width, int *height,
@@ -326,3 +341,66 @@ extern "C" int ptz_parse_number(const char *text, double *value) {
 #endif
 
 extern "C" const char *ptz_core_version(void) { return PTZ_VERSION; }
+
+extern "C" int ptz_measure_view(ptz_session *session, ptz_grey_fn grey, void *context, ptz_view_scale *scale,
+                                char *error, size_t error_size) {
+    *scale = {};
+    return guarded(session, error, error_size, [&] {
+        if (!ptz_link_alive(session)) throw ptz::Error("SSH connection closed; the view was not measured");
+        ptz::ViewScale measured = ptz::measure_view(*session->camera, session->hooks,
+                                                    [&](const std::string &bytes, unsigned char *pixels, int w, int h) {
+            return grey(context, reinterpret_cast<const unsigned char *>(bytes.data()), bytes.size(), pixels, w, h) != 0;
+        });
+        session->keep(measured);
+        *scale = {measured.half_x, measured.half_y};
+    });
+}
+
+extern "C" int ptz_view_scale_at(ptz_session *session, const ptz_position *position, ptz_view_scale *scale) {
+    *scale = {};
+    std::lock_guard<std::mutex> lock(session->scales_mutex);
+    for (const ptz::ViewScale &v : session->scales)
+        if (session->same_zoom(v, position->zoom.available != 0, position->zoom.value)) {
+            *scale = {v.half_x, v.half_y};
+            return 1;
+        }
+    return 0;
+}
+
+extern "C" size_t ptz_view_scales_save(ptz_session *session, char *text, size_t text_size) {
+    std::string out;
+    {
+        std::lock_guard<std::mutex> lock(session->scales_mutex);
+        char item[160];
+        for (const ptz::ViewScale &v : session->scales) {
+            std::snprintf(item, sizeof item, "%s%d:%.10g:%.10g:%.10g", out.empty() ? "" : ";", v.zoom_available ? 1 : 0,
+                          v.zoom, v.half_x, v.half_y);
+            out += item;
+        }
+    }
+    copy(text, text_size, out);
+    return out.size() + 1;
+}
+
+extern "C" void ptz_view_scales_load(ptz_session *session, const char *text) {
+    if (!text) return;
+    std::string all = text;
+    size_t at = 0;
+    while (at <= all.size()) {
+        size_t end = all.find(';', at);
+        if (end == std::string::npos) end = all.size();
+        std::string item = all.substr(at, end - at);
+        int available = 0;
+        double zoom = 0, half_x = 0, half_y = 0;
+        if (std::sscanf(item.c_str(), "%d:%lf:%lf:%lf", &available, &zoom, &half_x, &half_y) == 4 &&
+            std::isfinite(half_x) && std::isfinite(half_y) && half_x != 0 && half_y != 0) {
+            ptz::ViewScale v;
+            v.zoom_available = available != 0;
+            v.zoom = zoom;
+            v.half_x = half_x;
+            v.half_y = half_y;
+            session->keep(v);
+        }
+        at = end + 1;
+    }
+}
