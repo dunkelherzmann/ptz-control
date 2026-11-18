@@ -81,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         add(camera, "Refresh Position", #selector(refresh), "r")
         add(camera, "Pause Auto-Refresh", #selector(pause), "p")
         add(camera, "Refresh Picture", #selector(refreshPicture), "r", [.command, .shift])
+        add(camera, "Measure View", #selector(measureView), "m", [.command, .shift])
         camera.addItem(.separator())
         add(camera, "Open Camera Web Interface", #selector(web), "l")
         camera.addItem(.separator())
@@ -125,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             item.title = console.paused ? "Resume Auto-Refresh" : "Pause Auto-Refresh"
             return state == .connected
         case #selector(refreshPicture): return state == .connected
+        case #selector(measureView): return console.canMeasureView
         case #selector(toggleGrid):
             item.state = console.showGrid ? .on : .off
             return true
@@ -143,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func refresh() { console.refreshNow(nil) }
     @objc private func pause() { console.togglePause(nil) }
     @objc private func refreshPicture() { console.refreshPicture(nil) }
+    @objc private func measureView() { console.measureViewAction(nil) }
     @objc private func toggleGrid() { console.toggleGrid(nil) }
     @objc private func web() { console.openWebInterface(nil) }
     @objc private func manageLogins() { ManageLoginsWindowController.shared.present() }
@@ -176,8 +179,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         • Axis: pan/tilt in degrees; zoom is an integer in the native range.
 
         Leave a target field blank (or type x) to keep that axis unchanged.
-        The camera picture shows the camera's live video, or a still picture when the video can't play. Click on it to aim at that pan and tilt of the camera's range (it fills the target fields); double-click (or Move) to move there. A still picture is renewed once the camera stops. Refresh Picture (⇧⌘R) takes a new picture, or restarts the live view.
-        The plane over the picture is the camera's whole pan/tilt range, centred on where the camera points: the reticle at the picture's centre is the current position, and the grid, the zero axes (pan 0, tilt 0), the range's edges and limits, the trail of recent positions, the starting position (S) and the target move under it as the camera moves. Show Grid (⌘') shows or hides the grid, axes and limits.
+        The camera picture shows the camera's live video, or a still picture when the video can't play. A still picture is renewed once the camera stops. Refresh Picture (⇧⌘R) takes a new picture, or restarts the live view.
+        The pan/tilt plane is drawn over the picture at the picture's own scale, so every point of the picture is the pan and tilt it shows. The picture's centre is where the camera points; the grid, the zero axes (pan 0, tilt 0), the range's limits (dashed), the trail of recent positions, the starting position (S) and the target sit on what they point at. Click on the picture to aim at the pan and tilt under the pointer (it fills the target fields); double-click (or Move) to move there, which brings that point to the centre. Show Grid (⌘') shows or hides the grid, axes and limits.
+        The app learns how wide the picture is by measuring it: Measure View (⇧⌘M) turns the camera a little on each axis and back (a few seconds). Each zoom is measured once and remembered for that camera; at a zoom not yet measured, double-clicking the picture measures it first, then moves.
         Drag along a travel meter to aim that axis alone, double-click it to aim and move.
 
         Starting coordinates are the first reading after connecting and stay fixed. Return to Start (⌘B) sends an absolute move there.

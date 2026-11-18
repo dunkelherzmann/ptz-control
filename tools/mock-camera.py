@@ -4,7 +4,10 @@
 Speaks ONVIF (SOAP 1.2, WS-Security UsernameToken digest is verified) and
 Axis VAPIX ptz.cgi (HTTP Digest is verified) on one port, and serves a tiny
 web page at /. Positions glide toward each AbsoluteMove target. Pictures of a
-drawn scene (PNG, standard library only) follow the camera's position and zoom.
+drawn scene (PNG, standard library only) follow the camera's position and zoom;
+an Axis camera's are drawn as a lens sees a sphere around it (a straight-line
+projection, like a real camera), ONVIF's linearly in its units. --plain-png
+sends uncompressed pictures a test can decode by itself.
 Live video comes over RTSP (TCP interleaved, Digest sign-in) on --rtsp-port,
 looping a short H.264 or H.265 clip from tests/fixtures.
 
@@ -13,6 +16,7 @@ looping a short H.264 or H.265 clip from tests/fixtures.
 import argparse
 import base64
 import hashlib
+import math
 import os
 import re
 import socket
@@ -32,6 +36,7 @@ parser.add_argument("--password", default="secret")
 parser.add_argument("--rtsp-port", type=int, default=0, help="default: --port + 100")
 parser.add_argument("--video", choices=("h264", "h265", "none"), default="h264",
                     help="none: the stream address leads nowhere, as on a camera whose video can't be reached")
+parser.add_argument("--plain-png", action="store_true", help="uncompressed pictures, for tests that decode them")
 args = parser.parse_args()
 args.rtsp_port = args.rtsp_port or args.port + 100
 
@@ -80,18 +85,30 @@ def onvif_view():
 
 
 def axis_view():
-    """Half the view's width and height in degrees at the current zoom."""
-    half = 30 * (1 - 0.9 * (axis["zoom"] - 1) / 9998)
+    """The tangents of half the view's width and height at the current zoom (60 degrees wide at zoom 1)."""
+    half = math.tan(math.radians(30 * (1 - 0.9 * (axis["zoom"] - 1) / 9998)))
     return half, half * PICTURE_H / PICTURE_W
 
 
-def picture(pan, tilt, half_w, half_h, scale):
-    """A PNG of the drawn scene around (pan, tilt); scale turns camera units into scene units."""
+def sphere_point(pan, tilt, tx, ty):
+    """Pan and tilt (degrees) seen at tangents (tx, ty) off the axis of a camera pointing at (pan, tilt)."""
+    p, t = math.radians(pan), math.radians(tilt)
+    f = (math.cos(t) * math.sin(p), math.cos(t) * math.cos(p), math.sin(t))
+    r = (math.cos(p), -math.sin(p), 0.0)
+    u = (-math.sin(t) * math.sin(p), -math.sin(t) * math.cos(p), math.cos(t))
+    x, y, z = (f[i] + tx * r[i] + ty * u[i] for i in range(3))
+    return math.degrees(math.atan2(x, y)), math.degrees(math.atan2(z, math.hypot(x, y)))
+
+
+def picture(pan, tilt, half_w, half_h, scale, sphere=False):
+    """A PNG of the drawn scene around (pan, tilt); scale turns camera units into scene units. With sphere, half_w
+    and half_h are tangents and the scene is projected as a lens sees it."""
     rows = bytearray()
     spacing = 0.08  # landmarks: a lattice of coloured discs, each colour telling where it is
     for py in range(PICTURE_H):
         rows.append(0)
-        v = (tilt + (1 - 2 * (py + 0.5) / PICTURE_H) * half_h) * scale
+        y = 1 - 2 * (py + 0.5) / PICTURE_H
+        v = (tilt + y * half_h) * scale
         if v > 0:
             base = (60, 110 + int(min(v, 0.6) * 160), 190)
         else:
@@ -99,7 +116,15 @@ def picture(pan, tilt, half_w, half_h, scale):
         row_v = round(v / spacing)
         dv = v - row_v * spacing
         for px in range(PICTURE_W):
-            u = (pan + (2 * (px + 0.5) / PICTURE_W - 1) * half_w) * scale
+            x = 2 * (px + 0.5) / PICTURE_W - 1
+            if sphere:
+                sp, st = sphere_point(pan, tilt, x * half_w, y * half_h)
+                u, v = sp * scale, st * scale
+                row_v = round(v / spacing)
+                dv = v - row_v * spacing
+                base = (60, 110 + int(min(v, 0.6) * 160), 190) if v > 0 else (55, 95 + int(max(v, -0.6) * 60), 60)
+            else:
+                u = (pan + x * half_w) * scale
             col_u = round(u / spacing)
             du = u - col_u * spacing
             d2 = du * du + dv * dv
@@ -116,7 +141,7 @@ def picture(pan, tilt, half_w, half_h, scale):
     def chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
     header = struct.pack(">IIBBBBB", PICTURE_W, PICTURE_H, 8, 2, 0, 0, 0)
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b"")
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(rows), 0 if args.plain_png else 6)) + chunk(b"IEND", b"")
 Z_SPACE = "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"
 
 
@@ -262,7 +287,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     glide(axis, ("pan", "tilt", "zoom"))
                     half_w, half_h = axis_view()
-                    args_ = (axis["pan"], axis["tilt"], half_w, half_h, 1 / 180)
+                    args_ = (axis["pan"], axis["tilt"], half_w, half_h, 1 / 180, True)
             print("mock: picture", url.path)
             return self.reply_bytes(200, picture(*args_), "image/png")
         with lock:
@@ -279,6 +304,7 @@ class Handler(BaseHTTPRequestHandler):
                     body = "Error: no parameters"
                 else:
                     axis.update(start=dict(axis), target=target, since=time.time())
+                    print("mock: axis absolute move " + " ".join(f"{k}={v:.4f}" for k, v in target.items()))
                     body = ""
         return self.reply(200, body, "text/plain")
 

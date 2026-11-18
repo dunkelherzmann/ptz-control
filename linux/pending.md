@@ -12,7 +12,7 @@ of requests and releases.
 
 ## Bugs to fix
 
-No open bugs in `bugs.md`.
+- [ ] **The plane at the picture's own scale** (bugs.md, 2026-11-18). Draw the pan/tilt plane over the picture through the core's `ptz_view_point`, `ptz_view_locate` and `ptz_view_lines` once the view is measured, with nothing shading the picture; Camera ▸ Measure View (Ctrl+Shift+M) with a grey decoder for `ptz_measure_view`; a double-click before the view is measured measures it first; measured views remembered per camera; position read every 0.4 s while a move plays in the live view; the run that measures an Axis camera's view and moves to a double-clicked point. (I4, I13, T6)
 
 - [ ] **System doesn't follow a light/dark switch while the app runs.** It reads the desktop's setting once, at
   launch; the Mac and Windows versions follow the switch. Listen for the portal's color-scheme change and reapply.

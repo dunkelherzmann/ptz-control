@@ -24,7 +24,9 @@ the rest as a gap.
 ## 1. Core
 
 - **C1 One C interface.** `core/include/ptzcore.h` is the only thing the hosts call: connect, camera info, read
-  position, move, stop, take a picture, play the live video, find the web interface, check the link, close. All calls block. Each host runs them on one
+  position, move, stop, take a picture, play the live video, measure the camera's view, turn points of the picture
+  into pan and tilt and back and work out the plane's lines over it (`ptz_view_point`, `ptz_view_locate`,
+  `ptz_view_lines`, so every host draws the same plane), find the web interface, check the link, close. All calls block. Each host runs them on one
   worker thread or serial queue per session, never on the UI thread, so camera requests never overlap.
 - **C2 Callbacks.** While connecting, the core can ask the host to log a line, to ask the operator for text (secret or
   not) and to ask a yes/no question. The host shows these as dialogs and the core thread waits for the answer.
@@ -137,9 +139,9 @@ the rest as a gap.
 - **I1 Header**: "No camera link", "Connecting to <address>…", or "<address> · <camera name>" with the units below it.
 - **I2 Status chip**: OFFLINE, LINKING, CLOSING, REQUEST (a request is running), READS PAUSED, POSITION OK or
   NO POSITION, with a green, orange or muted lamp.
-- **I3 Camera picture.** The plane, captioned "Camera picture // pan/tilt range — click to aim, double-click to move
-  there", shows the camera's live video, or a still picture of its view when there's no video, as large as fits and in
-  the picture's shape, with the camera's whole pan/tilt range drawn on top (I4). The window grows or shrinks in height
+- **I3 Camera picture.** The plane, captioned "Camera picture // pan/tilt at the picture's scale — click to aim,
+  double-click to move there", shows the camera's live video, or a still picture of its view when there's no video, as large as fits and in
+  the picture's shape, with the pan/tilt plane drawn on top at the picture's own scale (I4). The window grows or shrinks in height
   to the picture's shape, keeping its top edge and staying on the screen.
   - **Live view.** On connecting, a still picture is taken, then the live video (V7) starts and replaces it once its
     first frame is decoded, logged as "Live view: H.264 over RTSP" and "Live view playing: 1920 × 1080". The plate in
@@ -155,22 +157,36 @@ the rest as a gap.
     new picture of the camera's view now, or restart the live view (⇧⌘R)") restarts the live view while it plays
     ("Restarting the live view"); otherwise it takes a new picture and tries the live view again.
   - Disconnecting stops the video before the session closes.
-- **I4 Range plane over the picture.** The camera's whole pan/tilt range, in camera units, is drawn the size of the
-  picture (pan across, tilt up) and centred on where the camera points: the current position stays at the picture's
-  centre, where its width and height meet, as a crosshair, and the plane moves under it as the camera moves, while
-  pan 0, tilt 0 stays a fixed point of the range. When a move is accepted the plane centres on its target at once (an
-  axis left unchanged keeps its reading), without waiting for the camera's readings, and the reticle, which shows the
-  readings, closes in on the centre as the camera turns; once the camera stops (as for a new picture, I3) or Stop is
-  accepted, the plane centres on the readings again, which corrects a move that stopped short. Beyond the range's edges the picture is shaded. On the plane: a
-  10 × 10 grid, the range's edges, the zero axes when zero is in range, and the limits on plates at the edges where
-  they show ("PAN −1" and "PAN 1" along the top, "TILT 1" and "TILT −1" down the right side); until there is a
-  position the range spans the picture; the last 120 measured
-  positions as a trail (gaps stay gaps); the starting position as a square marked **S**; the target (from the target
-  fields, a blank axis keeping its current value) as a dashed crosshair and ring, with a dotted line from the current
-  position; and the current measured position as a solid reticle. The markers have a dark halo, so they read on any
-  picture. Pointing shows guide lines and "PAN … TILT …" under the pointer. Click or drag to aim (fills the pan and
-  tilt targets, within the ranges); double-click (or Move, ⌘↩) to aim and move. Without ranges a plate reads
-  "PAN/TILT RANGE UNAVAILABLE" and clicks are ignored; with no measured position, "POSITION UNAVAILABLE".
+- **I4 Pan/tilt plane over the picture.** Once the camera's view is measured at the current zoom (I13), the pan/tilt
+  plane is drawn over the picture at the picture's own scale: every point of the picture is the pan and tilt it shows,
+  so the plane is far larger than the picture, which is a window onto it, and pan 0, tilt 0 is a fixed point of it.
+  With pan and tilt in degrees (Axis) the plane is projected as the lens sees it: lines of equal pan run straight
+  through the zenith and lines of equal tilt curve, as the horizon does in the picture; in the camera's own units
+  (ONVIF) it is drawn linearly. The picture's centre is where the camera points, marked with a reticle (dashed until
+  the view is measured). The plane follows the camera's readings, which are read every 0.4 s while a move plays in the
+  live view. On the plane: a grid at a round step for about eight cells across the picture (1, 2 or 5 times a power of
+  ten; the same step for pan and tilt in degrees), the zero axes (pan 0, tilt 0) brighter, and the range's limits as
+  dashed orange lines; each line's value on a plate where it crosses the top edge (pan) or the right edge (tilt), or at
+  its end when it stops inside the picture at a limit ("PAN 20", "TILT −10", "TILT 10 LIMIT"); the last 120 measured
+  positions as a trail (gaps stay gaps); the starting position as a square marked **S**; and the target (from the
+  target fields, a blank axis keeping its current value) as a dashed crosshair and ring, with a dotted line from the
+  centre. Nothing shades the picture, and lines and markers have a dark halo, so they read on any picture. Pointing
+  shows guide lines and "PAN … TILT …" under the pointer. Click or drag to aim at the pan and tilt under the pointer
+  (fills the pan and tilt targets, within the ranges); double-click (or Move, ⌘↩) to aim and move, which brings that
+  point of the picture to its centre. Until the view is measured a plate reads "VIEW NOT MEASURED AT THIS ZOOM ·
+  DOUBLE-CLICK TO MEASURE AND MOVE (⇧⌘M)", only the reticle shows, and a double-click measures the view first, then
+  moves to the point's pan and tilt as they were when it was clicked. Without ranges a plate reads "PAN/TILT RANGE
+  UNAVAILABLE" and clicks are ignored; with no measured position, "POSITION UNAVAILABLE".
+- **I13 Measure View** (Camera ▸ Measure View, ⇧⌘M; enabled when connected to a camera with pan and tilt ranges and
+  readings) learns how wide the picture is at the current zoom. It logs "Measuring the camera's view: it turns a
+  little on each axis and back (a few seconds)…", and a plate reads "MEASURING THE VIEW · THE CAMERA TURNS A LITTLE AND
+  BACK" while clicks are ignored. The core turns the camera a little on each axis (a small turn for a rough scale,
+  then one that moves the scene about 0.4 of the half picture), compares still pictures, and turns it back; for a
+  camera in degrees it then fits the width and height by tracing one picture onto the other through the lens, since
+  points away from the centre move further than the centre does. The result is logged as "View measured: the picture
+  spans 60.0° × 36.1° at zoom 1" (or "±0.25 pan × ±0.14 tilt" in the camera's own units), or "Measuring the view
+  failed: <reason>" in red (a plain or changing scene, no readings). Each zoom is measured once and remembered for
+  that camera (vendor, address and port) between sessions; at another zoom the view is unmeasured until measured.
 - **I12 Show Grid** (View ▸ Show Grid, ⌘', and the grid button left of ⟳ in the plane's caption, hover text "Show Grid:
   show or hide the pan/tilt grid, zero axes and range limits over the picture (⌘')") shows or hides the grid, the zero
   axes and the limit plates; the markers always show. On by default, ticked in the menu while on, and remembered.
@@ -235,13 +251,13 @@ the rest as a gap.
   Manage Logins' top row, on every platform, holds every menu, each as a submenu, and opens right-aligned under the
   button: PTZ Control (About, Hide, Hide Others, Show All, Quit), Edit (Undo, Redo, Cut, Copy, Paste, Select All),
   Camera (Connect, Disconnect, Move to Target, Return to Starting Coordinates, Stop Motion, Refresh Position, Pause
-  Auto-Refresh, Refresh Picture, Open Camera Web Interface, Manage Logins), View (Show Grid, Phosphor), Window (Minimize, Zoom, Close), Help
+  Auto-Refresh, Refresh Picture, Measure View, Open Camera Web Interface, Manage Logins), View (Show Grid, Phosphor), Window (Minimize, Zoom, Close), Help
   (Coordinate Help). Camera commands are enabled only when they can act. Hover text: "Main Menu: every command of PTZ
   Control, with its shortcut"; VoiceOver reads "Main Menu". On the Mac the menu bar keeps only the app menu macOS
   always shows (About, Services, Hide, Hide Others, Show All, Quit), so on a wide screen no command needs a trip to the
   top of the screen. Every shortcut works from any window, Cut, Copy and Paste in text fields included.
-- **H2 Coordinate Help** (⌘?) explains absolute targets, the units per vendor, blank or `x`, the range plane over the
-  picture and aiming on it and on the meters, starting coordinates, the 2 s refresh, Stop and the web interface.
+- **H2 Coordinate Help** (⌘?) explains absolute targets, the units per vendor, blank or `x`, the pan/tilt plane over
+  the picture at its own scale, measuring the view, and aiming on the picture and on the meters, starting coordinates, the 2 s refresh, Stop and the web interface.
 - **H3 About** shows the name, the version, "PTZ Coordinates Controller", "ONVIF · Axis VAPIX · Local or SSH",
   "By dunkelherzmann" and a link to the project on GitHub.
 
@@ -328,7 +344,10 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
   camera, for ONVIF and Axis: connect, read, move, a tilt-only move, out-of-range and fractional-zoom refusals, stop,
   the web address, number parsing and address checks, and the live video: H.264 from both vendors and H.265 from a
   second mock camera, each starting with a key frame that carries its parameter sets, in order, and silent once
-  stopped. It needs clang and libcurl (macOS or Linux).
+  stopped. It also turns points of the picture into pan and tilt and back (round trips, behind the camera, past pan
+  180), checks the plane's lines, and measures the view of a mock camera sending plain pictures, ONVIF (linear) and
+  Axis (through a lens, at two positions), within 1.5% of the width the mock draws, kept for that zoom only, turned
+  back afterwards, and saved and loaded as text.
 - **T3 SSH test.** `scripts/test-ssh.sh` starts a throwaway user-level `sshd` on 127.0.0.1:2222 with a
   passphrase-protected key and runs `tests/ssh-smoke.c` through it: tunnel, askpass relay, read, move, web address,
   live video.
@@ -342,7 +361,9 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
   checks that the camera moved. Then, against a mock camera without video, it checks the still pictures: one on
   connecting, a move to the pan and tilt aimed at on the range plane, and a new picture once the camera stops. Last, it
   checks the live view plays the mock camera's H.264 video, that aiming on the plane over it moves the camera, and that
-  Show Grid turned off is remembered. It saves pictures of the window, of Manage Logins, of
+  Show Grid turned off is remembered. A last run double-clicks a point of an Axis camera's picture before its view is
+  measured and checks that the view is measured and remembered and that the camera moves to that point's pan and tilt
+  (the mock draws its Axis pictures through a lens, 60° wide). It saves pictures of the window, of Manage Logins, of
   the Edit form and of the live view. `linux/scripts/test.sh` does the same with the installed Flatpak (T5).
 - **T7 Windows test.** `windows\scripts\test.ps1` builds and runs `tests/vault-smoke.c` with MSVC, then runs
   `dist\PTZControl.exe` twice as the Mac test does, with its own registry key (`PTZ_SETTINGS_KEY`) and vault file,

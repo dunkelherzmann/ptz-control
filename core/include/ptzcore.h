@@ -71,6 +71,7 @@ typedef struct {
     char units[256];
     ptz_range pan, tilt, zoom;
     int zoom_integer;         /* Axis zoom accepts integers only */
+    int degrees;              /* pan and tilt are angles in degrees (Axis); else the camera's own units */
 } ptz_info;
 
 typedef struct {
@@ -129,6 +130,67 @@ ptz_live *ptz_live_start(ptz_session *session, const ptz_live_callbacks *callbac
 /* Stops the video and waits for its thread; callbacks have ended when it returns. Call it
  * before ptz_close, from any thread except the stream's own. */
 void ptz_live_stop(ptz_live *live);
+
+/* ---- The camera's view ------------------------------------------------------
+ * How wide the picture is, measured at one zoom, so a point of the picture becomes the pan and
+ * tilt the camera would point at to bring it to the centre, and the pan/tilt plane can be drawn
+ * over the picture at the picture's own scale. Points of the picture run from -1 at its left and
+ * bottom edges to 1 at its right and top edges.
+ *
+ * With pan and tilt in degrees (info.degrees), half_x and half_y are the tangents of half the
+ * picture's horizontal and vertical angle, and the plane is projected as the lens sees it (a
+ * straight-line picture of a sphere around the camera). Otherwise they are the pan (tilt) change
+ * from the picture's centre to its right (top) edge, and the plane is drawn linearly. */
+typedef struct {
+    double half_x, half_y;
+} ptz_view_scale;
+/* Decodes a JPEG or PNG picture into exactly width x height grey pixels (0-255, top row first), stretching it to fit.
+ * Returns 1 on success. The host supplies it: the core has no image decoder. */
+typedef int (*ptz_grey_fn)(void *context, const unsigned char *data, size_t size, unsigned char *grey, int width,
+                           int height);
+/* Measures the view at the current zoom: turns the camera a little on each axis, compares still pictures, and turns
+ * it back. Takes several seconds. The session keeps the result for that zoom. */
+int ptz_measure_view(ptz_session *session, ptz_grey_fn grey, void *context, ptz_view_scale *scale, char *error,
+                     size_t error_size);
+/* The view measured at the zoom of `position` (its zoom reading, or the only one when there is none); 0 when none. */
+int ptz_view_scale_at(ptz_session *session, const ptz_position *position, ptz_view_scale *scale);
+/* The session's measured views as one line of text, for the host to keep per camera between sessions, and loading
+ * that text back (unreadable parts are skipped). save returns the length the text needs. */
+size_t ptz_view_scales_save(ptz_session *session, char *text, size_t text_size);
+void ptz_view_scales_load(ptz_session *session, const char *text);
+
+/* Where the camera points and how wide its picture is. */
+typedef struct {
+    ptz_view_scale scale;
+    int degrees;              /* info.degrees */
+    double pan, tilt;         /* the picture's centre */
+    ptz_range pan_range, tilt_range;
+} ptz_view;
+/* The pan and tilt at the point (x, y) of the picture: where to move so it comes to the centre. Pan is kept within
+ * the pan range when a full turn brings it there; neither is clamped. */
+void ptz_view_point(const ptz_view *view, double x, double y, double *pan, double *tilt);
+/* The point of the picture showing (pan, tilt); 0 when it lies behind the camera (or the scale is unusable). The
+ * point may be outside the picture. */
+int ptz_view_locate(const ptz_view *view, double pan, double tilt, double *x, double *y);
+
+/* The plane's lines over the picture, as polylines in picture points: a grid at a round step chosen for the
+ * picture's width, the zero axes, and the range's limits. Lines run a little past the picture's edges; the host
+ * clips them. */
+enum { PTZ_LINE_PAN = 0, PTZ_LINE_TILT, PTZ_LINE_PAN_ZERO, PTZ_LINE_TILT_ZERO, PTZ_LINE_PAN_LIMIT, PTZ_LINE_TILT_LIMIT };
+#define PTZ_LINE_POINTS 40
+typedef struct {
+    int kind;                 /* PTZ_LINE_*: lines of constant pan or constant tilt */
+    double value;
+    char label[24];           /* the value, with as many decimals as the step needs */
+    int labelled;             /* where to label the line: a pan line where it crosses the top edge (label_y = 1),
+                                 a tilt line the right edge (label_x = 1), or a line that ends inside the picture
+                                 at its top (right) end */
+    double label_x, label_y;
+    int count;
+    double x[PTZ_LINE_POINTS], y[PTZ_LINE_POINTS];
+} ptz_plane_line;
+/* Fills up to `max` lines; returns how many. */
+int ptz_view_lines(const ptz_view *view, ptz_plane_line *lines, int max);
 
 /* Probes HTTP, then HTTPS, without sending credentials. Fills a URL the host
  * may open in the browser, plus an optional notice (e.g. self-signed cert). */

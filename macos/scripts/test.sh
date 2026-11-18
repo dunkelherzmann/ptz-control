@@ -25,8 +25,8 @@ python3 -u "$ROOT/tools/mock-camera.py" --port "$PORT" >"$WORK/mock.log" 2>&1 &
 MOCK=$!
 sleep 1
 
-settings() {  # camera username [port]
-    printf '{"route":0,"vendor":0,"cameraHost":"127.0.0.1","cameraPort":%s,"cameraUser":"%s","httpsPort":443,"profile":0,"timeout":15,"sshHost":"","sshUser":"","sshPort":22,"sshIdentity":""}' "${2:-$PORT}" "$1" \
+settings() {  # camera username [port] [vendor: 0 ONVIF, 1 Axis]
+    printf '{"route":0,"vendor":%s,"cameraHost":"127.0.0.1","cameraPort":%s,"cameraUser":"%s","httpsPort":443,"profile":0,"timeout":15,"sshHost":"","sshUser":"","sshPort":22,"sshIdentity":""}' "${3:-0}" "${2:-$PORT}" "$1" \
         | xxd -p | tr -d '\n'
 }
 FAIL=0
@@ -75,13 +75,11 @@ defaults write "$TEST_ID" ConnectionSettings -data "$(settings admin "$STILL_POR
 rm -f "$OUT/macos-picture.png" "$OUT/macos-picture-aim.png"
 PTZ_VAULT_PATH="$VAULT" PTZ_PASSWORD=secret PTZ_SNAPSHOT_PICTURE=1 PTZ_SNAPSHOT_PATH="$OUT/macos-picture.png" \
     PTZ_SNAPSHOT_AIM_PATH="$OUT/macos-picture-aim.png" PTZ_SNAPSHOT_MOVING_PATH="$OUT/macos-picture-moving.png" \
-    PTZ_SNAPSHOT_LIVE_PATH="$WORK/live3.txt" PTZ_SNAPSHOT_HEADING_PATH="$WORK/heading3.txt" "$BIN" >"$WORK/app3.log" 2>&1 || true
+    PTZ_SNAPSHOT_LIVE_PATH="$WORK/live3.txt" "$BIN" >"$WORK/app3.log" 2>&1 || true
 check "run 3 took a picture, then a new one after the move" \
     "$([ "$(grep -c '^mock: picture' "$WORK/mock-still.log" || true)" -ge 2 ] && echo 0 || echo 1)"
 check "run 3 moved to the pan and tilt aimed at on the range plane" \
     "$(grep -q '^mock: onvif absolute move to pan=0.4500 tilt=0.3000' "$WORK/mock-still.log" && echo 0 || echo 1)"
-check "run 3 centred the plane on the target while the camera moved ($(cat "$WORK/heading3.txt" 2>/dev/null))" \
-    "$(grep -qx '0.45 0.3' "$WORK/heading3.txt" 2>/dev/null; echo $?)"
 check "run 3 fell back to still pictures" "$(grep -qx 'no live view' "$WORK/live3.txt" && echo 0 || echo 1)"
 check "camera-picture pictures saved" "$([ -s "$OUT/macos-picture.png" ] && [ -s "$OUT/macos-picture-aim.png" ] && echo 0 || echo 1)"
 
@@ -99,9 +97,25 @@ check "run 4 aimed on the range plane over the video" "$([ "$(moves)" -gt "$MOVE
 check "Show Grid off is remembered" "$([ "$(defaults read "$TEST_ID" ShowGrid 2>/dev/null)" = 0 ] && echo 0 || echo 1)"
 check "live view picture saved" "$([ -s "$OUT/macos-live.png" ] && echo 0 || echo 1)"
 
+# Run 5: an Axis camera whose view isn't measured yet. Double-clicking a point of its picture (half way to the right
+# edge, a quarter of the way to the bottom) measures the view, then moves so that point comes to the centre: the mock
+# draws a 60 x 35 degree view through a lens, so that point is pan 16.10, tilt -4.46 from pan 0, tilt 0.
+defaults write "$TEST_ID" ConnectionSettings -data "$(settings admin "$STILL_PORT" 1)"
+defaults write "$TEST_ID" ShowGrid -bool true
+rm -f "$OUT/macos-measured.png"
+PTZ_VAULT_PATH="$VAULT" PTZ_PASSWORD=secret PTZ_SNAPSHOT_PICTURE=1 PTZ_SNAPSHOT_PATH="$OUT/macos-measured.png" \
+    PTZ_SNAPSHOT_MEASURE_AT="0.5,-0.25" PTZ_SNAPSHOT_WAIT=45 "$BIN" >"$WORK/app5.log" 2>&1 || true
+LAST="$(grep '^mock: axis absolute move' "$WORK/mock-still.log" | tail -1)"
+check "run 5 measured the view and moved to the point double-clicked ($LAST)" "$(printf '%s\n' "$LAST" | awk '{
+    for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
+    exit !(v["pan"] > 15.7 && v["pan"] < 16.5 && v["tilt"] < -4.3 && v["tilt"] > -4.65) }'; echo $?)"
+check "run 5 remembered the measured view for this camera" \
+    "$(defaults read "$TEST_ID" "Views axis 127.0.0.1:$STILL_PORT" >/dev/null 2>&1; echo $?)"
+check "measured-view picture saved" "$([ -s "$OUT/macos-measured.png" ] && echo 0 || echo 1)"
+
 if [ "$FAIL" = 0 ]; then
     printf 'PASS PTZ Control %s (test copy): pictures in %s\n' "$(defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString)" "$OUT"
 else
-    cat "$WORK/app1.log" "$WORK/app2.log" "$WORK/app3.log" "$WORK/app4.log" "$WORK/mock.log" "$WORK/mock-still.log"
+    cat "$WORK/app1.log" "$WORK/app2.log" "$WORK/app3.log" "$WORK/app4.log" "$WORK/app5.log" "$WORK/mock.log" "$WORK/mock-still.log"
     exit 1
 fi

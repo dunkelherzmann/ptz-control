@@ -48,6 +48,7 @@ public:
         return "Axis native coordinates: pan/tilt in degrees; zoom is an integer, not optical magnification";
     }
     bool zoom_integer() const override { return true; }
+    bool degrees() const override { return true; }
 
     Position position() override {
         auto reported = query("position");

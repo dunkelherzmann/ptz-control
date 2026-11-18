@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import PTZCore
 
 struct AxisRange: Equatable {
@@ -20,6 +21,15 @@ struct CameraInfo {
     let tilt: AxisRange?
     let zoom: AxisRange?
     let zoomInteger: Bool
+    /// Pan and tilt are angles in degrees (Axis): the picture is projected as the lens sees it.
+    let degrees: Bool
+}
+
+/// How wide the picture is at one zoom (ptz_view_scale): with degrees, the tangents of half its width and height;
+/// otherwise the pan (tilt) change from its centre to its right (top) edge.
+struct ViewScale: Equatable {
+    let halfX: Double
+    let halfY: Double
 }
 
 /// A measured value; `nil` readings mean unavailable, never zero.
@@ -33,6 +43,8 @@ struct PositionSnapshot: Equatable {
     var tilt: Reading?
     var zoom: Reading?
     var moveStatus: String?
+    /// The view measured at this reading's zoom, when there is one.
+    var viewScale: ViewScale?
 
     var isEmpty: Bool { pan == nil && tilt == nil && zoom == nil }
 
@@ -188,7 +200,7 @@ final class CameraLink: @unchecked Sendable {
                 name: withUnsafeBytes(of: info.name) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) },
                 units: withUnsafeBytes(of: info.units) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) },
                 pan: range(info.pan), tilt: range(info.tilt), zoom: range(info.zoom),
-                zoomInteger: info.zoom_integer != 0))
+                zoomInteger: info.zoom_integer != 0, degrees: info.degrees != 0))
         }, completion: completion)
     }
 
@@ -212,9 +224,13 @@ final class CameraLink: @unchecked Sendable {
                 let status = withUnsafeBytes(of: position.move_status) {
                     String(cString: $0.bindMemory(to: CChar.self).baseAddress!)
                 }
+                var scale = ptz_view_scale()
+                let known = ptz_view_scale_at(session, &position, &scale) != 0
                 return .success(PositionSnapshot(pan: reading(position.pan), tilt: reading(position.tilt),
                                                  zoom: reading(position.zoom),
-                                                 moveStatus: status.isEmpty ? nil : status))
+                                                 moveStatus: status.isEmpty ? nil : status,
+                                                 viewScale: known ? ViewScale(halfX: scale.half_x, halfY: scale.half_y)
+                                                                  : nil))
             }
         }, completion: completion)
     }
@@ -232,6 +248,51 @@ final class CameraLink: @unchecked Sendable {
                 return ptz_move(session, &t, &error, error.count) != 0 ? .success(()) : self.failure(error, session: session)
             }
         }, completion: completion)
+    }
+
+    /// Measures how wide the picture is at the current zoom: the camera turns a little on each axis and back, and the
+    /// core compares still pictures. Takes several seconds.
+    func measureView(completion: @escaping @MainActor (Result<ViewScale, LinkError>) -> Void) {
+        run({
+            switch self.requireSession() {
+            case .failure(let e): return .failure(e)
+            case .success(let session):
+                // The core compares small grey pictures; decoding them is the host's part.
+                let grey: ptz_grey_fn = { _, data, size, out, width, height in
+                    guard let data, let out,
+                          let source = CGImageSourceCreateWithData(Data(bytes: data, count: size) as CFData, nil),
+                          let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+                          let context = CGContext(data: out, width: Int(width), height: Int(height), bitsPerComponent: 8,
+                                                  bytesPerRow: Int(width), space: CGColorSpaceCreateDeviceGray(),
+                                                  bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return 0 }
+                    context.interpolationQuality = .medium
+                    context.draw(image, in: CGRect(x: 0, y: 0, width: Int(width), height: Int(height)))
+                    return 1
+                }
+                var scale = ptz_view_scale()
+                var error = [CChar](repeating: 0, count: 1024)
+                guard ptz_measure_view(session, grey, nil, &scale, &error, error.count) != 0 else {
+                    return self.failure(error, session: session)
+                }
+                return .success(ViewScale(halfX: scale.half_x, halfY: scale.half_y))
+            }
+        }, completion: completion)
+    }
+
+    /// The measured views as text, to keep for this camera, and loading them back.
+    func savedViews(completion: @escaping @MainActor (Result<String, LinkError>) -> Void) {
+        runOnSession({ session in
+            var text = [CChar](repeating: 0, count: 4096)
+            ptz_view_scales_save(session, &text, text.count)
+            return .success(String(cString: text))
+        }, completion: completion)
+    }
+
+    func loadViews(_ text: String) {
+        runOnSession({ session in
+            ptz_view_scales_load(session, text)
+            return .success(())
+        }, completion: { (_: Result<Void, LinkError>) in })
     }
 
     /// A still picture of the camera's current view.
