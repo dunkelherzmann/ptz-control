@@ -578,9 +578,11 @@ MoveResult move_to_point(Camera &camera, const Hooks &hooks, const GreyDecoder &
             ptz_view here = view_at(at);
             std::tie(ox, oy) = through_lens(before, was, x, y, after, here, *found);
         }
-        if (hooks.log)
-            hooks.log("The point landed " + format_number(ox) + ", " + format_number(oy) +
-                      " of the half picture from the centre");
+        if (hooks.log) {
+            char text[120];
+            std::snprintf(text, sizeof text, "The point landed %.4f, %.4f of the half picture from the centre", ox, oy);
+            hooks.log(text);
+        }
         // The turn just made was meant to move the point by (asked_x, asked_y) at gain 1; it moved by (last - o).
         // A turn big enough to measure well sets the axis's gain; the first move's (the biggest) is kept as its scale.
         auto learn = [&](double asked, double moved, double &gain, double &learned, double big) {
