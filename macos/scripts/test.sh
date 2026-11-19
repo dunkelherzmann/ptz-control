@@ -13,7 +13,7 @@ WORK="$(mktemp -d "$ROOT/.build/test-XXXXXX")"
 TEST_ID=com.herbertcisneros.PTZControl.test
 COPY="$WORK/PTZ Control Test.app"
 mkdir -p "$OUT"
-trap 'kill "$MOCK" "${STILL_MOCK:-}" 2>/dev/null || true; defaults delete "$TEST_ID" >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
+trap 'kill "$MOCK" "${STILL_MOCK:-}" "${REAL_MOCK:-}" 2>/dev/null || true; defaults delete "$TEST_ID" >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
 
 ditto "$APP" "$COPY"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $TEST_ID" "$COPY/Contents/Info.plist"
@@ -113,9 +113,34 @@ check "run 5 remembered the measured view for this camera" \
     "$(defaults read "$TEST_ID" "Views axis 127.0.0.1:$STILL_PORT" >/dev/null 2>&1; echo $?)"
 check "measured-view picture saved" "$([ -s "$OUT/macos-measured.png" ] && echo 0 || echo 1)"
 
+# Run 6: an ONVIF camera like a real one (its units are degrees seen through a lens, and each move lands 2% short).
+# Double-clicking a point measures the view, moves there, then corrects from the pictures until the point is at the
+# centre. The mock logs where each picture really points: the last must show what the picture before the move showed
+# at that point (0.6 of the way to the right edge, 0.4 to the bottom; 60 x 35 degrees), within 0.2 degrees.
+REAL_PORT=18084
+python3 -u "$ROOT/tools/mock-camera.py" --port "$REAL_PORT" --video none --onvif-real >"$WORK/mock-real.log" 2>&1 &
+REAL_MOCK=$!
+for _ in $(seq 1 50); do nc -z 127.0.0.1 "$REAL_PORT" 2>/dev/null && break; sleep 0.2; done
+defaults write "$TEST_ID" ConnectionSettings -data "$(settings admin "$REAL_PORT")"
+PTZ_VAULT_PATH="$VAULT" PTZ_PASSWORD=secret PTZ_SNAPSHOT_PICTURE=1 PTZ_SNAPSHOT_PATH="$OUT/macos-corrected.png" \
+    PTZ_SNAPSHOT_MEASURE_AT="0.6,-0.4" PTZ_SNAPSHOT_WAIT=60 "$BIN" >"$WORK/app6.log" 2>&1 || true
+kill "$REAL_MOCK" 2>/dev/null || true
+LANDED="$(awk '
+    /^mock: onvif truth/ { split($4, a, "="); split($5, b, "="); tp = a[2]; tt = b[2]; if (click) { ep = tp; et = tt; n++ } }
+    /^mock: onvif absolute move/ { split($6, a, "="); split($7, b, "=");
+        if (!click && a[2] + 0 != 0 && b[2] + 0 != 0) { click = 1; sp = tp; st = tt } else if (click) moves++ }
+    END {
+        r = atan2(1, 1) / 45; p = sp * r; t = st * r; tx = 0.6 * sin(30 * r) / cos(30 * r); ty = -0.4 * sin(30 * r) / cos(30 * r) * 270 / 480
+        fx = cos(t) * sin(p); fy = cos(t) * cos(p); fz = sin(t)
+        x = fx + tx * cos(p) - ty * sin(t) * sin(p); y = fy - tx * sin(p) - ty * sin(t) * cos(p); z = fz + ty * cos(t)
+        wp = atan2(x, y) / r; wt = atan2(z, sqrt(x * x + y * y)) / r
+        printf "%d corrections; pan %.3f want %.3f, tilt %.3f want %.3f\n", moves, ep, wp, et, wt
+        exit !(click && moves >= 1 && (ep - wp) ^ 2 < 0.04 && (et - wt) ^ 2 < 0.04) }' "$WORK/mock-real.log")"
+check "run 6 corrected the move until the double-clicked point was at the centre ($LANDED)" "$?"
+
 if [ "$FAIL" = 0 ]; then
     printf 'PASS PTZ Control %s (test copy): pictures in %s\n' "$(defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString)" "$OUT"
 else
-    cat "$WORK/app1.log" "$WORK/app2.log" "$WORK/app3.log" "$WORK/app4.log" "$WORK/app5.log" "$WORK/mock.log" "$WORK/mock-still.log"
+    cat "$WORK/app1.log" "$WORK/app2.log" "$WORK/app3.log" "$WORK/app4.log" "$WORK/app5.log" "$WORK/app6.log" "$WORK/mock.log" "$WORK/mock-still.log"
     exit 1
 fi
