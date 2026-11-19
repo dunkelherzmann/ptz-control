@@ -190,16 +190,26 @@ the rest as a gap.
   that camera (vendor, address and port) between sessions; at another zoom the view is unmeasured until measured.
 - **I14 Fine positioning.** A double-click on the picture (with the view measured, and no other zoom typed in the
   target) moves through the core's `ptz_move_to_point`, which makes sure the point really comes to the centre: a
-  camera's own positioning lands a little off (ONVIF cameras especially), and the measured scale and, in the camera's
-  own units, the lens leave a little over too. It takes a still picture before the move and, once the camera has
-  stopped, one after (both 640 pixels wide), finds the patch around the point (up to a quarter of the picture, centred
-  on it, smaller near an edge) in the new picture, matched as a whole and evened out to the same brightness, allowing
-  it to be shifted, stretched, turned and slanted (the lens shows a spot near the edge smaller and askew), to a
-  twentieth of a pixel; for a camera in degrees it then traces the patch through the lens model, which leaves nothing
-  over. Wherever the point shows, the camera turns by that much more, waiting for two still readings, up to three
-  times, until it is within 0.4 of a pixel of the centre; a last picture only checks. The log reads "Moved to pan=…,
-  tilt=…; the point landed at the centre" or "…; corrected 2 times from the picture so the point is at the centre". A
-  point it can't find (a plain patch, a changed scene) is left where the plain move put it.
+  camera's own positioning lands a little off (ONVIF cameras especially), the measured scale can be off (measured
+  through raindrops on the dome, or from pictures that trailed the camera), and in the camera's own units the lens
+  leaves a little over too. It takes a still picture before the move and one after (both 640 pixels wide). Since some
+  cameras' pictures trail the camera, the picture after the move must first differ from the one before it and then
+  stay the same over half a second (five seconds at most); how long the change took is waited out before each later
+  picture. It finds the patch around the point (up to a quarter of the picture, centred on it, smaller near an edge)
+  within a quarter of the picture of the centre, matched as a whole and evened out to the same brightness, allowing it
+  to be shifted, stretched, turned and slanted (the lens shows a spot near the edge smaller and askew), to a twentieth
+  of a pixel; for a camera in degrees it then traces the patch through the lens model, which leaves nothing over.
+  Wherever the point shows, the camera turns by that much more, waiting for two still readings, up to three times,
+  until it is within 0.4 of a pixel of the centre; a last picture only checks. Each turn's effect is measured (how far
+  the point really moved for how far it was asked to), and the next turn is scaled by it, so a camera that turns
+  further than the scale says doesn't overshoot back and forth; if the turns made it worse it goes back to the best
+  place found. A first move of a quarter of the half picture or more on an axis gives that axis's true scale, which
+  the session keeps for the zoom and the app saves for the camera, so the plane and the next move agree with the
+  camera ("The move showed the view's scale: ±0.17 pan × ±0.21 tilt; the plane uses it now"). While it works, the
+  positions it reads are shown, so the readouts and the plane follow the camera. The log then reads "Moved to the
+  point, now at pan=…, tilt=…; it landed at the centre" or "…; corrected 2 times from the picture so the point is at
+  the centre". A point it can't find (a plain patch, drops of water over it, a changed scene) is left where the plain
+  move put it.
 - **I12 Show Grid** (View ▸ Show Grid, ⌘', and the grid button left of ⟳ in the plane's caption, hover text "Show Grid:
   show or hide the pan/tilt grid, zero axes and range limits over the picture (⌘')") shows or hides the grid, the zero
   axes and the limit plates; the markers always show. On by default, ticked in the menu while on, and remembered.
@@ -363,7 +373,11 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
   back afterwards, and saved and loaded as text. Then it double-clicks two points (one near a corner) on a third mock
   camera that behaves like a real ONVIF one (`--onvif-real`: degrees seen through a lens, each move landing 2% short):
   the plain move lands 1.3–1.9° off, and after the corrections the point is within 0.15° of the centre, by where the
-  mock says its picture really points. On the Axis mock, which lands exactly, the same moves stay within 0.08°.
+  mock says its picture really points; also with the view's scale 1.7 times too wide (the move then gives the right
+  scale, within 15%), with pictures that trail the camera by a second (`--picture-lag 1`), and on a wet dome (`--wet`:
+  drops that stay put in the picture), where the point may not be found but the result is no worse than the plain
+  move. Each move reports its positions as it goes. On the Axis mock, which lands exactly, the same moves stay within
+  0.08°.
 - **T3 SSH test.** `scripts/test-ssh.sh` starts a throwaway user-level `sshd` on 127.0.0.1:2222 with a
   passphrase-protected key and runs `tests/ssh-smoke.c` through it: tunnel, askpass relay, read, move, web address,
   live video.
@@ -380,7 +394,7 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
   Show Grid turned off is remembered. A last run double-clicks a point of an Axis camera's picture before its view is
   measured and checks that the view is measured and remembered and that the camera moves to that point's pan and tilt
   (the mock draws its Axis pictures through a lens, 60° wide). Another double-clicks a point of a realistic ONVIF
-  mock's picture (`--onvif-real`) and checks the move was corrected until the point's direction, as the mock reports
+  mock's picture (`--onvif-real --picture-lag 1`) and checks the move was corrected until the point's direction, as the mock reports
   it, is within 0.2° of the centre. It saves pictures of the window, of Manage Logins, of
   the Edit form and of the live view. `linux/scripts/test.sh` does the same with the installed Flatpak (T5).
 - **T7 Windows test.** `windows\scripts\test.ps1` builds and runs `tests/vault-smoke.c` with MSVC, then runs

@@ -240,8 +240,9 @@ static void measure(ptz_vendor vendor, double pan, double tilt, double want_x, d
 }
 
 /* The last "truth" line the realistic ONVIF mock wrote after `skip` of them: where its picture really points. */
+static const char *truth_log = "MOCK_REAL_LOG";  /* the environment variable naming the mock's log */
 static int mock_truth(int skip, int *count, double *pan, double *tilt) {
-    const char *path = getenv("MOCK_REAL_LOG");
+    const char *path = getenv(truth_log);
     FILE *f = path ? fopen(path, "r") : NULL;
     if (!f) return 0;
     char line[256];
@@ -268,11 +269,20 @@ static void sphere_point(double pan, double tilt, double tx, double ty, double *
     *out_tilt = atan2(d[2], hypot(d[0], d[1])) / r;
 }
 
-/* A double-click on a camera that lands a little off (the realistic ONVIF mock on port 8082: a lens, and moves 2%
- * short): measure the view, move to a point of the picture and check the point really ends at the centre. */
-static void move_to_point(double px, double py) {
+static int readings_seen;
+static void count_reading(void *context, const ptz_position *position) {
+    (void)context;
+    if (position->pan.available) readings_seen++;
+}
+
+/* A double-click on a camera that lands a little off (the realistic ONVIF mock: a lens, and moves 2% short): measure
+ * the view, move to a point of the picture and check the point really ends at the centre. `wrong` scales the measured
+ * view, as a measurement through raindrops overestimates it; on port 8083 the dome is wet, and on 8084 the pictures
+ * lag a second behind the camera. */
+static void move_to_point(int port, double px, double py, double wrong) {
     char error[512] = {0};
-    camera_port = 8082;
+    truth_log = port == 8083 ? "MOCK_WET_LOG" : port == 8084 ? "MOCK_LAG_LOG" : "MOCK_REAL_LOG";
+    camera_port = port;
     ptz_session *s = open_camera(PTZ_VENDOR_ONVIF, "secret", error);
     camera_port = 8080;
     CHECK(s != NULL, "realistic onvif camera connects (%s)", error);
@@ -283,6 +293,8 @@ static void move_to_point(double px, double py) {
     ptz_view_scale scale;
     CHECK(ptz_measure_view(s, grey_plain_png, NULL, &scale, error, sizeof error), "realistic onvif: measured %.4f x %.4f (%s)",
           scale.half_x, scale.half_y, error);
+    ptz_view_scale measured = scale;
+    scale.half_x *= wrong, scale.half_y *= wrong;
     ptz_info info;
     ptz_info_get(s, &info);
     ptz_position at;
@@ -293,17 +305,34 @@ static void move_to_point(double px, double py) {
     int before = 0, corrections = -1;
     double p0 = 0, t0 = 0;
     mock_truth(-1, &before, &p0, &t0);
-    int ok = ptz_move_to_point(s, grey_plain_png, NULL, &scale, pan, tilt, &corrections, error, sizeof error);
+    readings_seen = 0;
+    ptz_view_scale learned;
+    int ok = ptz_move_to_point(s, grey_plain_png, NULL, &scale, pan, tilt, count_reading, NULL, &corrections, &learned,
+                               error, sizeof error);
+    CHECK(readings_seen >= 3, "realistic onvif: %d positions reported during the move", readings_seen);
+    /* The scale is learned from a first move of a quarter of the half picture or more, on that axis. */
+    if (wrong != 1)
+        CHECK((fabs(px) < 0.25 || fabs(learned.half_x / measured.half_x - 1) < 0.15) &&
+                  (fabs(py) < 0.25 || fabs(learned.half_y / measured.half_y - 1) < 0.15),
+              "realistic onvif: learned the view's scale from the move: %.4f x %.4f (measured %.4f x %.4f, used %.4f x %.4f)",
+              learned.half_x, learned.half_y, measured.half_x, measured.half_y, scale.half_x, scale.half_y);
     double sp = 0, st = 0, first_p = 0, first_t = 0, end_p = 0, end_t = 0, want_p, want_t;
     mock_truth(before, NULL, &sp, &st);     /* the picture from before the move */
     mock_truth(before + 1, NULL, &first_p, &first_t);  /* the first landing */
     mock_truth(-1, NULL, &end_p, &end_t);
     double tx = tan(30 * 3.14159265358979323846 / 180);
     sphere_point(sp, st, px * tx, py * tx * 270 / 480, &want_p, &want_t);
-    CHECK(ok && corrections >= 1, "realistic onvif: moved to the point with %d corrections (%s)", corrections, error);
+    CHECK(ok && (corrections >= 1 || port == 8083), "realistic onvif: moved to the point with %d corrections (%s)",
+          corrections, error);
     printf("    first landing %.3f, %.3f degrees off; after the corrections %.3f, %.3f\n", first_p - want_p,
            first_t - want_t, end_p - want_p, end_t - want_t);
-    /* Within 0.15 degrees (under a pixel of a 320-wide picture 60 degrees wide), and closer than the plain move. */
+    /* Within 0.15 degrees (under a pixel of a 320-wide picture 60 degrees wide), and closer than the plain move. Drops
+     * on the dome can hide the point: then no worse than the plain move. */
+    if (port == 8083)
+        CHECK(ok && hypot(end_p - want_p, end_t - want_t) <= hypot(first_p - want_p, first_t - want_t) + 0.02,
+              "realistic onvif, wet dome: no worse than the plain move (pan %.3f want %.3f, tilt %.3f want %.3f)", end_p,
+              want_p, end_t, want_t);
+    else
     CHECK(fabs(end_p - want_p) < 0.15 && fabs(end_t - want_t) < 0.15 &&
               hypot(end_p - want_p, end_t - want_t) < hypot(first_p - want_p, first_t - want_t) / 4,
           "realistic onvif: the clicked point is at the centre (pan %.3f want %.3f, tilt %.3f want %.3f)", end_p, want_p,
@@ -334,7 +363,8 @@ static void axis_move_to_point(double px, double py) {
     ptz_view_point(&view, px, py, &pan, &tilt);
     ptz_view_point(&exact, px, py, &want_p, &want_t);
     int corrections = -1;
-    int ok = ptz_move_to_point(s, grey_plain_png, NULL, &scale, pan, tilt, &corrections, error, sizeof error);
+    int ok = ptz_move_to_point(s, grey_plain_png, NULL, &scale, pan, tilt, NULL, NULL, &corrections, NULL, error,
+                               sizeof error);
     sleep(3);
     ptz_get_position(s, &at, error, sizeof error);
     CHECK(ok && fabs(at.pan.value - want_p) < 0.08 && fabs(at.tilt.value - want_t) < 0.08,
@@ -399,8 +429,12 @@ int main(void) {
     measure(PTZ_VENDOR_ONVIF, 0.3, 0.1, 0.25, 0.140625);
     measure(PTZ_VENDOR_AXIS, -156.55, -18.5, 0.57735, 0.32476);
     measure(PTZ_VENDOR_AXIS, 0, 0, 0.57735, 0.32476);
-    move_to_point(0.6, -0.4);
-    move_to_point(-0.8, 0.7);
+    move_to_point(8082, 0.6, -0.4, 1);
+    move_to_point(8082, -0.8, 0.7, 1);
+    move_to_point(8082, 0.3, -0.2, 1.7);   /* a view measured too wide: each turn goes 1.7 times too far */
+    move_to_point(8083, -0.3, 0.25, 1);   /* on a wet dome */
+    move_to_point(8084, -0.3, 0.25, 1);   /* with pictures that lag a second */
+    move_to_point(8084, 0.25, 0.2, 1.7);  /* and a view measured too wide */
     axis_move_to_point(0.5, -0.25);
     axis_move_to_point(-0.8, 0.7);
 

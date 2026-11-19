@@ -216,23 +216,27 @@ final class CameraLink: @unchecked Sendable {
                 guard ptz_get_position(session, &position, &error, error.count) != 0 else {
                     return self.failure(error, session: session)
                 }
-                func reading(_ r: ptz_reading) -> Reading? {
-                    guard r.available != 0 else { return nil }
-                    let text = withUnsafeBytes(of: r.text) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
-                    return Reading(value: r.value, text: text)
-                }
-                let status = withUnsafeBytes(of: position.move_status) {
-                    String(cString: $0.bindMemory(to: CChar.self).baseAddress!)
-                }
-                var scale = ptz_view_scale()
-                let known = ptz_view_scale_at(session, &position, &scale) != 0
-                return .success(PositionSnapshot(pan: reading(position.pan), tilt: reading(position.tilt),
-                                                 zoom: reading(position.zoom),
-                                                 moveStatus: status.isEmpty ? nil : status,
-                                                 viewScale: known ? ViewScale(halfX: scale.half_x, halfY: scale.half_y)
-                                                                  : nil))
+                return .success(CameraLink.snapshot(position, session: session))
             }
         }, completion: completion)
+    }
+
+    /// A position from the core as the app shows it, with the view measured at its zoom. The link's queue only.
+    private static func snapshot(_ position: ptz_position, session: OpaquePointer) -> PositionSnapshot {
+        var position = position
+        func reading(_ r: ptz_reading) -> Reading? {
+            guard r.available != 0 else { return nil }
+            let text = withUnsafeBytes(of: r.text) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
+            return Reading(value: r.value, text: text)
+        }
+        let status = withUnsafeBytes(of: position.move_status) {
+            String(cString: $0.bindMemory(to: CChar.self).baseAddress!)
+        }
+        var scale = ptz_view_scale()
+        let known = ptz_view_scale_at(session, &position, &scale) != 0
+        return PositionSnapshot(pan: reading(position.pan), tilt: reading(position.tilt), zoom: reading(position.zoom),
+                                moveStatus: status.isEmpty ? nil : status,
+                                viewScale: known ? ViewScale(halfX: scale.half_x, halfY: scale.half_y) : nil)
     }
 
     func move(_ target: Target, completion: @escaping @MainActor (Result<Void, LinkError>) -> Void) {
@@ -280,18 +284,47 @@ final class CameraLink: @unchecked Sendable {
         return 1
     }
 
+    struct PointMove {
+        var corrections: Int
+        var learned: ViewScale?  // the view's scale as the move showed it, when it told
+    }
+
+    /// Where a move's readings go while the core holds the session: to the main thread.
+    private final class ReadingSink {
+        let session: OpaquePointer
+        let deliver: @MainActor (PositionSnapshot) -> Void
+        init(session: OpaquePointer, deliver: @escaping @MainActor (PositionSnapshot) -> Void) {
+            self.session = session
+            self.deliver = deliver
+        }
+    }
+
     /// Moves to a point of the picture and checks it really comes to the centre, correcting the turn from the
-    /// pictures (a few seconds). The result is how many corrections it made.
+    /// pictures (several seconds). `reading` gets each position the core reads meanwhile.
     func moveToPoint(_ scale: ViewScale, pan: Double, tilt: Double,
-                     completion: @escaping @MainActor (Result<Int, LinkError>) -> Void) {
+                     reading: @escaping @MainActor (PositionSnapshot) -> Void,
+                     completion: @escaping @MainActor (Result<PointMove, LinkError>) -> Void) {
         runOnSession({ session in
             var s = ptz_view_scale(half_x: scale.halfX, half_y: scale.halfY)
             var corrections: Int32 = 0
+            var learned = ptz_view_scale()
             var error = [CChar](repeating: 0, count: 1024)
-            guard ptz_move_to_point(session, CameraLink.grey, nil, &s, pan, tilt, &corrections, &error, error.count) != 0 else {
-                return self.failure(error, session: session)
+            let sink = ReadingSink(session: session, deliver: reading)
+            let context = Unmanaged.passUnretained(sink).toOpaque()
+            let readings: ptz_position_fn = { context, position in
+                guard let context, let position else { return }
+                let sink = Unmanaged<ReadingSink>.fromOpaque(context).takeUnretainedValue()
+                let snapshot = CameraLink.snapshot(position.pointee, session: sink.session)
+                let deliver = sink.deliver
+                DispatchQueue.main.async { MainActor.assumeIsolated { deliver(snapshot) } }
             }
-            return .success(Int(corrections))
+            let ok = withExtendedLifetime(sink) {
+                ptz_move_to_point(session, CameraLink.grey, nil, &s, pan, tilt, readings, context, &corrections, &learned,
+                                  &error, error.count)
+            }
+            guard ok != 0 else { return self.failure(error, session: session) }
+            return .success(PointMove(corrections: Int(corrections),
+                                      learned: learned.half_x != 0 ? ViewScale(halfX: learned.half_x, halfY: learned.half_y) : nil))
         }, completion: completion)
     }
 

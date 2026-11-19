@@ -357,8 +357,10 @@ extern "C" int ptz_measure_view(ptz_session *session, ptz_grey_fn grey, void *co
 }
 
 extern "C" int ptz_move_to_point(ptz_session *session, ptz_grey_fn grey, void *context, const ptz_view_scale *scale,
-                                 double pan, double tilt, int *corrections, char *error, size_t error_size) {
+                                 double pan, double tilt, ptz_position_fn readings, void *readings_context,
+                                 int *corrections, ptz_view_scale *learned, char *error, size_t error_size) {
     if (corrections) *corrections = 0;
+    if (learned) *learned = {};
     return guarded(session, error, error_size, [&] {
         if (!ptz_link_alive(session)) throw ptz::Error("SSH connection closed; the camera was not moved");
         ptz::ViewScale s;
@@ -366,8 +368,24 @@ extern "C" int ptz_move_to_point(ptz_session *session, ptz_grey_fn grey, void *c
         auto decode = [&](const std::string &bytes, unsigned char *pixels, int w, int h) {
             return grey(context, reinterpret_cast<const unsigned char *>(bytes.data()), bytes.size(), pixels, w, h) != 0;
         };
-        int made = ptz::move_to_point(*session->camera, session->hooks, decode, s, pan, tilt);
-        if (corrections) *corrections = made;
+        auto report = [&](const ptz::Position &p) {
+            if (!readings) return;
+            ptz_position out;
+            std::memset(&out, 0, sizeof out);
+            export_reading(p.pan, out.pan);
+            export_reading(p.tilt, out.tilt);
+            export_reading(p.zoom, out.zoom);
+            copy(out.move_status, sizeof out.move_status, p.move_status);
+            readings(readings_context, &out);
+        };
+        ptz::MoveResult made = ptz::move_to_point(*session->camera, session->hooks, decode, s, pan, tilt, report);
+        if (corrections) *corrections = made.corrections;
+        if (made.learned) {
+            made.learned->zoom_available = made.landed.zoom.available;
+            made.learned->zoom = made.landed.zoom.value;
+            session->keep(*made.learned);
+            if (learned) *learned = {made.learned->half_x, made.learned->half_y};
+        }
     });
 }
 
