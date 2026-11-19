@@ -17,6 +17,6 @@ Items marked *found in testing* were found while testing other work, not reporte
   - [ ] Linux
   - [ ] Windows
 - [ ] **ONVIF cameras drift a little off the double-clicked point** (reported 2026-11-19, ONVIF on the Mac). The camera's own positioning lands slightly off, and the plane's linear scale for ONVIF units ignores the lens, so the point doesn't quite reach the centre. The move is now checked from the pictures and corrected (spec I14): on a mock ONVIF camera that lands 2% short through a lens, the miss goes from 1.3–1.9° to under 0.15°.
-  - [ ] Mac
+  - [x] Mac (#12)
   - [ ] Linux
   - [ ] Windows
