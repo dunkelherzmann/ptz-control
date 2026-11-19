@@ -406,6 +406,26 @@ void link_connect(CameraLink *link, const Settings &s, const QString &camera_pas
     });
 }
 
+namespace {
+
+// A position from the core as the app shows it, with the view measured at its zoom. Worker thread only.
+Snapshot make_snapshot(ptz_session *session, const ptz_position &raw) {
+    Snapshot snapshot;
+    auto reading = [](const ptz_reading &r) -> std::optional<Reading> {
+        if (!r.available) return std::nullopt;
+        return Reading{r.value, field(r.text)};
+    };
+    snapshot.pan = reading(raw.pan);
+    snapshot.tilt = reading(raw.tilt);
+    snapshot.zoom = reading(raw.zoom);
+    snapshot.move_status = field(raw.move_status);
+    ptz_view_scale scale;
+    if (ptz_view_scale_at(session, &raw, &scale)) snapshot.view_scale = ViewScale{scale.half_x, scale.half_y};
+    return snapshot;
+}
+
+}  // namespace
+
 void link_position(CameraLink *link, std::function<void(LinkResult, Snapshot)> done) {
     link->run([link, done]() -> std::function<void()> {
         LinkResult result;
@@ -418,16 +438,7 @@ void link_position(CameraLink *link, std::function<void(LinkResult, Snapshot)> d
             if (!ptz_get_position(link->session_, &raw, error, sizeof error)) {
                 result = failure(link->session_, error);
             } else {
-                auto reading = [](const ptz_reading &r) -> std::optional<Reading> {
-                    if (!r.available) return std::nullopt;
-                    return Reading{r.value, field(r.text)};
-                };
-                snapshot.pan = reading(raw.pan);
-                snapshot.tilt = reading(raw.tilt);
-                snapshot.zoom = reading(raw.zoom);
-                snapshot.move_status = field(raw.move_status);
-                ptz_view_scale scale;
-                if (ptz_view_scale_at(link->session_, &raw, &scale)) snapshot.view_scale = ViewScale{scale.half_x, scale.half_y};
+                snapshot = make_snapshot(link->session_, raw);
                 result.ok = true;
             }
         }
@@ -556,6 +567,49 @@ void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScal
             }
         }
         return [done, result, view] { done(result, view); };
+    });
+}
+
+namespace {
+
+// Where a move's readings go while the core holds the session: to the UI thread.
+struct ReadingSink {
+    CameraLink *link;
+    std::function<void(Snapshot)> deliver;
+};
+
+void on_reading(void *context, const ptz_position *position) {
+    auto *sink = static_cast<ReadingSink *>(context);
+    if (!sink || !position) return;
+    Snapshot snapshot = make_snapshot(sink->link->session_, *position);
+    std::function<void(Snapshot)> deliver = sink->deliver;
+    sink->link->post([deliver, snapshot] { deliver(snapshot); });
+}
+
+}  // namespace
+
+void link_move_to_point(CameraLink *link, ViewScale scale, double pan, double tilt, std::function<void(Snapshot)> reading,
+                        std::function<void(LinkResult, PointMove)> done) {
+    link->run([=]() -> std::function<void()> {
+        LinkResult result;
+        PointMove move;
+        if (!link->session_) {
+            result.error = "Not connected";
+        } else {
+            ptz_view_scale s{scale.half_x, scale.half_y}, learned{};
+            int corrections = 0;
+            char error[1024] = {};
+            ReadingSink sink{link, reading};
+            if (ptz_move_to_point(link->session_, decode_grey, nullptr, &s, pan, tilt, on_reading, &sink, &corrections,
+                                  &learned, error, sizeof error)) {
+                move.corrections = corrections;
+                if (learned.half_x != 0) move.learned = ViewScale{learned.half_x, learned.half_y};
+                result.ok = true;
+            } else {
+                result = failure(link->session_, error);
+            }
+        }
+        return [done, result, move] { done(result, move); };
     });
 }
 

@@ -1,11 +1,13 @@
 # Tests PTZ Control for Windows against the mock camera without touching the user's settings or saved logins.
 #  1. The core's login vault: tests\vault-smoke.c built with MSVC and run.
-#  2. The app (dist\PTZControl.exe) five times, with its own registry key and vault file, never taking focus:
+#  2. The app (dist\PTZControl.exe) six times, with its own registry key and vault file, never taking focus:
 #     run 1 types a login, ticks Save login and connects; run 2 starts with a wrong username and fills the
 #     camera fields from the saved login; run 3 aims on the range plane and moves over the still pictures of a camera
 #     whose video can't be reached; run 4 plays the camera's live video, aims on the plane over it and turns Show Grid
 #     off; run 5 double-clicks a point of an Axis camera's picture before its view is measured, which measures it and
-#     moves there. Each run saves pictures in .build\test.
+#     moves there; run 6 double-clicks a point of an ONVIF camera like a real one (degrees through a lens, moves that
+#     land short, pictures that trail the camera) and checks from the mock's own log that the point ends at the centre.
+#     Each run saves pictures in .build\test.
 # Usage: windows\scripts\test.ps1   (after windows\scripts\build.ps1)
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -48,6 +50,7 @@ $Port = 18082
 $KeyName = 'Software\PTZControl.Test'
 $mockLog = Join-Path $Work 'mock.log'
 $stillLog = Join-Path $Work 'mock-still.log'
+$realLog = Join-Path $Work 'mock-real.log'
 $mock = Start-Process python -ArgumentList @('-u', "`"$Root\tools\mock-camera.py`"", '--port', $Port) -PassThru `
     -WindowStyle Hidden -RedirectStandardOutput $mockLog -RedirectStandardError (Join-Path $Work 'mock.err')
 Start-Sleep -Seconds 1
@@ -82,7 +85,7 @@ function Moves { @(Select-String -Path $mockLog -Pattern '^mock: onvif AbsoluteM
 $Observer = Join-Path $HOME '.agents\library\master-control\scripts\observer.py'
 $script:Runs = 0
 Remove-Item -Recurse -Force (Join-Path $Out 'observer') -ErrorAction SilentlyContinue
-function RunApp($vars) {
+function RunApp($vars, $timeout = 90) {
     $saved = @{}
     $all = @{ PTZ_SETTINGS_KEY = $KeyName; PTZ_VAULT_PATH = $vault } + $vars
     foreach ($k in $all.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $all[$k]) }
@@ -90,14 +93,14 @@ function RunApp($vars) {
     if ((Test-Path $Observer) -and -not $env:PTZ_NO_OBSERVE) {
         # Its verdict comes on stderr, which Windows PowerShell turns into errors that 'Stop' would throw.
         $ErrorActionPreference = 'Continue'
-        $verdict = @(& python $Observer run --out (Join-Path $Out 'observer') --name "run $script:Runs" --timeout 90 `
+        $verdict = @(& python $Observer run --out (Join-Path $Out 'observer') --name "run $script:Runs" --timeout $timeout `
             --allow $Work --allow $Out --guard 'HKCU\Software\PTZControl' --guard "$env:APPDATA\PTZControl" -- $exe 2>&1 | ForEach-Object { "$_" })
         $problems = @($verdict | Where-Object { $_ -like 'observer: PROBLEM*' })
         Check "run $($script:Runs): no crash, hang or change to the real app's data (master-control)" ($problems.Count -eq 0)
         $problems | ForEach-Object { Write-Output "     $_" }
     } else {
         $p = Start-Process $exe -PassThru
-        if (-not $p.WaitForExit(90000)) { $p.Kill() }
+        if (-not $p.WaitForExit($timeout * 1000)) { $p.Kill() }
     }
     foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
 }
@@ -183,14 +186,56 @@ try {
     $views = (Get-ItemProperty "HKCU:\$KeyName" -Name "Views axis 127.0.0.1:$StillPort" -ErrorAction SilentlyContinue)."Views axis 127.0.0.1:$StillPort"
     Check 'run 5 remembered the measured view for this camera' ([bool]$views)
     Check 'measured-view picture drawn' (Drawn $measured)
+
+    # Run 6: an ONVIF camera like a real one (its units are degrees seen through a lens, each move lands 2% short, and
+    # its pictures trail it by a second). Double-clicking a point measures the view, moves there, then corrects from the
+    # pictures until the point is at the centre. The mock logs where each picture really points: the last must show
+    # what the picture before the move showed at that point (0.6 of the way to the right edge, 0.4 to the bottom;
+    # 60 x 35 degrees), within 0.2 degrees.
+    $RealPort = 18085
+    $realMock = Start-Process python -ArgumentList @('-u', "`"$Root\tools\mock-camera.py`"", '--port', $RealPort, '--video', 'none',
+        '--onvif-real', '--picture-lag', '1') -PassThru -WindowStyle Hidden -RedirectStandardOutput $realLog `
+        -RedirectStandardError (Join-Path $Work 'mock-real.err')
+    Start-Sleep -Seconds 1
+    Settings 'admin' $RealPort
+    $corrected = Join-Path $Out 'windows-corrected.png'
+    Remove-Item $corrected -ErrorAction SilentlyContinue
+    RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PICTURE = '1'; PTZ_SNAPSHOT_PATH = $corrected; PTZ_SNAPSHOT_LIVE_PATH = $null
+              PTZ_SNAPSHOT_MEASURE_AT = '0.6,-0.4'; PTZ_SNAPSHOT_WAIT = '90' } 150
+    Stop-Process -Id $realMock.Id -ErrorAction SilentlyContinue
+    $realMock = $null
+    # The mock's truth before the double-click's move, and after it; each later move is a correction.
+    $click = $false; $moves = 0; $tp = 0.0; $tt = 0.0; $sp = 0.0; $st = 0.0; $ep = 0.0; $et = 0.0
+    foreach ($line in (Get-Content $realLog -ErrorAction SilentlyContinue)) {
+        if ($line -match '^mock: onvif truth pan=(-?[\d.]+) tilt=(-?[\d.]+)') {
+            $tp = [double]::Parse($Matches[1], $inv); $tt = [double]::Parse($Matches[2], $inv)
+            if ($click) { $ep = $tp; $et = $tt }
+        } elseif ($line -match '^mock: onvif absolute move to pan=(-?[\d.]+) tilt=(-?[\d.]+)') {
+            if (-not $click -and [double]::Parse($Matches[1], $inv) -ne 0 -and [double]::Parse($Matches[2], $inv) -ne 0) {
+                $click = $true; $sp = $tp; $st = $tt
+            } elseif ($click) { $moves++ }
+        }
+    }
+    $r = [Math]::PI / 180; $p = $sp * $r; $t = $st * $r
+    $tx = 0.6 * [Math]::Tan(30 * $r); $ty = -0.4 * [Math]::Tan(30 * $r) * 270 / 480
+    $fx = [Math]::Cos($t) * [Math]::Sin($p); $fy = [Math]::Cos($t) * [Math]::Cos($p); $fz = [Math]::Sin($t)
+    $x = $fx + $tx * [Math]::Cos($p) - $ty * [Math]::Sin($t) * [Math]::Sin($p)
+    $y = $fy - $tx * [Math]::Sin($p) - $ty * [Math]::Sin($t) * [Math]::Cos($p)
+    $z = $fz + $ty * [Math]::Cos($t)
+    $wp = [Math]::Atan2($x, $y) / $r; $wt = [Math]::Atan2($z, [Math]::Sqrt($x * $x + $y * $y)) / $r
+    $landed = [string]::Format($inv, '{0} corrections; pan {1:F3} want {2:F3}, tilt {3:F3} want {4:F3}', $moves, $ep, $wp, $et, $wt)
+    Check "run 6 corrected the move until the double-clicked point was at the centre ($landed)" `
+        ($click -and $moves -ge 1 -and [Math]::Pow($ep - $wp, 2) -lt 0.04 -and [Math]::Pow($et - $wt, 2) -lt 0.04)
+    Check 'corrected-move picture drawn' (Drawn $corrected)
 } finally {
     Stop-Process -Id $mock.Id -ErrorAction SilentlyContinue
     if ($stillMock) { Stop-Process -Id $stillMock.Id -ErrorAction SilentlyContinue }
+    if ($realMock) { Stop-Process -Id $realMock.Id -ErrorAction SilentlyContinue }
     Remove-Item -Path "HKCU:\$KeyName" -Recurse -ErrorAction SilentlyContinue
 }
 
 if ($Fail) {
-    Get-Content $mockLog, $stillLog -ErrorAction SilentlyContinue
+    Get-Content $mockLog, $stillLog, $realLog -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $Work -ErrorAction SilentlyContinue
     exit 1
 }

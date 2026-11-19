@@ -3,7 +3,8 @@
 # Run 1 types a login, ticks Save login and connects; run 2 starts with a wrong username and fills the camera
 # fields from the saved login; run 3 aims on the range plane and moves, over still pictures from a camera whose video
 # can't be reached; run 4 plays the camera's live video, turns Show Grid off and aims over it; run 5 double-clicks
-# a point of an Axis camera's picture before its view is measured, which measures it and moves there. It uses its own settings folder and vault file and never touches the user's PTZ
+# a point of an Axis camera's picture before its view is measured, which measures it and moves there; run 6 does the
+# same on an ONVIF camera like a real one and checks the move is corrected from the pictures. It uses its own settings folder and vault file and never touches the user's PTZ
 # Control settings, saved logins or windows.
 # Usage: linux/scripts/test.sh [screenshot.png]   (default: .build/test/flatpak.png)
 set -eu
@@ -13,7 +14,7 @@ SHOT="$(realpath -m "${1:-$ROOT/.build/test/flatpak.png}")"
 SHOTS="$(dirname "$SHOT")"
 WORK="$(mktemp -d "$ROOT/.build/test-XXXXXX")"
 mkdir -p "$SHOTS" "$WORK/config/PTZControl"
-trap 'kill "$MOCK" "${STILL_MOCK:-}" 2>/dev/null || true; rm -rf "$WORK"' EXIT
+trap 'kill "$MOCK" "${STILL_MOCK:-}" "${REAL_MOCK:-}" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
 PORT=18080
 python3 -u "$ROOT/tools/mock-camera.py" --port "$PORT" >"$WORK/mock.log" 2>&1 &
@@ -32,6 +33,7 @@ sleep 1
 OBSERVER="$HOME/.agents/library/master-control/scripts/observer.py"
 RUNS=0
 rm -rf "$SHOTS/observer"
+RUN_TIMEOUT=90
 run() {  # extra --env options...
     RUNS=$((RUNS + 1))
     set -- flatpak run --filesystem="$WORK" --filesystem="$SHOTS" --command=sh \
@@ -39,10 +41,10 @@ run() {  # extra --env options...
         "$ID" -c 'XDG_CONFIG_HOME="$1" exec ptz-control' sh "$WORK/config"
     # Flatpak sets XDG_CONFIG_HOME itself, so the test settings folder is chosen inside the sandbox.
     if [ -f "$OBSERVER" ] && [ -z "${PTZ_NO_OBSERVE:-}" ]; then
-        python3 "$OBSERVER" run --out "$SHOTS/observer" --name "run $RUNS" --timeout 90 --allow "$WORK/" \
+        python3 "$OBSERVER" run --out "$SHOTS/observer" --name "run $RUNS" --timeout "$RUN_TIMEOUT" --allow "$WORK/" \
             --allow "$SHOTS/" --guard "$HOME/.var/app/$ID" --log "$WORK/app.log" -- "$@" >>"$WORK/app.log" 2>&1 || true
     else
-        timeout 90 "$@" >>"$WORK/app.log" 2>&1 || true
+        timeout "$RUN_TIMEOUT" "$@" >>"$WORK/app.log" 2>&1 || true
     fi
 }
 observed() {  # run number: fails the run when the observer found a problem in it
@@ -147,9 +149,41 @@ check "run 5 remembered the measured view for this camera" \
 check "measured-view picture saved" "$([ -s "$MEASURED" ] && echo 0 || echo 1)"
 observed 5
 
+# Run 6: an ONVIF camera like a real one (its units are degrees seen through a lens, each move lands 2% short, and
+# its pictures trail it by a second). Double-clicking a point measures the view, moves there, then corrects from the
+# pictures until the point is at the centre. The mock logs where each picture really points: the last must show what
+# the picture before the move showed at that point (0.6 of the way to the right edge, 0.4 to the bottom; 60 x 35
+# degrees), within 0.2 degrees.
+REAL_PORT=18084
+python3 -u "$ROOT/tools/mock-camera.py" --port "$REAL_PORT" --video none --onvif-real --picture-lag 1 >"$WORK/mock-real.log" 2>&1 &
+REAL_MOCK=$!
+sleep 1
+settings admin "$REAL_PORT"
+CORRECTED="$SHOTS/flatpak-corrected.png"
+rm -f "$CORRECTED"
+RUN_TIMEOUT=150
+run --env=PTZ_PASSWORD=secret --env=PTZ_SNAPSHOT_PICTURE=1 --env=PTZ_SNAPSHOT_PATH="$CORRECTED" \
+    --env=PTZ_SNAPSHOT_MEASURE_AT=0.6,-0.4 --env=PTZ_SNAPSHOT_WAIT=90
+RUN_TIMEOUT=90
+kill "$REAL_MOCK" 2>/dev/null || true
+LANDED="$(awk '
+    /^mock: onvif truth/ { split($4, a, "="); split($5, b, "="); tp = a[2]; tt = b[2]; if (click) { ep = tp; et = tt; n++ } }
+    /^mock: onvif absolute move/ { split($6, a, "="); split($7, b, "=");
+        if (!click && a[2] + 0 != 0 && b[2] + 0 != 0) { click = 1; sp = tp; st = tt } else if (click) moves++ }
+    END {
+        r = atan2(1, 1) / 45; p = sp * r; t = st * r; tx = 0.6 * sin(30 * r) / cos(30 * r); ty = -0.4 * sin(30 * r) / cos(30 * r) * 270 / 480
+        fx = cos(t) * sin(p); fy = cos(t) * cos(p); fz = sin(t)
+        x = fx + tx * cos(p) - ty * sin(t) * sin(p); y = fy - tx * sin(p) - ty * sin(t) * cos(p); z = fz + ty * cos(t)
+        wp = atan2(x, y) / r; wt = atan2(z, sqrt(x * x + y * y)) / r
+        printf "%d corrections; pan %.3f want %.3f, tilt %.3f want %.3f\n", moves, ep, wp, et, wt
+        exit !(click && moves >= 1 && (ep - wp) ^ 2 < 0.04 && (et - wt) ^ 2 < 0.04) }' "$WORK/mock-real.log")"
+check "run 6 corrected the move until the double-clicked point was at the centre ($LANDED)" "$?"
+check "corrected-move picture saved" "$([ -s "$CORRECTED" ] && echo 0 || echo 1)"
+observed 6
+
 if [ "$FAIL" = 0 ]; then
     printf 'PASS %s %s: pictures in %s\n' "$ID" "$(flatpak info "$ID" | sed -n 's/^ *Version: //p')" "$SHOTS"
 else
-    cat "$WORK/app.log" "$WORK/mock.log" "$WORK/mock-still.log" "$WORK/config/PTZControl/PTZControl.conf"
+    cat "$WORK/app.log" "$WORK/mock.log" "$WORK/mock-still.log" "$WORK/mock-real.log" "$WORK/config/PTZControl/PTZControl.conf"
     exit 1
 fi

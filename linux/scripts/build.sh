@@ -29,6 +29,11 @@ flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakr
 printf 'Built dist/%s\n' "$(basename "$BUNDLE")"
 
 if [ "${1:-}" = "--install" ]; then
+    # Never replace the copy while it runs (a test's private copy runs as the same app, so wait for the test too).
+    if flatpak ps --columns=application | grep -qxF "$ID"; then
+        echo "$ID is running; quit it and run this again to install (the bundle is built)" >&2
+        exit 1
+    fi
     flatpak install --user -y --noninteractive --reinstall "$BUNDLE"
     printf 'Installed %s %s for this user\n' "$ID" "$VERSION"
 fi

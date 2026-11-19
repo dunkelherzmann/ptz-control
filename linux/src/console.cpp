@@ -582,7 +582,7 @@ private:
         plane_->state.on_aim = [this](double pan, double tilt) { aim(pan, tilt); };
         plane_->state.on_aim_and_move = [this](double pan, double tilt) {
             aim(pan, tilt);
-            send_move();
+            move_to_point(pan, tilt);
         };
         plane_->state.on_measure_and_move = [this](QPointF point) { measure_then_move(point); };
         for (auto [meter, field] : {std::pair{meter_pan_, target_pan_}, std::pair{meter_tilt_, target_tilt_},
@@ -1186,8 +1186,62 @@ private:
             double to_pan = 0, to_tilt = 0;
             ptz_view_point(&view, point.x(), point.y(), &to_pan, &to_tilt);
             aim(to_pan, to_tilt);
-            send_move();
+            move_to_point(to_pan, to_tilt, scale);
         });
+    }
+
+    // A double-click on the picture (spec I14): move there and make sure the point really comes to the centre (the
+    // pictures show where it landed; the camera is turned by what is left). A zoom typed in the target, or a view not
+    // yet measured, moves the plain way.
+    void move_to_point(double pan, double tilt, std::optional<ViewScale> measured = std::nullopt) {
+        if (state_ != State::Connected) return;
+        QString error;
+        std::optional<double> zoom = parse_target(&error).zoom;
+        if (!error.isEmpty()) zoom.reset();
+        std::optional<ViewScale> scale = measured ? measured : plane_->state.scale;
+        std::optional<double> current_zoom = current_ && current_->zoom ? std::optional<double>(current_->zoom->value) : std::nullopt;
+        if (!scale || (zoom && zoom != current_zoom)) {
+            send_move();
+            return;
+        }
+        if (link_busy(link_)) log_line("Request in progress; move queued behind it");
+        link_move_to_point(link_, *scale, pan, tilt, [this](Snapshot snapshot) {
+            // The core holds the link while it moves and checks: show its readings, so the plane follows the camera.
+            if (state_ != State::Connected) return;
+            current_ = snapshot;
+            last_read_ = QDateTime::currentMSecsSinceEpoch();
+            update_controls();
+        }, [this](LinkResult result, PointMove move) {
+            if (state_ != State::Connected) return;
+            if (result.ok) {
+                QString at = current_ ? "pan=" + (current_->pan ? current_->pan->text : QString("unknown")) + ", tilt=" +
+                                            (current_->tilt ? current_->tilt->text : QString("unknown"))
+                                      : QString();
+                log_line("Moved to the point, now at " + at +
+                         (move.corrections == 0 ? QString("; it landed at the centre")
+                                                : "; corrected " + (move.corrections == 1 ? QString("once") : QString::number(move.corrections) + " times") +
+                                                      " from the picture so the point is at the centre"));
+                if (move.learned) {
+                    log_line("The move showed the view's scale: ±" + format_value(std::abs(move.learned->half_x)) + " pan × ±" +
+                             format_value(std::abs(move.learned->half_y)) + " tilt; the plane uses it now");
+                    measured_ = move.learned;
+                    measured_zoom_ = current_ && current_->zoom ? std::optional<double>(current_->zoom->value) : std::nullopt;
+                    if (current_) current_->view_scale = move.learned;
+                    QString key = views_key(settings_);
+                    link_saved_views(link_, [key](QString text) { store_views(key, text); });
+                }
+                next_refresh_ = 0;
+                camera_moved();
+            } else if (result.link_lost) {
+                link_lost(result.error);
+                return;
+            } else {
+                log_line("Move failed: " + result.error, true);
+            }
+            update_controls();
+        });
+        head_to(Target{pan, tilt, std::nullopt});
+        update_controls();
     }
 
     void send_move() {
@@ -1422,7 +1476,10 @@ private:
             "pan and tilt it shows. The picture's centre is where the camera points; the grid, the zero axes (pan 0, tilt "
             "0), the range's limits (dashed), the trail of recent positions, the starting position (S) and the target sit "
             "on what they point at. Click on the picture to aim at the pan and tilt under the pointer (it fills the target "
-            "fields); double-click (or Move) to move there, which brings that point to the centre. Show Grid (Ctrl+') shows "
+            "fields); double-click (or Move) to move there, which brings that point to the centre. After a double-click the app "
+            "compares the picture from before the move with the one after and turns the camera by whatever is left over, so "
+            "the point really ends at the centre even when the camera lands a little off or the view's scale is off; the move "
+            "also corrects the scale the plane uses. Show Grid (Ctrl+') shows "
             "or hides the grid, axes and limits.\n"
             "The app learns how wide the picture is by measuring it: Measure View (Ctrl+Shift+M) turns the camera a little "
             "on each axis and back (a few seconds). Each zoom is measured once and remembered for that camera; at a zoom "
