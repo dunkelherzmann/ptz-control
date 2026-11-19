@@ -67,9 +67,16 @@ struct Reading {
     std::wstring text;
 };
 
+// How wide the picture is at one zoom (ptz_view_scale): with degrees, the tangents of half its width and height;
+// otherwise the pan (tilt) change from its centre to its right (top) edge.
+struct ViewScale {
+    double half_x = 0, half_y = 0;
+};
+
 struct Snapshot {
     std::optional<Reading> pan, tilt, zoom;
     std::wstring move_status;
+    std::optional<ViewScale> view_scale;  // the view measured at this reading's zoom, when there is one
     bool empty() const { return !pan && !tilt && !zoom; }
     bool operator==(const Snapshot &o) const;  // the readings only
 };
@@ -78,6 +85,7 @@ struct CameraInfo {
     std::wstring name, units;
     AxisRange pan, tilt, zoom;
     bool zoom_integer = false;
+    bool degrees = false;  // pan and tilt are angles in degrees (Axis): the picture is projected as the lens sees it
 };
 
 struct LinkResult {
@@ -121,6 +129,15 @@ void link_start_live(CameraLink *link, std::function<void(std::shared_ptr<LiveFr
                      std::function<void(const std::wstring &)> ended, std::function<void(LinkResult, std::wstring)> done);
 // Stops the live video, if any, and waits for its thread.
 void link_stop_live(CameraLink *link);
+// Measures how wide the picture is at the current zoom: the camera turns a little on each axis and back, and the
+// core compares still pictures (decoded to grey with WIC). Takes several seconds.
+void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done);
+// The measured views as text, to keep for this camera, and loading them back.
+void link_saved_views(CameraLink *link, std::function<void(std::wstring)> done);
+void link_load_views(CameraLink *link, const std::wstring &text);
+// Measured views kept per camera in the app's settings, under `name` ("Views axis host:port").
+std::wstring stored_views(const std::wstring &name);
+void store_views(const std::wstring &name, const std::wstring &text);
 void link_web_url(CameraLink *link, std::function<void(LinkResult, std::wstring url, std::wstring notice)> done);
 void link_disconnect(CameraLink *link, std::function<void()> done);
 
@@ -139,10 +156,12 @@ HWND create_plane(HWND parent, int id);
 HWND create_meter(HWND parent, int id, const wchar_t *title);
 
 namespace Gdiplus { class Bitmap; }
-// The camera's live video, or a still picture of its view, with the pan/tilt range plane on top: the whole range spans
-// the picture (pan across, tilt up), with its grid, zero axes and limits (hidden with Show Grid off), the trail of
-// recent positions, the starting position, the target and the current position. Click or drag to aim at a pan and
-// tilt; double-click to aim and move. Only measured positions are drawn: no reading, no marker.
+// The camera's live video, or a still picture of its view, with the pan/tilt plane drawn over it at the picture's own
+// scale: once the view is measured at the current zoom, every point of the picture is the pan and tilt it shows, so
+// the grid, the zero axes, the range's limits, the trail, the starting position and the target sit on what they point
+// at, and the current position is the picture's centre. Click or drag to aim at the pan and tilt under the pointer;
+// double-click to aim and move, which brings that point to the centre. Until the view is measured, a double-click
+// measures it first. Nothing covers the picture but thin lines and small labels.
 struct PlaneState {
     std::shared_ptr<Gdiplus::Bitmap> picture;
     int picture_width = 0, picture_height = 0;
@@ -153,13 +172,14 @@ struct PlaneState {
     bool show_grid = true;
     AxisRange pan_range, tilt_range;
     std::optional<Snapshot> current, starting;
-    // The target of a move under way: the plane is centred on it until the camera stops, so it doesn't wait for the
-    // readings; the reticle still shows the readings, closing in on the centre.
-    std::optional<std::pair<double, double>> heading;  // pan, tilt
+    bool degrees = false;             // pan and tilt are angles in degrees: the plane is projected as the lens sees it
+    std::optional<ViewScale> scale;   // how wide the picture is at the current zoom; none until measured
+    bool measuring = false;           // the camera is turning a little and back to measure its view
     std::optional<double> target_pan, target_tilt;
     std::vector<std::optional<std::pair<double, double>>> trail;  // pan, tilt; empty entries mark gaps in measurements
     bool enabled = false;
     std::function<void(double, double)> on_aim, on_aim_and_move;
+    std::function<void(double, double)> on_measure_and_move;  // a double-click before the view is measured: -1…1, up positive
     void record_trail();  // after `current` changes: the last 120 positions measured
 };
 PlaneState &plane_state(HWND plane);

@@ -475,7 +475,7 @@ private:
         middle->setSpacing(12);
         auto *instruments = new QVBoxLayout;
         instruments->setSpacing(12);
-        auto *plane_panel = new Panel("CAMERA PICTURE // PAN/TILT RANGE — CLICK TO AIM, DOUBLE-CLICK TO MOVE THERE");
+        auto *plane_panel = new Panel("CAMERA PICTURE // PAN/TILT AT THE PICTURE'S SCALE — CLICK TO AIM, DOUBLE-CLICK TO MOVE THERE");
         plane_ = new PlaneView;
         plane_->state.show_grid = settings_.show_grid;
         grid_button_ = new GridButton;
@@ -584,6 +584,7 @@ private:
             aim(pan, tilt);
             send_move();
         };
+        plane_->state.on_measure_and_move = [this](QPointF point) { measure_then_move(point); };
         for (auto [meter, field] : {std::pair{meter_pan_, target_pan_}, std::pair{meter_tilt_, target_tilt_},
                                     std::pair{meter_zoom_, target_zoom_}}) {
             QLineEdit *f = field;
@@ -694,6 +695,10 @@ private:
         const CameraInfo &info = info_ ? *info_ : empty_info;
         plane_->state.enabled = connected;
         plane_->state.current = connected ? current_ : std::nullopt;
+        std::optional<ViewScale> scale = connected && current_ ? current_->view_scale : std::nullopt;
+        if (connected && !scale && measured_ && current_ && measured_zoom_ == (current_->zoom ? std::optional<double>(current_->zoom->value) : std::nullopt))
+            scale = measured_;
+        plane_->state.scale = scale;
         plane_->state.starting = connected ? starting_ : std::nullopt;
         plane_->record();
         refresh_picture_->setEnabled(connected && !taking_picture_);
@@ -943,6 +948,10 @@ private:
                 paused_ = false;
                 plane_->state.pan = info.pan;
                 plane_->state.tilt = info.tilt;
+                plane_->state.degrees = info.degrees;
+                plane_->state.measuring = false;
+                measured_.reset();
+                if (QString views = stored_views(views_key(settings_)); !views.isEmpty()) link_load_views(link_, views);
                 plane_->reset_trail();
                 plane_->state.picture = QImage();
                 plane_->state.picture_note.clear();
@@ -990,7 +999,8 @@ private:
             ++live_id_;
             picture_due_ = 0;
             heading_since_ = 0;
-            plane_->state.heading.reset();
+            measured_.reset();
+            plane_->state.measuring = false;
             show_message("Disconnected.", false);
             log_line("Disconnected");
             update_controls();
@@ -1021,7 +1031,8 @@ private:
     void refresh() {
         link_position(link_, [this](LinkResult result, Snapshot snapshot) {
             if (state_ != State::Connected) return;
-            next_refresh_ = QDateTime::currentMSecsSinceEpoch() + 2000;
+            // While the camera moves, read it often, so the plane over the live video keeps up with it.
+            next_refresh_ = QDateTime::currentMSecsSinceEpoch() + (heading_since_ && !plane_->state.live.isEmpty() ? 400 : 2000);
             if (result.ok) {
                 failures_ = 0;
                 last_read_ = QDateTime::currentMSecsSinceEpoch();
@@ -1061,12 +1072,7 @@ private:
     void tick() {
         if (state_ != State::Connected || link_busy(link_)) return;
         qint64 now = QDateTime::currentMSecsSinceEpoch();
-        if (heading_since_ && stopped_since(heading_since_)) {
-            // The camera has arrived: centre on where it says it is, which corrects a move that stopped short.
-            heading_since_ = 0;
-            plane_->state.heading.reset();
-            plane_->update();
-        }
+        if (heading_since_ && stopped_since(heading_since_)) heading_since_ = 0;  // arrived: back to the usual refresh
         if (picture_due_ && stopped_since(picture_due_)) {
             picture_due_ = 0;  // a fresh still picture once the camera has stopped
             if (plane_->state.live.isEmpty()) {
@@ -1116,17 +1122,72 @@ private:
         update_controls();
     }
 
-    // Centres the plane on a move's target at once (an axis left unchanged keeps its reading), without waiting for the
-    // camera's readings; they take over again once it stops.
-    void head_to(const Target &t) {
-        auto clamp = [](double v, const AxisRange &r) { return r.available && r.max > r.min ? std::clamp(v, r.min, r.max) : v; };
-        std::optional<double> pan = t.pan, tilt = t.tilt;
-        if (!pan && current_ && current_->pan) pan = current_->pan->value;
-        if (!tilt && current_ && current_->tilt) tilt = current_->tilt->value;
-        if (!pan || !tilt || !info_) return;
-        plane_->state.heading = QPointF(clamp(*pan, info_->pan), clamp(*tilt, info_->tilt));
-        heading_since_ = QDateTime::currentMSecsSinceEpoch();
+    // A move is under way: read the position often until the camera stops.
+    void head_to(const Target &) { heading_since_ = QDateTime::currentMSecsSinceEpoch(); }
+
+    // ---- the camera's view (spec I13) --------------------------------------------------
+
+    // Where the camera's measured views are kept between sessions: one entry per camera.
+    static QString views_key(const Settings &s) {
+        return QString("Views %1 %2:%3").arg(s.vendor ? "axis" : "onvif", s.camera_host).arg(s.camera_port);
+    }
+
+    bool can_measure_view() const {
+        return state_ == State::Connected && !plane_->state.measuring && info_ && info_->pan.available &&
+               info_->tilt.available && current_ && current_->pan && current_->tilt;
+    }
+
+    // Camera ▸ Measure View: the camera turns a little on each axis and back, so the app learns how wide its picture is
+    // at this zoom; then the plane is drawn over the picture at its scale.
+    void measure_view(std::function<void(ViewScale)> then = nullptr) {
+        if (!can_measure_view()) return;
+        plane_->state.measuring = true;
         plane_->update();
+        std::optional<double> zoom = current_->zoom ? std::optional<double>(current_->zoom->value) : std::nullopt;
+        log_line("Measuring the camera's view: it turns a little on each axis and back (a few seconds)…");
+        link_measure_view(link_, [this, zoom, then](LinkResult result, ViewScale scale) {
+            plane_->state.measuring = false;
+            plane_->update();
+            if (state_ != State::Connected) return;
+            if (result.ok) {
+                measured_ = scale;
+                measured_zoom_ = zoom;
+                auto degrees = [](double half) { return format_value(2 * std::atan(std::abs(half)) * 180 / M_PI); };
+                QString wide = info_ && info_->degrees
+                                   ? degrees(scale.half_x) + "° × " + degrees(scale.half_y) + "°"
+                                   : "±" + format_value(std::abs(scale.half_x)) + " pan × ±" +
+                                         format_value(std::abs(scale.half_y)) + " tilt";
+                log_line("View measured: the picture spans " + wide + (zoom ? " at zoom " + format_value(*zoom) : QString()));
+                QString key = views_key(settings_);
+                link_saved_views(link_, [key](QString text) { store_views(key, text); });
+                next_refresh_ = 0;
+                update_controls();
+                if (then) then(scale);
+            } else if (result.link_lost) {
+                link_lost(result.error);
+                return;
+            } else {
+                log_line("Measuring the view failed: " + result.error, true);
+            }
+            update_controls();
+        });
+        update_controls();
+    }
+
+    // A double-click before the view is measured: measure it, then move to the point's pan and tilt as it was when
+    // clicked.
+    void measure_then_move(QPointF point) {
+        if (!info_ || !current_ || !current_->pan || !current_->tilt) return;
+        CameraInfo info = *info_;
+        double pan = current_->pan->value, tilt = current_->tilt->value;
+        measure_view([this, info, pan, tilt, point](ViewScale scale) {
+            auto range = [](const AxisRange &r) { return ptz_range{r.available ? 1 : 0, r.min, r.max}; };
+            ptz_view view{{scale.half_x, scale.half_y}, info.degrees ? 1 : 0, pan, tilt, range(info.pan), range(info.tilt)};
+            double to_pan = 0, to_tilt = 0;
+            ptz_view_point(&view, point.x(), point.y(), &to_pan, &to_tilt);
+            aim(to_pan, to_tilt);
+            send_move();
+        });
     }
 
     void send_move() {
@@ -1176,8 +1237,6 @@ private:
             if (result.ok) {
                 log_line("Stop accepted");
                 heading_since_ = 0;
-                plane_->state.heading.reset();  // centre on where the camera stopped
-                plane_->update();
                 camera_moved();
             } else if (result.link_lost) { link_lost(result.error); return; }
             else log_line("Stop failed: " + result.error, true);
@@ -1356,14 +1415,18 @@ private:
             "• ONVIF: the camera's advertised absolute space (commonly pan/tilt −1…1, zoom 0…1; not degrees).\n"
             "• Axis: pan/tilt in degrees; zoom is an integer in the native range.\n\n"
             "Leave a target field blank (or type x) to keep that axis unchanged.\n"
-            "The camera picture shows the camera's live video, or a still picture when the video can't play. Click on it to "
-            "aim at that pan and tilt of the camera's range (it fills the target fields); double-click (or Move) to move "
-            "there. A still picture is renewed once the camera stops. Refresh Picture (Ctrl+Shift+R) takes a new picture, "
-            "or restarts the live view.\n"
-            "The plane over the picture is the camera's whole pan/tilt range, centred on where the camera points: the "
-            "reticle at the picture's centre is the current position, and the grid, the zero axes (pan 0, tilt 0), the "
-            "range's edges and limits, the trail of recent positions, the starting position (S) and the target move under "
-            "it as the camera moves. Show Grid (Ctrl+') shows or hides the grid, axes and limits.\n"
+            "The camera picture shows the camera's live video, or a still picture when the video can't play. A still "
+            "picture is renewed once the camera stops. Refresh Picture (Ctrl+Shift+R) takes a new picture, or restarts the "
+            "live view.\n"
+            "The pan/tilt plane is drawn over the picture at the picture's own scale, so every point of the picture is the "
+            "pan and tilt it shows. The picture's centre is where the camera points; the grid, the zero axes (pan 0, tilt "
+            "0), the range's limits (dashed), the trail of recent positions, the starting position (S) and the target sit "
+            "on what they point at. Click on the picture to aim at the pan and tilt under the pointer (it fills the target "
+            "fields); double-click (or Move) to move there, which brings that point to the centre. Show Grid (Ctrl+') shows "
+            "or hides the grid, axes and limits.\n"
+            "The app learns how wide the picture is by measuring it: Measure View (Ctrl+Shift+M) turns the camera a little "
+            "on each axis and back (a few seconds). Each zoom is measured once and remembered for that camera; at a zoom "
+            "not yet measured, double-clicking the picture measures it first, then moves.\n"
             "Drag along a travel meter to aim that axis alone, double-click it to aim and move.\n\n"
             "Starting coordinates are the first reading after connecting and stay fixed. "
             "Return to Start (Ctrl+B) sends an absolute move there.\n"
@@ -1412,6 +1475,7 @@ public:
         key(QKeySequence("Ctrl+R"), [this] { refresh_now(); });
         key(QKeySequence("Ctrl+P"), [this] { toggle_pause(); });
         key(QKeySequence("Ctrl+Shift+R"), [this] { refresh_picture(); });
+        key(QKeySequence("Ctrl+Shift+M"), [this] { measure_view(); });
         key(QKeySequence("Ctrl+'"), [this] { toggle_grid(); });
         key(QKeySequence("Ctrl+L"), [this] { open_web(); });
         key(QKeySequence("Ctrl+Q"), [this] { close(); });
@@ -1464,6 +1528,7 @@ public:
         item(camera, "Refresh Position", "Ctrl+R", connected, [this] { refresh_now(); });
         item(camera, paused_ ? "Resume Auto-Refresh" : "Pause Auto-Refresh", "Ctrl+P", connected, [this] { toggle_pause(); });
         item(camera, "Refresh Picture", "Ctrl+Shift+R", connected, [this] { refresh_picture(); });
+        item(camera, "Measure View", "Ctrl+Shift+M", can_measure_view(), [this] { measure_view(); });
         camera->addSeparator();
         item(camera, "Open Camera Web Interface", "Ctrl+L", connected, [this] { open_web(); });
         camera->addSeparator();
@@ -1682,29 +1747,31 @@ private:
         });
     }
 
-    // PTZ_SNAPSHOT_PICTURE: aim at pan 0.45, tilt 0.3 on the range plane (a picture of that is saved to
-    // PTZ_SNAPSHOT_AIM_PATH), move there, and save the window once the new picture has come; PTZ_SNAPSHOT_LIVE_PATH
-    // gets the live view's plate ("H.264 · 320 × 180") or "no live view". PTZ_SNAPSHOT_HIDE_GRID turns the grid off
-    // with View ▸ Show Grid first.
+    // PTZ_SNAPSHOT_PICTURE: aim at pan 0.45, tilt 0.3 (a picture of that is saved to PTZ_SNAPSHOT_AIM_PATH), move
+    // there, and save the window once the new picture has come; PTZ_SNAPSHOT_LIVE_PATH gets the live view's plate
+    // ("H.264 · 320 × 180") or "no live view". PTZ_SNAPSHOT_HIDE_GRID turns the grid off with View ▸ Show Grid first.
+    // PTZ_SNAPSHOT_MEASURE_AT="x,y" double-clicks that point of the picture instead, before the view is measured;
+    // PTZ_SNAPSHOT_WAIT is the seconds before the last picture (measuring the view first takes longer).
     void run_picture_script() {
         if (qEnvironmentVariableIsSet("PTZ_SNAPSHOT_HIDE_GRID")) toggle_grid();
         connect_camera();
-        QTimer::singleShot(3000, this, [this] { if (plane_->state.on_aim) plane_->state.on_aim(0.45, 0.3); });
-        QTimer::singleShot(3400, this, [this] {
-            if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_AIM_PATH"); !path.isEmpty()) grab().save(path);
-            send_move();
-        });
+        if (QString at = qEnvironmentVariable("PTZ_SNAPSHOT_MEASURE_AT"); !at.isEmpty()) {
+            QStringList xy = at.split(',');
+            QPointF point(xy.value(0).toDouble(), xy.value(xy.size() - 1).toDouble());
+            QTimer::singleShot(3000, this, [this, point] { if (plane_->state.on_measure_and_move) plane_->state.on_measure_and_move(point); });
+        } else {
+            QTimer::singleShot(3000, this, [this] { if (plane_->state.on_aim) plane_->state.on_aim(0.45, 0.3); });
+            QTimer::singleShot(3400, this, [this] {
+                if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_AIM_PATH"); !path.isEmpty()) grab().save(path);
+                send_move();
+            });
+        }
         QTimer::singleShot(4400, this, [this] {
             if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_MOVING_PATH"); !path.isEmpty()) grab().save(path);
-            if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_HEADING_PATH"); !path.isEmpty()) {
-                // where the plane is centred while it moves
-                const auto &h = plane_->state.heading;
-                QFile file(path);
-                if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-                    file.write((h ? format_value(h->x()) + " " + format_value(h->y()) : QString("none")).toUtf8());
-            }
         });
-        QTimer::singleShot(10000, this, [this] {
+        bool ok = false;
+        double wait = qEnvironmentVariable("PTZ_SNAPSHOT_WAIT").toDouble(&ok);
+        QTimer::singleShot(static_cast<int>((ok && wait > 0 ? wait : 10) * 1000), this, [this] {
             grab().save(qEnvironmentVariable("PTZ_SNAPSHOT_PATH"));
             if (QString path = qEnvironmentVariable("PTZ_SNAPSHOT_LIVE_PATH"); !path.isEmpty()) {
                 QFile file(path);
@@ -1730,7 +1797,9 @@ private:
     bool live_starting_ = false;  // the live video: starting, or playing with its codec ("H.264")
     QString live_codec_;
     int live_id_ = 0;
-    qint64 heading_since_ = 0;  // when a move was accepted: the plane is centred on its target until the camera stops
+    qint64 heading_since_ = 0;  // when a move was accepted: the position is read often until the camera stops
+    std::optional<ViewScale> measured_;      // the view measured just now, until a reading at its zoom carries it
+    std::optional<double> measured_zoom_;
     qint64 picture_due_ = 0, last_read_ = 0;  // when the camera last moved (a fresh picture is due), the last reading
     int route_ = 0, vendor_ = 0;
     std::deque<std::pair<QString, bool>> log_lines_;

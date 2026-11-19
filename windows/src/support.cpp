@@ -2,6 +2,9 @@
 #include <cstdlib>
 #include "app.h"
 
+#include <shlwapi.h>
+#include <wincodec.h>
+
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
@@ -398,6 +401,7 @@ void link_connect(CameraLink *link, const Settings &s, const std::wstring &camer
             info.tilt = range(raw.tilt);
             info.zoom = range(raw.zoom);
             info.zoom_integer = raw.zoom_integer != 0;
+            info.degrees = raw.degrees != 0;
             result.ok = true;
         }
         return [done, result, info] { done(result, info); };
@@ -424,6 +428,8 @@ void link_position(CameraLink *link, std::function<void(LinkResult, Snapshot)> d
                 snapshot.tilt = reading(raw.tilt);
                 snapshot.zoom = reading(raw.zoom);
                 snapshot.move_status = field(raw.move_status);
+                ptz_view_scale scale;
+                if (ptz_view_scale_at(link->session_, &raw, &scale)) snapshot.view_scale = ViewScale{scale.half_x, scale.half_y};
                 result.ok = true;
             }
         }
@@ -485,6 +491,101 @@ void link_picture(CameraLink *link, std::function<void(LinkResult, std::string)>
         }
         return [done, result, bytes] { done(result, bytes); };
     });
+}
+
+namespace {
+
+// The core compares small grey pictures; decoding them is the host's part: WIC decodes the JPEG or PNG, stretches it
+// to width x height and turns it grey.
+int decode_grey(void *, const unsigned char *data, size_t size, unsigned char *grey, int width, int height) {
+    if (!data || !grey || width <= 0 || height <= 0 || size > 0x7fffffff) return 0;
+    HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);  // the worker thread; S_FALSE once it is
+    bool ok = false;
+    IWICImagingFactory *factory = nullptr;
+    IStream *stream = nullptr;
+    IWICBitmapDecoder *decoder = nullptr;
+    IWICBitmapFrameDecode *frame = nullptr;
+    IWICBitmapScaler *scaler = nullptr;
+    IWICFormatConverter *converter = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))) &&
+        (stream = SHCreateMemStream(data, static_cast<UINT>(size))) &&
+        SUCCEEDED(factory->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnDemand, &decoder)) &&
+        SUCCEEDED(decoder->GetFrame(0, &frame)) && SUCCEEDED(factory->CreateBitmapScaler(&scaler)) &&
+        SUCCEEDED(scaler->Initialize(frame, static_cast<UINT>(width), static_cast<UINT>(height), WICBitmapInterpolationModeFant)) &&
+        SUCCEEDED(factory->CreateFormatConverter(&converter)) &&
+        SUCCEEDED(converter->Initialize(scaler, GUID_WICPixelFormat8bppGray, WICBitmapDitherTypeNone, nullptr, 0,
+                                        WICBitmapPaletteTypeCustom))) {
+        UINT stride = static_cast<UINT>(width);
+        ok = SUCCEEDED(converter->CopyPixels(nullptr, stride, stride * static_cast<UINT>(height), grey));
+    }
+    for (IUnknown *object : std::initializer_list<IUnknown *>{converter, scaler, frame, decoder, stream, factory})
+        if (object) object->Release();
+    if (SUCCEEDED(com)) CoUninitialize();
+    return ok ? 1 : 0;
+}
+
+}  // namespace
+
+void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done) {
+    link->run([=]() -> std::function<void()> {
+        LinkResult result;
+        ViewScale view;
+        if (!link->session_) {
+            result.error = L"Not connected";
+        } else {
+            ptz_view_scale scale{};
+            char error[1024] = {};
+            if (ptz_measure_view(link->session_, decode_grey, nullptr, &scale, error, sizeof error)) {
+                view = ViewScale{scale.half_x, scale.half_y};
+                result.ok = true;
+            } else {
+                result = failure(link->session_, error);
+            }
+        }
+        return [done, result, view] { done(result, view); };
+    });
+}
+
+void link_saved_views(CameraLink *link, std::function<void(std::wstring)> done) {
+    link->run([=]() -> std::function<void()> {
+        std::wstring text;
+        if (link->session_) {
+            size_t need = ptz_view_scales_save(link->session_, nullptr, 0);
+            std::string buffer(need + 1, '\0');
+            ptz_view_scales_save(link->session_, buffer.data(), buffer.size());
+            text = W(buffer.c_str());
+        }
+        return [done, text] { done(text); };
+    });
+}
+
+void link_load_views(CameraLink *link, const std::wstring &text) {
+    std::string utf8 = U(text);
+    link->run([=]() -> std::function<void()> {
+        if (link->session_) ptz_view_scales_load(link->session_, utf8.c_str());
+        return [] {};
+    });
+}
+
+std::wstring stored_views(const std::wstring &name) {
+    DWORD size = 0;
+    if (RegGetValueW(HKEY_CURRENT_USER, settings_key(), name.c_str(), RRF_RT_REG_SZ, nullptr, nullptr, &size) != ERROR_SUCCESS ||
+        size < sizeof(wchar_t))
+        return {};
+    std::wstring text(size / sizeof(wchar_t), L'\0');
+    if (RegGetValueW(HKEY_CURRENT_USER, settings_key(), name.c_str(), RRF_RT_REG_SZ, nullptr, text.data(), &size) != ERROR_SUCCESS)
+        return {};
+    text.resize(wcsnlen(text.c_str(), text.size()));
+    return text;
+}
+
+void store_views(const std::wstring &name, const std::wstring &text) {
+    HKEY key;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, settings_key(), 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) != ERROR_SUCCESS)
+        return;
+    RegSetValueExW(key, name.c_str(), 0, REG_SZ, reinterpret_cast<const BYTE *>(text.c_str()),
+                   static_cast<DWORD>((text.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
 }
 
 void link_web_url(CameraLink *link, std::function<void(LinkResult, std::wstring, std::wstring)> done) {

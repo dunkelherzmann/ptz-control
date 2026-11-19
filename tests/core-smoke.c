@@ -3,6 +3,7 @@
  *   python3 tools/mock-camera.py --port 8081 --plain-png &
  *   scripts/test-core.sh
  */
+#define _DEFAULT_SOURCE /* usleep under -std=c11 with glibc */
 #include "ptzcore.h"
 
 #include <math.h>

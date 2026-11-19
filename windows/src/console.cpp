@@ -30,7 +30,7 @@ enum : int {
     ID_SSH_LOGIN = 260, ID_CAM_LOGIN, ID_SAVE_SSH, ID_SAVE_CAM,
     CMD_CONNECT = 400, CMD_DISCONNECT, CMD_MOVE, CMD_RETURN, CMD_STOP, CMD_REFRESH, CMD_PAUSE, CMD_WEB, CMD_HELP, CMD_ABOUT,
     CMD_LOGINS, CMD_QUIT, CMD_UNDO, CMD_REDO, CMD_CUT, CMD_COPY, CMD_PASTE, CMD_SELECT_ALL, CMD_MINIMIZE, CMD_MAXIMIZE,
-    CMD_CLOSE, CMD_REFRESH_PICTURE, CMD_SHOW_GRID,
+    CMD_CLOSE, CMD_REFRESH_PICTURE, CMD_SHOW_GRID, CMD_MEASURE_VIEW,
     CMD_THEME = 450,  // + Phosphor index; keep clear of the commands above
 };
 
@@ -64,7 +64,9 @@ struct Console {
     bool closing = false;
     bool taking_picture = false;
     ULONGLONG picture_due = 0, last_read = 0;  // when the camera last moved (a fresh picture is due), the last reading
-    ULONGLONG heading_since = 0;  // when a move was accepted: the plane is centred on its target until the camera stops
+    ULONGLONG heading_since = 0;  // when a move was accepted: the position is read often until the camera stops
+    std::optional<ViewScale> measured;     // the view measured just now, until a reading at its zoom carries it
+    std::optional<double> measured_zoom;
     // The live video: starting, or playing with its codec ("H.264"); `live_run` tells each start's calls apart.
     bool live_starting = false;
     std::wstring live_codec;
@@ -303,6 +305,11 @@ void update_controls() {
     PlaneState &plane = plane_state(g->plane);
     plane.enabled = connected;
     plane.current = connected ? g->current : std::nullopt;
+    std::optional<ViewScale> scale = connected && g->current ? g->current->view_scale : std::nullopt;
+    if (connected && !scale && g->measured && g->current &&
+        g->measured_zoom == (g->current->zoom ? std::optional<double>(g->current->zoom->value) : std::nullopt))
+        scale = g->measured;
+    plane.scale = scale;
     plane.record_trail();
     plane.starting = connected ? g->starting : std::nullopt;
     InvalidateRect(g->plane, nullptr, FALSE);
@@ -488,6 +495,11 @@ void save_ticked_logins(std::vector<std::pair<SavedLogin, LoginStore>> &saved) {
     for (auto &[login, store] : saved) SecureZeroMemory(login.password.data(), login.password.size() * sizeof(wchar_t));
 }
 
+// Where the camera's measured views are kept between sessions: one entry per camera.
+std::wstring views_key(const Settings &s) {
+    return L"Views " + std::wstring(s.vendor ? L"axis" : L"onvif") + L" " + s.camera_host + L":" + std::to_wstring(s.camera_port);
+}
+
 void connect() {
     // Capture secrets first: nothing below may clear the fields before this.
     std::wstring camera_password = text_of(g->cam_password), ssh_password = text_of(g->ssh_password);
@@ -528,11 +540,14 @@ void connect() {
                 PlaneState &plane = plane_state(g->plane);
                 plane.pan_range = info.pan;
                 plane.tilt_range = info.tilt;
+                plane.degrees = info.degrees;
+                plane.measuring = false;
                 plane.trail.clear();
                 plane.picture.reset();
                 plane.picture_note.clear();
-                plane.heading.reset();
             }
+            g->measured.reset();
+            if (std::wstring views = stored_views(views_key(g->settings)); !views.empty()) link_load_views(g->link, views);
             g->picture_due = 0;
             g->heading_since = 0;
             take_picture();
@@ -578,7 +593,8 @@ void disconnect(std::function<void()> then) {
         ++g->live_run;
         g->picture_due = 0;
         g->heading_since = 0;
-        plane_state(g->plane).heading.reset();
+        g->measured.reset();
+        plane_state(g->plane).measuring = false;
         show_message(L"Disconnected.", false);
         log_line(L"Disconnected");
         update_controls();
@@ -609,7 +625,8 @@ void link_lost(const std::wstring &message) {
 void refresh() {
     link_position(g->link, [](LinkResult result, Snapshot snapshot) {
         if (g->state != State::Connected) return;
-        g->next_refresh = GetTickCount64() + 2000;
+        // While the camera moves, read it often, so the plane over the live video keeps up with it.
+        g->next_refresh = GetTickCount64() + (g->heading_since && !plane_state(g->plane).live.empty() ? 400 : 2000);
         if (result.ok) {
             g->failures = 0;
             g->last_read = GetTickCount64();
@@ -649,12 +666,7 @@ bool stopped_since(ULONGLONG since) {
 void tick() {
     if (g->state != State::Connected || link_busy(g->link)) return;
     ULONGLONG now = GetTickCount64();
-    if (g->heading_since && stopped_since(g->heading_since)) {
-        // The camera has arrived: centre on where it says it is, which corrects a move that stopped short.
-        g->heading_since = 0;
-        plane_state(g->plane).heading.reset();
-        InvalidateRect(g->plane, nullptr, FALSE);
-    }
+    if (g->heading_since && stopped_since(g->heading_since)) g->heading_since = 0;  // arrived: back to the usual refresh
     if (g->picture_due && stopped_since(g->picture_due)) {
         g->picture_due = 0;  // a fresh still picture once the camera has stopped
         if (plane_state(g->plane).live.empty()) {
@@ -860,18 +872,8 @@ void start_live() {
     update_controls();
 }
 
-// Centres the plane on a move's target at once (an axis left unchanged keeps its reading), without waiting for the
-// camera's readings; they take over again once it stops.
-void head_to(const Target &t) {
-    std::optional<double> pan = t.pan, tilt = t.tilt;
-    if (!pan && g->current && g->current->pan) pan = g->current->pan->value;
-    if (!tilt && g->current && g->current->tilt) tilt = g->current->tilt->value;
-    if (!pan || !tilt || !g->info) return;
-    auto clamp = [](double v, const AxisRange &r) { return r.available ? (v < r.min ? r.min : v > r.max ? r.max : v) : v; };
-    plane_state(g->plane).heading = std::pair{clamp(*pan, g->info->pan), clamp(*tilt, g->info->tilt)};
-    g->heading_since = GetTickCount64();
-    InvalidateRect(g->plane, nullptr, FALSE);
-}
+// A move is under way: read the position often until the camera stops.
+void head_to(const Target &) { g->heading_since = GetTickCount64(); }
 
 void send(const Target &t, const std::wstring &what) {
     if (link_busy(g->link)) log_line(L"Request in progress; move queued behind it");
@@ -940,11 +942,69 @@ void stop_motion() {
         if (result.ok) {
             log_line(L"Stop accepted");
             g->heading_since = 0;
-            plane_state(g->plane).heading.reset();  // centre on where the camera stopped
             camera_moved();
         } else if (result.link_lost) { link_lost(result.error); return; }
         else log_line(L"Stop failed: " + result.error, true);
         g->next_refresh = 0;
+    });
+}
+
+// ---- the camera's view (spec I13) --------------------------------------------------------
+
+bool can_measure_view() {
+    return g->state == State::Connected && !plane_state(g->plane).measuring && g->info && g->info->pan.available &&
+           g->info->tilt.available && g->current && g->current->pan && g->current->tilt;
+}
+
+// Camera > Measure View: the camera turns a little on each axis and back, so the app learns how wide its picture is at
+// this zoom; then the plane is drawn over the picture at its scale.
+void measure_view(std::function<void(ViewScale)> then = nullptr) {
+    if (!can_measure_view()) return;
+    plane_state(g->plane).measuring = true;
+    InvalidateRect(g->plane, nullptr, FALSE);
+    std::optional<double> zoom = g->current->zoom ? std::optional<double>(g->current->zoom->value) : std::nullopt;
+    log_line(L"Measuring the camera's view: it turns a little on each axis and back (a few seconds)…");
+    link_measure_view(g->link, [zoom, then](LinkResult result, ViewScale scale) {
+        plane_state(g->plane).measuring = false;
+        InvalidateRect(g->plane, nullptr, FALSE);
+        if (g->state != State::Connected) return;
+        if (result.ok) {
+            g->measured = scale;
+            g->measured_zoom = zoom;
+            auto degrees = [](double half) { return format_value(2 * std::atan(std::abs(half)) * 180 / 3.14159265358979323846); };
+            std::wstring wide = g->info && g->info->degrees
+                                    ? degrees(scale.half_x) + L"° × " + degrees(scale.half_y) + L"°"
+                                    : L"±" + format_value(std::abs(scale.half_x)) + L" pan × ±" +
+                                          format_value(std::abs(scale.half_y)) + L" tilt";
+            log_line(L"View measured: the picture spans " + wide + (zoom ? L" at zoom " + format_value(*zoom) : L""));
+            std::wstring name = views_key(g->settings);
+            link_saved_views(g->link, [name](std::wstring text) { store_views(name, text); });
+            g->next_refresh = 0;
+            update_controls();
+            if (then) then(scale);
+        } else if (result.link_lost) {
+            link_lost(result.error);
+            return;
+        } else {
+            log_line(L"Measuring the view failed: " + result.error, true);
+        }
+        update_controls();
+    });
+    update_controls();
+}
+
+// A double-click before the view is measured: measure it, then move to the point's pan and tilt as it was when clicked.
+void measure_then_move(double x, double y) {
+    if (!g->info || !g->current || !g->current->pan || !g->current->tilt) return;
+    CameraInfo info = *g->info;
+    double pan = g->current->pan->value, tilt = g->current->tilt->value;
+    measure_view([info, pan, tilt, x, y](ViewScale scale) {
+        auto range = [](const AxisRange &r) { return ptz_range{r.available ? 1 : 0, r.min, r.max}; };
+        ptz_view view{{scale.half_x, scale.half_y}, info.degrees ? 1 : 0, pan, tilt, range(info.pan), range(info.tilt)};
+        double to_pan = 0, to_tilt = 0;
+        ptz_view_point(&view, x, y, &to_pan, &to_tilt);
+        aim(to_pan, to_tilt);
+        send_move();
     });
 }
 
@@ -973,14 +1033,18 @@ void show_help() {
                 L"\u2022 ONVIF: the camera's advertised absolute space (commonly pan/tilt \u22121\u20261, zoom 0\u20261; not degrees).\n"
                 L"\u2022 Axis: pan/tilt in degrees; zoom is an integer in the native range.\n\n"
                 L"Leave a target field blank (or type x) to keep that axis unchanged.\n"
-                L"The camera picture shows the camera's live video, or a still picture when the video can't play. Click on "
-                L"it to aim at that pan and tilt of the camera's range (it fills the target fields); double-click (or Move) "
-                L"to move there. A still picture is renewed once the camera stops. Refresh Picture (Ctrl+Shift+R) takes a "
-                L"new picture, or restarts the live view.\n"
-                L"The plane over the picture is the camera's whole pan/tilt range, centred on where the camera points: the "
-                L"reticle at the picture's centre is the current position, and the grid, the zero axes (pan 0, tilt 0), the "
-                L"range's edges and limits, the trail of recent positions, the starting position (S) and the target move "
-                L"under it as the camera moves. Show Grid (Ctrl+') shows or hides the grid, axes and limits.\n"
+                L"The camera picture shows the camera's live video, or a still picture when the video can't play. A still "
+                L"picture is renewed once the camera stops. Refresh Picture (Ctrl+Shift+R) takes a new picture, or restarts "
+                L"the live view.\n"
+                L"The pan/tilt plane is drawn over the picture at the picture's own scale, so every point of the picture is "
+                L"the pan and tilt it shows. The picture's centre is where the camera points; the grid, the zero axes (pan 0, "
+                L"tilt 0), the range's limits (dashed), the trail of recent positions, the starting position (S) and the "
+                L"target sit on what they point at. Click on the picture to aim at the pan and tilt under the pointer (it "
+                L"fills the target fields); double-click (or Move) to move there, which brings that point to the centre. "
+                L"Show Grid (Ctrl+') shows or hides the grid, axes and limits.\n"
+                L"The app learns how wide the picture is by measuring it: Measure View (Ctrl+Shift+M) turns the camera a "
+                L"little on each axis and back (a few seconds). Each zoom is measured once and remembered for that camera; at "
+                L"a zoom not yet measured, double-clicking the picture measures it first, then moves.\n"
                 L"Drag along a travel meter to aim that axis alone, double-click it to aim and move.\n\n"
                 L"Starting coordinates are the first reading after connecting and stay fixed. "
                 L"Return to Start (Ctrl+B) sends an absolute move there.\n"
@@ -1247,7 +1311,7 @@ void paint(HDC dc, const RECT &rc) {
         text(gr, label, RectF(f.X, f.Y + SF(4), f.Width, f.Height), 11, chip_color, true, FontStyleBold, StringAlignmentCenter);
     }
 
-    panel(gr, g->plane_panel, L"CAMERA PICTURE // PAN/TILT RANGE \u2014 CLICK TO AIM, DOUBLE-CLICK TO MOVE THERE", SF(54));
+    panel(gr, g->plane_panel, L"CAMERA PICTURE // PAN/TILT AT THE PICTURE'S SCALE \u2014 CLICK TO AIM, DOUBLE-CLICK TO MOVE THERE", SF(54));
     panel(gr, g->meters_panel, L"AXIS TRAVEL // % OF ADVERTISED LIMITS \u2014 DRAG TO AIM, DOUBLE-CLICK TO MOVE");
     panel(gr, g->readout_panel, L"CURRENT COORDINATES");
     panel(gr, g->target_panel, L"TARGET // ABSOLUTE MOVE");
@@ -1476,6 +1540,7 @@ HMENU build_menu() {
     AppendMenuW(camera, connected ? on : off, CMD_REFRESH, L"Refresh Position\tCtrl+R");
     AppendMenuW(camera, connected ? on : off, CMD_PAUSE, g->paused ? L"Resume Auto-Refresh\tCtrl+P" : L"Pause Auto-Refresh\tCtrl+P");
     AppendMenuW(camera, connected ? on : off, CMD_REFRESH_PICTURE, L"Refresh Picture\tCtrl+Shift+R");
+    AppendMenuW(camera, can_measure_view() ? on : off, CMD_MEASURE_VIEW, L"Measure View\tCtrl+Shift+M");
     AppendMenuW(camera, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(camera, connected ? on : off, CMD_WEB, L"Open Camera Web Interface\tCtrl+L");
     AppendMenuW(camera, MF_SEPARATOR, 0, nullptr);
@@ -1575,6 +1640,7 @@ void command(int id) {
         case CMD_PAUSE: toggle_pause(); return;
         case ID_REFRESH_PICTURE: case CMD_REFRESH_PICTURE: refresh_picture(); return;
         case ID_GRID: case CMD_SHOW_GRID: toggle_grid(); return;
+        case CMD_MEASURE_VIEW: measure_view(); return;
         case CMD_QUIT: case CMD_CLOSE: PostMessageW(g->hwnd, WM_CLOSE, 0, 0); return;
         case CMD_MINIMIZE: ShowWindow(g->hwnd, SW_MINIMIZE); return;
         case CMD_MAXIMIZE: ShowWindow(g->hwnd, IsZoomed(g->hwnd) ? SW_RESTORE : SW_MAXIMIZE); return;
@@ -1706,6 +1772,7 @@ void create_children() {
         aim(pan, tilt);
         send_move();
     };
+    plane.on_measure_and_move = [](double x, double y) { measure_then_move(x, y); };
     for (auto [meter, field] : {std::pair{g->meter_pan, g->target_pan}, std::pair{g->meter_tilt, g->target_tilt},
                                 std::pair{g->meter_zoom, g->target_zoom}}) {
         MeterState &m = meter_state(meter);
@@ -1730,6 +1797,7 @@ void create_children() {
         {FCONTROL | FVIRTKEY, VK_RETURN, CMD_MOVE}, {FCONTROL | FVIRTKEY, 'B', CMD_RETURN},
         {FCONTROL | FVIRTKEY, VK_OEM_PERIOD, CMD_STOP}, {FCONTROL | FVIRTKEY, 'R', CMD_REFRESH},
         {FCONTROL | FVIRTKEY, 'P', CMD_PAUSE}, {FCONTROL | FSHIFT | FVIRTKEY, 'R', CMD_REFRESH_PICTURE},
+        {FCONTROL | FSHIFT | FVIRTKEY, 'M', CMD_MEASURE_VIEW},
         {grid_mods, grid_key, CMD_SHOW_GRID}, {FCONTROL | FVIRTKEY, 'L', CMD_WEB}, {FVIRTKEY, VK_F1, CMD_HELP},
         {FCONTROL | FALT | FVIRTKEY, '1', CMD_THEME + 0}, {FCONTROL | FALT | FVIRTKEY, '2', CMD_THEME + 1},
         {FCONTROL | FALT | FVIRTKEY, '3', CMD_THEME + 2}, {FCONTROL | FALT | FVIRTKEY, '4', CMD_THEME + 3},
@@ -1813,12 +1881,21 @@ void snapshot_step(int step) {
             // PTZ_SNAPSHOT_HIDE_GRID turns the grid off with View > Show Grid first.
             if (_wgetenv(L"PTZ_SNAPSHOT_HIDE_GRID")) command(CMD_SHOW_GRID);
             connect();
-            // PTZ_SNAPSHOT_PICTURE: aim at pan 0.45, tilt 0.3 on the range plane (a picture of that is saved to
-            // PTZ_SNAPSHOT_AIM_PATH), move there, and save the window once the new picture has come;
-            // PTZ_SNAPSHOT_LIVE_PATH gets the live view's plate ("H.264 · 320 × 180") or "no live view".
+            // PTZ_SNAPSHOT_PICTURE: aim at pan 0.45, tilt 0.3 (a picture of that is saved to PTZ_SNAPSHOT_AIM_PATH),
+            // move there, and save the window once the new picture has come; PTZ_SNAPSHOT_LIVE_PATH gets the live
+            // view's plate ("H.264 · 320 × 180") or "no live view". PTZ_SNAPSHOT_MEASURE_AT="x,y" double-clicks that
+            // point of the picture instead, before the view is measured; PTZ_SNAPSHOT_WAIT is the seconds before the
+            // last picture (measuring the view first takes longer).
             SetTimer(g->hwnd, _wgetenv(L"PTZ_SNAPSHOT_PICTURE") ? kPicAim : kSnapMove, 3000, nullptr);
             return;
         case kPicAim:
+            if (const wchar_t *at = _wgetenv(L"PTZ_SNAPSHOT_MEASURE_AT")) {
+                double x = 0, y = 0;
+                swscanf(at, L"%lf,%lf", &x, &y);
+                if (plane_state(g->plane).on_measure_and_move) plane_state(g->plane).on_measure_and_move(x, y);
+                SetTimer(g->hwnd, kPicMoving, 1400, nullptr);
+                return;
+            }
             if (plane_state(g->plane).on_aim) plane_state(g->plane).on_aim(0.45, 0.3);
             SetTimer(g->hwnd, kPicMove, 400, nullptr);
             return;
@@ -1829,15 +1906,13 @@ void snapshot_step(int step) {
             return;
         case kPicMoving:
             if (const wchar_t *path = _wgetenv(L"PTZ_SNAPSHOT_MOVING_PATH")) save_png(g->hwnd, path);
-            if (const wchar_t *path = _wgetenv(L"PTZ_SNAPSHOT_HEADING_PATH")) {  // where the plane is centred while it moves
-                const auto &heading = plane_state(g->plane).heading;
-                std::string text = heading ? U(format_value(heading->first) + L" " + format_value(heading->second)) : "none";
-                if (FILE *f = _wfopen(path, L"wb")) {
-                    fwrite(text.data(), 1, text.size(), f);
-                    fclose(f);
-                }
+            {
+                // The last picture comes PTZ_SNAPSHOT_WAIT seconds (10 unless set) after the first step.
+                const wchar_t *wait = _wgetenv(L"PTZ_SNAPSHOT_WAIT");
+                double seconds = wait ? _wtof(wait) : 0;
+                if (seconds <= 0) seconds = 10;
+                SetTimer(g->hwnd, kPicCapture, static_cast<UINT>(std::max(500.0, seconds * 1000 - 4400)), nullptr);
             }
-            SetTimer(g->hwnd, kPicCapture, 5600, nullptr);
             return;
         case kPicCapture:
             save_png(g->hwnd, _wgetenv(L"PTZ_SNAPSHOT_PATH"));

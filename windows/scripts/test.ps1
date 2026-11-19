@@ -1,10 +1,11 @@
 # Tests PTZ Control for Windows against the mock camera without touching the user's settings or saved logins.
 #  1. The core's login vault: tests\vault-smoke.c built with MSVC and run.
-#  2. The app (dist\PTZControl.exe) four times, with its own registry key and vault file, never taking focus:
+#  2. The app (dist\PTZControl.exe) five times, with its own registry key and vault file, never taking focus:
 #     run 1 types a login, ticks Save login and connects; run 2 starts with a wrong username and fills the
 #     camera fields from the saved login; run 3 aims on the range plane and moves over the still pictures of a camera
 #     whose video can't be reached; run 4 plays the camera's live video, aims on the plane over it and turns Show Grid
-#     off. Each run saves pictures in .build\test.
+#     off; run 5 double-clicks a point of an Axis camera's picture before its view is measured, which measures it and
+#     moves there. Each run saves pictures in .build\test.
 # Usage: windows\scripts\test.ps1   (after windows\scripts\build.ps1)
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -53,11 +54,11 @@ Start-Sleep -Seconds 1
 $vault = Join-Path $Work 'logins.vault'
 [IO.File]::WriteAllText($vault, "PTZ Control logins 1`nplain`n")
 
-function Settings($user, $port = $Port) {
+function Settings($user, $port = $Port, $vendor = 0) {  # vendor: 0 ONVIF, 1 Axis
     $key = "HKCU:\$KeyName"
     New-Item -Path $key -Force | Out-Null
     Set-ItemProperty $key Route 0 -Type DWord
-    Set-ItemProperty $key Vendor 0 -Type DWord
+    Set-ItemProperty $key Vendor $vendor -Type DWord
     Set-ItemProperty $key CameraHost '127.0.0.1'
     Set-ItemProperty $key CameraPort $port -Type DWord
     Set-ItemProperty $key CameraUser $user
@@ -136,17 +137,13 @@ try {
     $picture = Join-Path $Out 'windows-picture.png'
     $aim = Join-Path $Out 'windows-picture-aim.png'
     $live3 = Join-Path $Work 'live3.txt'
-    $heading3 = Join-Path $Work 'heading3.txt'
-    Remove-Item $picture, $aim, $heading3 -ErrorAction SilentlyContinue
+    Remove-Item $picture, $aim -ErrorAction SilentlyContinue
     RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PICTURE = '1'; PTZ_SNAPSHOT_PATH = $picture; PTZ_SNAPSHOT_AIM_PATH = $aim
-              PTZ_SNAPSHOT_MOVING_PATH = (Join-Path $Out 'windows-picture-moving.png'); PTZ_SNAPSHOT_LIVE_PATH = $live3
-              PTZ_SNAPSHOT_HEADING_PATH = $heading3 }
+              PTZ_SNAPSHOT_MOVING_PATH = (Join-Path $Out 'windows-picture-moving.png'); PTZ_SNAPSHOT_LIVE_PATH = $live3 }
     $pictures = @(Select-String -Path $stillLog -Pattern '^mock: picture' -ErrorAction SilentlyContinue).Count
     Check 'run 3 took a picture, then a new one after the move' ($pictures -ge 2)
     Check 'run 3 moved to the pan and tilt aimed at on the range plane' `
         (@(Select-String -Path $stillLog -Pattern '^mock: onvif absolute move to pan=0\.4500 tilt=0\.3000' -ErrorAction SilentlyContinue).Count -ge 1)
-    $heading = if (Test-Path $heading3) { Get-Content -Raw -Encoding UTF8 $heading3 } else { '' }
-    Check "run 3 centred the plane on the target while the camera moved ($heading)" ($heading -ceq '0.45 0.3')
     Check 'run 3 fell back to still pictures' ((Test-Path $live3) -and ((Get-Content -Raw -Encoding UTF8 $live3) -ceq 'no live view'))
     Check 'camera-picture pictures drawn' ((Drawn $picture) -and (Drawn $aim))
 
@@ -166,6 +163,26 @@ try {
     Check 'run 4 aimed on the range plane over the video' ((Moves) -gt $before)
     Check 'Show Grid off is remembered' ((Get-ItemProperty "HKCU:\$KeyName" -Name ShowGrid -ErrorAction SilentlyContinue).ShowGrid -eq 0)
     Check 'live view picture drawn' (Drawn $live)
+
+    # Run 5: an Axis camera whose view isn't measured yet. Double-clicking a point of its picture (half way to the right
+    # edge, a quarter of the way to the bottom) measures the view, then moves so that point comes to the centre: the
+    # mock draws a 60 x 35 degree view through a lens, so that point is pan 16.10, tilt -4.46 from pan 0, tilt 0.
+    Settings 'admin' $StillPort 1
+    Set-ItemProperty "HKCU:\$KeyName" ShowGrid 1 -Type DWord
+    $measured = Join-Path $Out 'windows-measured.png'
+    Remove-Item $measured -ErrorAction SilentlyContinue
+    RunApp @{ PTZ_PASSWORD = 'secret'; PTZ_SNAPSHOT_PICTURE = '1'; PTZ_SNAPSHOT_PATH = $measured; PTZ_SNAPSHOT_LIVE_PATH = $null
+              PTZ_SNAPSHOT_HIDE_GRID = $null; PTZ_SNAPSHOT_MEASURE_AT = '0.5,-0.25'; PTZ_SNAPSHOT_WAIT = '45' }
+    $last = @(Select-String -Path $stillLog -Pattern '^mock: axis absolute move' -ErrorAction SilentlyContinue | ForEach-Object Line) |
+        Select-Object -Last 1
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    $pan = if ($last -match 'pan=(-?[\d.]+)') { [double]::Parse($Matches[1], $inv) } else { $null }
+    $tilt = if ($last -match 'tilt=(-?[\d.]+)') { [double]::Parse($Matches[1], $inv) } else { $null }
+    $moved = $null -ne $pan -and $null -ne $tilt -and $pan -gt 15.7 -and $pan -lt 16.5 -and $tilt -lt -4.3 -and $tilt -gt -4.65
+    Check "run 5 measured the view and moved to the point double-clicked ($last)" $moved
+    $views = (Get-ItemProperty "HKCU:\$KeyName" -Name "Views axis 127.0.0.1:$StillPort" -ErrorAction SilentlyContinue)."Views axis 127.0.0.1:$StillPort"
+    Check 'run 5 remembered the measured view for this camera' ([bool]$views)
+    Check 'measured-view picture drawn' (Drawn $measured)
 } finally {
     Stop-Process -Id $mock.Id -ErrorAction SilentlyContinue
     if ($stillMock) { Stop-Process -Id $stillMock.Id -ErrorAction SilentlyContinue }

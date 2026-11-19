@@ -399,6 +399,7 @@ void link_connect(CameraLink *link, const Settings &s, const QString &camera_pas
             info.tilt = range(raw.tilt);
             info.zoom = range(raw.zoom);
             info.zoom_integer = raw.zoom_integer != 0;
+            info.degrees = raw.degrees != 0;
             result.ok = true;
         }
         return [done, result, info] { done(result, info); };
@@ -425,6 +426,8 @@ void link_position(CameraLink *link, std::function<void(LinkResult, Snapshot)> d
                 snapshot.tilt = reading(raw.tilt);
                 snapshot.zoom = reading(raw.zoom);
                 snapshot.move_status = field(raw.move_status);
+                ptz_view_scale scale;
+                if (ptz_view_scale_at(link->session_, &raw, &scale)) snapshot.view_scale = ViewScale{scale.half_x, scale.half_y};
                 result.ok = true;
             }
         }
@@ -520,6 +523,65 @@ void link_live_stop(CameraLink *link, std::function<void()> done) {
         return [done] { if (done) done(); };
     });
 }
+
+namespace {
+
+// The core compares small grey pictures; decoding them is the host's part.
+int decode_grey(void *, const unsigned char *data, size_t size, unsigned char *grey, int width, int height) {
+    if (!data || !grey || width <= 0 || height <= 0) return 0;
+    QImage image = QImage::fromData(data, static_cast<int>(size));
+    if (image.isNull()) return 0;
+    image = image.scaled(width, height, Qt::IgnoreAspectRatio, Qt::SmoothTransformation).convertToFormat(QImage::Format_Grayscale8);
+    if (image.width() != width || image.height() != height) return 0;
+    for (int y = 0; y < height; ++y) std::memcpy(grey + static_cast<size_t>(y) * width, image.constScanLine(y), width);
+    return 1;
+}
+
+}  // namespace
+
+void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done) {
+    link->run([=]() -> std::function<void()> {
+        LinkResult result;
+        ViewScale view;
+        if (!link->session_) {
+            result.error = "Not connected";
+        } else {
+            ptz_view_scale scale{};
+            char error[1024] = {};
+            if (ptz_measure_view(link->session_, decode_grey, nullptr, &scale, error, sizeof error)) {
+                view = ViewScale{scale.half_x, scale.half_y};
+                result.ok = true;
+            } else {
+                result = failure(link->session_, error);
+            }
+        }
+        return [done, result, view] { done(result, view); };
+    });
+}
+
+void link_saved_views(CameraLink *link, std::function<void(QString)> done) {
+    link->run([=]() -> std::function<void()> {
+        QString text;
+        if (link->session_) {
+            size_t need = ptz_view_scales_save(link->session_, nullptr, 0);
+            std::string buffer(need + 1, '\0');
+            ptz_view_scales_save(link->session_, buffer.data(), buffer.size());
+            text = QString::fromUtf8(buffer.c_str());
+        }
+        return [done, text] { done(text); };
+    });
+}
+
+void link_load_views(CameraLink *link, const QString &text) {
+    std::string utf8 = text.toStdString();
+    link->run([=]() -> std::function<void()> {
+        if (link->session_) ptz_view_scales_load(link->session_, utf8.c_str());
+        return [] {};
+    });
+}
+
+QString stored_views(const QString &key) { return store().value(key).toString(); }
+void store_views(const QString &key, const QString &text) { store().setValue(key, text); }
 
 void link_web_url(CameraLink *link, std::function<void(LinkResult, QString, QString)> done) {
     link->run([=]() -> std::function<void()> {

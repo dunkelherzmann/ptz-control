@@ -19,7 +19,8 @@ printf 'PTZ Control %s (%s)\n' "$VERSION" "$ARCH"
 
 WORK="$ROOT/.build/flatpak"
 mkdir -p "$WORK" "$ROOT/dist"
-flatpak run org.flatpak.Builder --user --install-deps-from=flathub --force-clean \
+# Without rofiles-fuse: on this machine's fuse it fails ("fstat of comm fd failed"), and the build doesn't need it.
+flatpak run org.flatpak.Builder --disable-rofiles-fuse --user --install-deps-from=flathub --force-clean \
     --state-dir="$WORK/state" --repo="$WORK/repo" "$WORK/build" "$ROOT/linux/$ID.yml"
 
 BUNDLE="$ROOT/dist/PTZ-Control-$VERSION-$ARCH.flatpak"
