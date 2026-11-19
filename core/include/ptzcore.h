@@ -158,6 +158,13 @@ int ptz_view_scale_at(ptz_session *session, const ptz_position *position, ptz_vi
  * that text back (unreadable parts are skipped). save returns the length the text needs. */
 size_t ptz_view_scales_save(ptz_session *session, char *text, size_t text_size);
 void ptz_view_scales_load(ptz_session *session, const char *text);
+/* Moves to (pan, tilt), a point of the current picture (as ptz_view_point gives it), then makes sure it really comes
+ * to the centre: it compares a still picture from before the move with one after, finds where the point landed and
+ * turns by the difference, up to three times. That takes out what the plane's scale, the lens and the camera's own
+ * positioning leave over. A point off the picture is moved to without checking. Takes a few seconds; corrections
+ * (when not NULL) is how many extra turns it made. */
+int ptz_move_to_point(ptz_session *session, ptz_grey_fn grey, void *context, const ptz_view_scale *scale, double pan,
+                      double tilt, int *corrections, char *error, size_t error_size);
 
 /* Where the camera points and how wide its picture is. */
 typedef struct {
