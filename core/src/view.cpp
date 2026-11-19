@@ -562,11 +562,11 @@ MoveResult move_to_point(Camera &camera, const Hooks &hooks, const GreyDecoder &
     for (int round = 0; round < 4; ++round) {
         if (!at.pan.available || !at.tilt.available) break;
         // The first landing must show a change; how long that took is how far the pictures trail the camera, waited
-        // out before each later picture.
+        // out (with a margin) before each later picture: a small correction changes the picture too little to tell.
         double waited = 0;
         if (round > 0 && lag > 0) std::this_thread::sleep_for(std::chrono::duration<double>(lag));
         Picture now = settled_picture(camera, grey, 640, round == 0 ? &first : nullptr, &waited);
-        if (round == 0) lag = waited;
+        if (round == 0 && waited > 0) lag = waited * 1.25 + 0.5;  // it was seen in half-second steps: a margin
         if (now.width != first.width || now.height != first.height) break;
         Grey after = normalised(now.pixels.data(), now.width, now.height);
         // Near the centre only: further off, a scene with look-alikes (a fence, a row of windows) could match wrongly.
