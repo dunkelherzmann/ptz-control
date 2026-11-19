@@ -135,7 +135,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         plane.onAim = { [weak self] pan, tilt in self?.aim(pan: pan, tilt: tilt) }
         plane.onAimAndMove = { [weak self] pan, tilt in
             self?.aim(pan: pan, tilt: tilt)
-            self?.sendMove()
+            self?.moveToPoint(pan: pan, tilt: tilt)
         }
         plane.onMeasureAndMove = { [weak self] point in self?.measureThenMove(point) }
         pictureButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh Picture")
@@ -552,6 +552,31 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         }
     }
 
+    /// A double-click on the picture: move there and make sure the point really comes to the centre (the pictures
+    /// show where it landed; the camera is turned by what is left). A zoom typed in the target moves the plain way.
+    private func moveToPoint(pan: Double, tilt: Double, scale measured: ViewScale? = nil) {
+        guard state == .connected else { return }
+        let zoom = (try? parseTarget())?.zoom
+        guard let scale = measured ?? plane.scale, zoom == nil || zoom == current?.zoom?.value else { sendMove(); return }
+        link.moveToPoint(scale, pan: pan, tilt: tilt) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let corrections):
+                self.eventLog.append("Moved to pan=\(format(pan)), tilt=\(format(tilt))" + (corrections == 0
+                    ? "; the point landed at the centre"
+                    : "; corrected \(corrections == 1 ? "once" : "\(corrections) times") from the picture so the point is at the centre"))
+                self.nextRefresh = .distantPast
+                self.cameraMoved()
+            case .failure(let error):
+                if error.linkLost { self.linkLost(error.message); return }
+                self.eventLog.append("Move failed: \(error.message)", warning: true)
+            }
+            self.updateControls()
+        }
+        head(to: Target(pan: pan, tilt: tilt, zoom: nil))
+        updateControls()
+    }
+
     @objc func returnToStart(_ sender: Any?) {
         guard state == .connected else { return }
         guard let s = starting, !s.isEmpty else {
@@ -656,7 +681,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
             var toPan = 0.0, toTilt = 0.0
             ptz_view_point(&view, Double(point.x), Double(point.y), &toPan, &toTilt)
             self.aim(pan: toPan, tilt: toTilt)
-            self.sendMove()
+            self.moveToPoint(pan: toPan, tilt: toTilt, scale: scale)
         }
     }
 

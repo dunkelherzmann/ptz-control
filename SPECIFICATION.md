@@ -173,7 +173,8 @@ the rest as a gap.
   centre. Nothing shades the picture, and lines and markers have a dark halo, so they read on any picture. Pointing
   shows guide lines and "PAN … TILT …" under the pointer. Click or drag to aim at the pan and tilt under the pointer
   (fills the pan and tilt targets, within the ranges); double-click (or Move, ⌘↩) to aim and move, which brings that
-  point of the picture to its centre. Until the view is measured a plate reads "VIEW NOT MEASURED AT THIS ZOOM ·
+  point of the picture to its centre; after a double-click the landing is checked from the pictures and corrected
+  (I14). Until the view is measured a plate reads "VIEW NOT MEASURED AT THIS ZOOM ·
   DOUBLE-CLICK TO MEASURE AND MOVE (⇧⌘M)", only the reticle shows, and a double-click measures the view first, then
   moves to the point's pan and tilt as they were when it was clicked. Without ranges a plate reads "PAN/TILT RANGE
   UNAVAILABLE" and clicks are ignored; with no measured position, "POSITION UNAVAILABLE".
@@ -187,6 +188,18 @@ the rest as a gap.
   spans 60.0° × 36.1° at zoom 1" (or "±0.25 pan × ±0.14 tilt" in the camera's own units), or "Measuring the view
   failed: <reason>" in red (a plain or changing scene, no readings). Each zoom is measured once and remembered for
   that camera (vendor, address and port) between sessions; at another zoom the view is unmeasured until measured.
+- **I14 Fine positioning.** A double-click on the picture (with the view measured, and no other zoom typed in the
+  target) moves through the core's `ptz_move_to_point`, which makes sure the point really comes to the centre: a
+  camera's own positioning lands a little off (ONVIF cameras especially), and the measured scale and, in the camera's
+  own units, the lens leave a little over too. It takes a still picture before the move and, once the camera has
+  stopped, one after (both 640 pixels wide), finds the patch around the point (up to a quarter of the picture, centred
+  on it, smaller near an edge) in the new picture, matched as a whole and evened out to the same brightness, allowing
+  it to be shifted, stretched, turned and slanted (the lens shows a spot near the edge smaller and askew), to a
+  twentieth of a pixel; for a camera in degrees it then traces the patch through the lens model, which leaves nothing
+  over. Wherever the point shows, the camera turns by that much more, waiting for two still readings, up to three
+  times, until it is within 0.4 of a pixel of the centre; a last picture only checks. The log reads "Moved to pan=…,
+  tilt=…; the point landed at the centre" or "…; corrected 2 times from the picture so the point is at the centre". A
+  point it can't find (a plain patch, a changed scene) is left where the plain move put it.
 - **I12 Show Grid** (View ▸ Show Grid, ⌘', and the grid button left of ⟳ in the plane's caption, hover text "Show Grid:
   show or hide the pan/tilt grid, zero axes and range limits over the picture (⌘')") shows or hides the grid, the zero
   axes and the limit plates; the markers always show. On by default, ticked in the menu while on, and remembered.
@@ -347,7 +360,10 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
   stopped. It also turns points of the picture into pan and tilt and back (round trips, behind the camera, past pan
   180), checks the plane's lines, and measures the view of a mock camera sending plain pictures, ONVIF (linear) and
   Axis (through a lens, at two positions), within 1.5% of the width the mock draws, kept for that zoom only, turned
-  back afterwards, and saved and loaded as text.
+  back afterwards, and saved and loaded as text. Then it double-clicks two points (one near a corner) on a third mock
+  camera that behaves like a real ONVIF one (`--onvif-real`: degrees seen through a lens, each move landing 2% short):
+  the plain move lands 1.3–1.9° off, and after the corrections the point is within 0.15° of the centre, by where the
+  mock says its picture really points. On the Axis mock, which lands exactly, the same moves stay within 0.08°.
 - **T3 SSH test.** `scripts/test-ssh.sh` starts a throwaway user-level `sshd` on 127.0.0.1:2222 with a
   passphrase-protected key and runs `tests/ssh-smoke.c` through it: tunnel, askpass relay, read, move, web address,
   live video.
@@ -363,7 +379,9 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
   checks the live view plays the mock camera's H.264 video, that aiming on the plane over it moves the camera, and that
   Show Grid turned off is remembered. A last run double-clicks a point of an Axis camera's picture before its view is
   measured and checks that the view is measured and remembered and that the camera moves to that point's pan and tilt
-  (the mock draws its Axis pictures through a lens, 60° wide). It saves pictures of the window, of Manage Logins, of
+  (the mock draws its Axis pictures through a lens, 60° wide). Another double-clicks a point of a realistic ONVIF
+  mock's picture (`--onvif-real`) and checks the move was corrected until the point's direction, as the mock reports
+  it, is within 0.2° of the centre. It saves pictures of the window, of Manage Logins, of
   the Edit form and of the live view. `linux/scripts/test.sh` does the same with the installed Flatpak (T5).
 - **T7 Windows test.** `windows\scripts\test.ps1` builds and runs `tests/vault-smoke.c` with MSVC, then runs
   `dist\PTZControl.exe` twice as the Mac test does, with its own registry key (`PTZ_SETTINGS_KEY`) and vault file,

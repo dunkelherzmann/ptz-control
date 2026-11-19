@@ -37,11 +37,14 @@ parser.add_argument("--rtsp-port", type=int, default=0, help="default: --port + 
 parser.add_argument("--video", choices=("h264", "h265", "none"), default="h264",
                     help="none: the stream address leads nowhere, as on a camera whose video can't be reached")
 parser.add_argument("--plain-png", action="store_true", help="uncompressed pictures, for tests that decode them")
+parser.add_argument("--onvif-real", action="store_true",
+                    help="the ONVIF camera behaves like a real one: its generic units are degrees (pan x 180, tilt x 90) "
+                         "seen through a lens 60 degrees wide at zoom 0, and each move lands 2%% short of where it reports")
 args = parser.parse_args()
 args.rtsp_port = args.rtsp_port or args.port + 100
 
 lock = threading.Lock()
-onvif = {"pan": 0.0, "tilt": 0.0, "zoom": 0.0, "target": None, "since": 0.0}
+onvif = {"pan": 0.0, "tilt": 0.0, "zoom": 0.0, "target": None, "since": 0.0, "miss_pan": 0.0, "miss_tilt": 0.0}
 axis = {"pan": 0.0, "tilt": 0.0, "zoom": 1, "target": None, "since": 0.0}
 REALM = "AXIS_MOCK"
 
@@ -230,6 +233,10 @@ class Handler(BaseHTTPRequestHandler):
                 target["zoom"] = float(z.group(1))
             with lock:
                 glide(onvif, ("pan", "tilt", "zoom"))
+                if args.onvif_real and pt:
+                    # Lands a little short: the picture shows the camera 2% of the turn behind where it reports.
+                    onvif["miss_pan"] = 0.02 * (target["pan"] - onvif["pan"])
+                    onvif["miss_tilt"] = 0.02 * (target["tilt"] - onvif["tilt"])
                 onvif.update(start=dict(onvif), target=target, since=time.time())
             if pt:
                 print(f"mock: onvif absolute move to pan={target['pan']:.4f} tilt={target['tilt']:.4f}")
@@ -282,13 +289,20 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 if url.path == "/onvif/snapshot":
                     glide(onvif, ("pan", "tilt", "zoom"))
-                    half_w, half_h = onvif_view()
-                    args_ = (onvif["pan"], onvif["tilt"], half_w, half_h, 1.0)
+                    if args.onvif_real:
+                        half = math.tan(math.radians(30 * (1 - 0.8 * onvif["zoom"])))
+                        args_ = ((onvif["pan"] - onvif["miss_pan"]) * 180, (onvif["tilt"] - onvif["miss_tilt"]) * 90,
+                                 half, half * PICTURE_H / PICTURE_W, 1 / 180, True)
+                    else:
+                        half_w, half_h = onvif_view()
+                        args_ = (onvif["pan"], onvif["tilt"], half_w, half_h, 1.0)
                 else:
                     glide(axis, ("pan", "tilt", "zoom"))
                     half_w, half_h = axis_view()
                     args_ = (axis["pan"], axis["tilt"], half_w, half_h, 1 / 180, True)
             print("mock: picture", url.path)
+            if args.onvif_real and url.path == "/onvif/snapshot":
+                print(f"mock: onvif truth pan={args_[0]:.5f} tilt={args_[1]:.5f}", flush=True)
             return self.reply_bytes(200, picture(*args_), "image/png")
         with lock:
             glide(axis, ("pan", "tilt", "zoom"))

@@ -189,6 +189,10 @@ std::optional<std::pair<double, double>> picture_shift(const unsigned char *befo
                                                       int height, double expect_x, double expect_y, double reach);
 // Turns the camera a little on each axis, compares pictures and returns it to where it was. Takes several seconds.
 ViewScale measure_view(Camera &camera, const Hooks &hooks, const GreyDecoder &grey);
+// Turns to (pan, tilt), a point of the current picture, then compares pictures to find where that point really
+// landed and corrects the turn until it is at the centre. Returns how many corrections it made.
+int move_to_point(Camera &camera, const Hooks &hooks, const GreyDecoder &grey, const ViewScale &scale, double pan,
+                  double tilt);
 
 std::unique_ptr<Camera> make_onvif(const CameraParams &params, const Hooks &hooks);
 std::unique_ptr<Camera> make_axis(const CameraParams &params, const Hooks &hooks);

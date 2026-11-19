@@ -356,6 +356,21 @@ extern "C" int ptz_measure_view(ptz_session *session, ptz_grey_fn grey, void *co
     });
 }
 
+extern "C" int ptz_move_to_point(ptz_session *session, ptz_grey_fn grey, void *context, const ptz_view_scale *scale,
+                                 double pan, double tilt, int *corrections, char *error, size_t error_size) {
+    if (corrections) *corrections = 0;
+    return guarded(session, error, error_size, [&] {
+        if (!ptz_link_alive(session)) throw ptz::Error("SSH connection closed; the camera was not moved");
+        ptz::ViewScale s;
+        s.half_x = scale->half_x, s.half_y = scale->half_y;
+        auto decode = [&](const std::string &bytes, unsigned char *pixels, int w, int h) {
+            return grey(context, reinterpret_cast<const unsigned char *>(bytes.data()), bytes.size(), pixels, w, h) != 0;
+        };
+        int made = ptz::move_to_point(*session->camera, session->hooks, decode, s, pan, tilt);
+        if (corrections) *corrections = made;
+    });
+}
+
 extern "C" int ptz_view_scale_at(ptz_session *session, const ptz_position *position, ptz_view_scale *scale) {
     *scale = {};
     std::lock_guard<std::mutex> lock(session->scales_mutex);

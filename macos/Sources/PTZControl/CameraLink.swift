@@ -257,25 +257,41 @@ final class CameraLink: @unchecked Sendable {
             switch self.requireSession() {
             case .failure(let e): return .failure(e)
             case .success(let session):
-                // The core compares small grey pictures; decoding them is the host's part.
-                let grey: ptz_grey_fn = { _, data, size, out, width, height in
-                    guard let data, let out,
-                          let source = CGImageSourceCreateWithData(Data(bytes: data, count: size) as CFData, nil),
-                          let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
-                          let context = CGContext(data: out, width: Int(width), height: Int(height), bitsPerComponent: 8,
-                                                  bytesPerRow: Int(width), space: CGColorSpaceCreateDeviceGray(),
-                                                  bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return 0 }
-                    context.interpolationQuality = .medium
-                    context.draw(image, in: CGRect(x: 0, y: 0, width: Int(width), height: Int(height)))
-                    return 1
-                }
                 var scale = ptz_view_scale()
                 var error = [CChar](repeating: 0, count: 1024)
-                guard ptz_measure_view(session, grey, nil, &scale, &error, error.count) != 0 else {
+                guard ptz_measure_view(session, CameraLink.grey, nil, &scale, &error, error.count) != 0 else {
                     return self.failure(error, session: session)
                 }
                 return .success(ViewScale(halfX: scale.half_x, halfY: scale.half_y))
             }
+        }, completion: completion)
+    }
+
+    /// The core compares grey pictures; decoding them is the host's part.
+    private static let grey: ptz_grey_fn = { _, data, size, out, width, height in
+        guard let data, let out,
+              let source = CGImageSourceCreateWithData(Data(bytes: data, count: size) as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              let context = CGContext(data: out, width: Int(width), height: Int(height), bitsPerComponent: 8,
+                                      bytesPerRow: Int(width), space: CGColorSpaceCreateDeviceGray(),
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return 0 }
+        context.interpolationQuality = .medium
+        context.draw(image, in: CGRect(x: 0, y: 0, width: Int(width), height: Int(height)))
+        return 1
+    }
+
+    /// Moves to a point of the picture and checks it really comes to the centre, correcting the turn from the
+    /// pictures (a few seconds). The result is how many corrections it made.
+    func moveToPoint(_ scale: ViewScale, pan: Double, tilt: Double,
+                     completion: @escaping @MainActor (Result<Int, LinkError>) -> Void) {
+        runOnSession({ session in
+            var s = ptz_view_scale(half_x: scale.halfX, half_y: scale.halfY)
+            var corrections: Int32 = 0
+            var error = [CChar](repeating: 0, count: 1024)
+            guard ptz_move_to_point(session, CameraLink.grey, nil, &s, pan, tilt, &corrections, &error, error.count) != 0 else {
+                return self.failure(error, session: session)
+            }
+            return .success(Int(corrections))
         }, completion: completion)
     }
 

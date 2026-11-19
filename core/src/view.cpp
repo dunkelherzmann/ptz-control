@@ -4,10 +4,12 @@
 #include "internal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace ptz {
@@ -175,6 +177,226 @@ std::optional<std::pair<double, double>> picture_shift(const unsigned char *befo
     return std::make_pair(-2.0 * fx / width, 2.0 * fy / height);
 }
 
+namespace {
+
+// A still picture from the camera as grey pixels, `width` wide.
+struct Picture {
+    std::vector<unsigned char> pixels;
+    int width = 0, height = 0;
+};
+
+Picture grey_picture(Camera &camera, const GreyDecoder &grey, int width = 320) {
+    std::string bytes = camera.picture();
+    auto size = picture_size(bytes);
+    if (!size || size->first <= 0 || size->second <= 0) throw Error("The camera's picture could not be read");
+    Picture p;
+    p.width = width, p.height = std::max(8, static_cast<int>(std::lround(double(width) * size->second / size->first)));
+    p.pixels.resize(static_cast<size_t>(p.width) * p.height);
+    if (!grey(bytes, p.pixels.data(), p.width, p.height)) throw Error("The camera's picture could not be read");
+    return p;
+}
+
+// Moves pan and tilt, waits until the camera has stopped near the target (or stays put), then a little longer, so the
+// next picture shows where it is. `fine` waits for two still readings even when the first is already close: a small
+// correction can be inside the slack before the camera has started.
+Position go_and_settle(Camera &camera, const Hooks &hooks, double pan, double tilt, bool fine = false) {
+    Target t;
+    t.pan = pan;
+    t.tilt = tilt;
+    camera.move(t);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    double pan_slack = (camera.pan_range.max - camera.pan_range.min) * (fine ? 0.0002 : 0.002);
+    double tilt_slack = (camera.tilt_range.max - camera.tilt_range.min) * (fine ? 0.0002 : 0.002);
+    Position last;
+    bool have_last = false;
+    int still_count = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (hooks.cancelled()) throw Error("Cancelled");
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        Position now = camera.position();
+        if (!now.pan.available || !now.tilt.available) continue;
+        bool arrived = std::fabs(now.pan.value - pan) <= pan_slack && std::fabs(now.tilt.value - tilt) <= tilt_slack;
+        bool still = have_last && std::fabs(now.pan.value - last.pan.value) <= pan_slack / 4 &&
+                     std::fabs(now.tilt.value - last.tilt.value) <= tilt_slack / 4;
+        still_count = still ? still_count + 1 : 0;
+        bool moving = lower(now.move_status).find("moving") != std::string::npos;
+        if (!moving && (fine ? (arrived && still_count >= 1) || still_count >= 2 : arrived || still)) break;
+        last = now;
+        have_last = true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(700));
+    return camera.position();
+}
+
+// Where the patch of `before` around (x, y) shows in `after`, in view units (x right, y up), looking within `reach`
+// of (expect_x, expect_y); nothing when no part of `after` clearly matches it. A lens shows a spot near the edge
+// smaller than at the centre (and squeezed more one way than the other), so the patch is also tried a little larger or
+// smaller on each axis: matched at one size only, its features pull the match off its centre.
+std::optional<std::pair<double, double>> find_patch(const Grey &before, double x, double y, const Grey &after,
+                                                    double expect_x, double expect_y, double reach) {
+    const int w = before.width, h = before.height;
+    auto to_px = [&](double vx) { return (vx + 1) * w / 2 - 0.5; };
+    auto to_py = [&](double vy) { return (1 - vy) * h / 2 - 0.5; };
+    // A patch up to a quarter of the picture wide and tall centred on the point, smaller near an edge: off centre, what
+    // the lens does to its far side would pull the match.
+    double cx = to_px(x), cy = to_py(y);  // the point, in `before`'s pixels
+    int hw = std::min({w / 8, static_cast<int>(cx), static_cast<int>(w - 1 - cx)});
+    int hh = std::min({h / 8, static_cast<int>(cy), static_cast<int>(h - 1 - cy)});
+    if (hw < 6 || hh < 6) return std::nullopt;
+    int x0 = static_cast<int>(std::lround(cx)) - hw, y0 = static_cast<int>(std::lround(cy)) - hh;
+    int pw = 2 * hw + 1, ph = 2 * hh + 1;
+    double mean = 0, spread = 0;
+    for (int j = 0; j < ph; ++j)
+        for (int i = 0; i < pw; ++i) mean += before.at(x0 + i, y0 + j);
+    mean /= pw * ph;
+    for (int j = 0; j < ph; ++j)
+        for (int i = 0; i < pw; ++i) spread += std::pow(before.at(x0 + i, y0 + j) - mean, 2);
+    if (std::sqrt(spread / (pw * ph)) < 0.15) return std::nullopt;  // a plain patch can't be placed
+    auto sample = [&](double fx, double fy, double &v) {
+        int ix = static_cast<int>(std::floor(fx)), iy = static_cast<int>(std::floor(fy));
+        if (ix < 0 || iy < 0 || ix + 1 >= after.width || iy + 1 >= after.height) return false;
+        double ax = fx - ix, ay = fy - iy;
+        v = after.at(ix, iy) * (1 - ax) * (1 - ay) + after.at(ix + 1, iy) * ax * (1 - ay) +
+            after.at(ix, iy + 1) * (1 - ax) * ay + after.at(ix + 1, iy + 1) * ax * ay;
+        return true;
+    };
+    // Mean difference with the point placed at (q[0], q[1]) of `after` and the patch turned by the matrix q[2..5]
+    // around it; infinity when much of it falls outside.
+    using Fit = std::array<double, 6>;
+    // Both sides are evened out to the same mean and spread first: the camera's exposure, and how the whole picture
+    // was evened out, change with what else is in view.
+    std::vector<double> mine, theirs;
+    auto score = [&](const Fit &q, int step) -> double {
+        mine.clear(), theirs.clear();
+        int tried = 0;
+        for (int j = 0; j < ph; j += step)
+            for (int i = 0; i < pw; i += step) {
+                ++tried;
+                double u = x0 + i - cx, t = y0 + j - cy, v;
+                if (!sample(q[0] + q[2] * u + q[3] * t, q[1] + q[4] * u + q[5] * t, v)) continue;
+                theirs.push_back(v);
+                mine.push_back(before.at(x0 + i, y0 + j));
+            }
+        size_t n = mine.size();
+        if (n * 10 < static_cast<size_t>(tried) * 9) return INFINITY;
+        double ma = 0, mb = 0, sa = 0, sb = 0;
+        for (size_t k = 0; k < n; ++k) ma += mine[k], mb += theirs[k];
+        ma /= n, mb /= n;
+        for (size_t k = 0; k < n; ++k) sa += (mine[k] - ma) * (mine[k] - ma), sb += (theirs[k] - mb) * (theirs[k] - mb);
+        sa = std::sqrt(sa / n), sb = std::sqrt(sb / n);
+        if (sa < 1e-6 || sb < 1e-6) return INFINITY;
+        double sum = 0;
+        for (size_t k = 0; k < n; ++k) sum += std::fabs((mine[k] - ma) / sa - (theirs[k] - mb) / sb);
+        return sum / n;
+    };
+    // Whole pixels first, as the patch is, every other pixel; then each of the place, size, turn and slant in turn,
+    // in smaller and smaller steps, down to a twentieth of a pixel.
+    double ex = to_px(expect_x), ey = to_py(expect_y);
+    int rx = std::max(2, static_cast<int>(reach * w / 2)), ry = std::max(2, static_cast<int>(reach * h / 2));
+    Fit fit{ex, ey, 1, 0, 0, 1};
+    double best = INFINITY;
+    for (int dy = -ry; dy <= ry; dy += 2)
+        for (int dx = -rx; dx <= rx; dx += 2) {
+            Fit q{ex + dx, ey + dy, 1, 0, 0, 1};
+            double sc = score(q, 2);
+            if (sc < best) best = sc, fit = q;
+        }
+    if (!std::isfinite(best)) return std::nullopt;
+    best = score(fit, 1);
+    double place_step = 1, shape_step = 0.04;
+    for (int level = 0; level < 6; ++level, place_step /= 2, shape_step /= 2)
+        for (bool better = true; better;) {
+            better = false;
+            for (int k = 0; k < 6; ++k)
+                for (double sign : {-1.0, 1.0}) {
+                    Fit q = fit;
+                    q[k] += sign * (k < 2 ? place_step : shape_step);
+                    double sc = score(q, 1);
+                    if (sc < best - 1e-9) best = sc, fit = q, better = true;
+                }
+        }
+    double bx = fit[0], by = fit[1];
+    if (!std::isfinite(best) || best > 0.5) return std::nullopt;
+    return std::make_pair(2 * (bx + 0.5) / w - 1, 1 - 2 * (by + 0.5) / h);
+}
+
+// For a camera in degrees, whose lens is known: where the point (x, y) of `before` (taken pointing as `was`) shows in
+// `after`, found by tracing its patch through the lens with `after` pointing a little off `now` (by what the match
+// finds), starting from `guess` (find_patch's answer). Nothing a shift or stretch of the patch can't follow is left over,
+// so the place is exact to a fraction of a pixel.
+std::pair<double, double> through_lens(const Grey &before, const ptz_view &was, double x, double y, const Grey &after,
+                                       const ptz_view &now, std::pair<double, double> guess) {
+    const int w = before.width, h = before.height;
+    double cx = (x + 1) * w / 2 - 0.5, cy = (1 - y) * h / 2 - 0.5;
+    int hw = std::min({w / 8, static_cast<int>(cx), static_cast<int>(w - 1 - cx)});
+    int hh = std::min({h / 8, static_cast<int>(cy), static_cast<int>(h - 1 - cy)});
+    double point_pan, point_tilt;
+    ptz_view_point(&was, x, y, &point_pan, &point_tilt);
+    // Each patch pixel's direction, once.
+    struct Spot { double pan, tilt, value; };
+    std::vector<Spot> spots;
+    int x0 = static_cast<int>(std::lround(cx)) - hw, y0 = static_cast<int>(std::lround(cy)) - hh;
+    for (int j = 0; j <= 2 * hh; ++j)
+        for (int i = 0; i <= 2 * hw; ++i) {
+            Spot sp;
+            ptz_view_point(&was, 2 * (x0 + i + 0.5) / w - 1, 1 - 2 * (y0 + j + 0.5) / h, &sp.pan, &sp.tilt);
+            sp.value = before.at(x0 + i, y0 + j);
+            spots.push_back(sp);
+        }
+    std::vector<double> mine, theirs;
+    auto score = [&](double dp, double dt) -> double {
+        ptz_view v = now;
+        v.pan += dp, v.tilt += dt;
+        mine.clear(), theirs.clear();
+        for (const Spot &sp : spots) {
+            double vx, vy;
+            if (!ptz_view_locate(&v, sp.pan, sp.tilt, &vx, &vy)) continue;
+            double fx = (vx + 1) * w / 2 - 0.5, fy = (1 - vy) * h / 2 - 0.5;
+            int ix = static_cast<int>(std::floor(fx)), iy = static_cast<int>(std::floor(fy));
+            if (ix < 0 || iy < 0 || ix + 1 >= after.width || iy + 1 >= after.height) continue;
+            double ax = fx - ix, ay = fy - iy;
+            theirs.push_back(after.at(ix, iy) * (1 - ax) * (1 - ay) + after.at(ix + 1, iy) * ax * (1 - ay) +
+                             after.at(ix, iy + 1) * (1 - ax) * ay + after.at(ix + 1, iy + 1) * ax * ay);
+            mine.push_back(sp.value);
+        }
+        size_t n = mine.size();
+        if (n * 10 < spots.size() * 9) return INFINITY;
+        double ma = 0, mb = 0, sa = 0, sb = 0;
+        for (size_t k = 0; k < n; ++k) ma += mine[k], mb += theirs[k];
+        ma /= n, mb /= n;
+        for (size_t k = 0; k < n; ++k) sa += (mine[k] - ma) * (mine[k] - ma), sb += (theirs[k] - mb) * (theirs[k] - mb);
+        sa = std::sqrt(sa / n), sb = std::sqrt(sb / n);
+        if (sa < 1e-6 || sb < 1e-6) return INFINITY;
+        double sum = 0;
+        for (size_t k = 0; k < n; ++k) sum += std::fabs((mine[k] - ma) / sa - (theirs[k] - mb) / sb);
+        return sum / n;
+    };
+    // Start where the guess puts the point: `after` points off `now` by about the guess's distance from where the
+    // point would show if it pointed exactly as `now`.
+    double lx = 0, ly = 0;
+    ptz_view_locate(&now, point_pan, point_tilt, &lx, &ly);
+    double deg_x = std::atan(std::fabs(now.scale.half_x)) / kRadian, deg_y = std::atan(std::fabs(now.scale.half_y)) / kRadian;
+    double across = std::max(0.2, std::cos(now.tilt * kRadian));
+    double dp = -(guess.first - lx) * deg_x / across, dt = -(guess.second - ly) * deg_y;
+    double best = score(dp, dt);
+    double pixel = 2 * deg_x / w;  // degrees per pixel at the centre
+    for (double step = 2 * pixel; step > pixel / 40; step /= 2)
+        for (bool better = true; better;) {
+            better = false;
+            for (auto [kp, kt] : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
+                double tp = dp + kp * step / across, tt = dt + kt * step, sc = score(tp, tt);
+                if (sc < best - 1e-9) best = sc, dp = tp, dt = tt, better = true;
+            }
+        }
+    ptz_view v = now;
+    v.pan += dp, v.tilt += dt;
+    double ox = guess.first, oy = guess.second;
+    if (std::isfinite(best)) ptz_view_locate(&v, point_pan, point_tilt, &ox, &oy);
+    return {ox, oy};
+}
+
+}  // namespace
+
 ViewScale measure_view(Camera &camera, const Hooks &hooks, const GreyDecoder &grey) {
     if (!camera.pan_range.available || !camera.tilt_range.available)
         throw Error("Measuring the view needs the camera's pan and tilt ranges");
@@ -183,46 +405,10 @@ ViewScale measure_view(Camera &camera, const Hooks &hooks, const GreyDecoder &gr
         throw Error("Measuring the view needs pan and tilt readings from the camera");
 
     auto picture = [&] {
-        std::string bytes = camera.picture();
-        auto size = picture_size(bytes);
-        if (!size || size->first <= 0 || size->second <= 0) throw Error("The camera's picture could not be read");
-        int width = 320, height = std::max(8, static_cast<int>(std::lround(320.0 * size->second / size->first)));
-        std::vector<unsigned char> pixels(static_cast<size_t>(width) * height);
-        if (!grey(bytes, pixels.data(), width, height)) throw Error("The camera's picture could not be read");
-        return std::make_tuple(pixels, width, height);
+        Picture p = grey_picture(camera, grey);
+        return std::make_tuple(p.pixels, p.width, p.height);
     };
-    // Waits until the camera has stopped near `target` (or stays put), then a little longer, so the next picture
-    // shows where it is.
-    auto settle = [&](double pan, double tilt) {
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
-        double pan_slack = (camera.pan_range.max - camera.pan_range.min) * 0.002;
-        double tilt_slack = (camera.tilt_range.max - camera.tilt_range.min) * 0.002;
-        Position last;
-        bool have_last = false;
-        Position now;
-        while (std::chrono::steady_clock::now() < deadline) {
-            if (hooks.cancelled()) throw Error("Cancelled");
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            now = camera.position();
-            if (!now.pan.available || !now.tilt.available) continue;
-            bool arrived = std::fabs(now.pan.value - pan) <= pan_slack && std::fabs(now.tilt.value - tilt) <= tilt_slack;
-            bool still = have_last && std::fabs(now.pan.value - last.pan.value) <= pan_slack / 4 &&
-                         std::fabs(now.tilt.value - last.tilt.value) <= tilt_slack / 4;
-            bool moving = lower(now.move_status).find("moving") != std::string::npos;
-            if (!moving && (arrived || still)) break;
-            last = now;
-            have_last = true;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(700));
-        return camera.position();
-    };
-    auto go = [&](double pan, double tilt) {
-        Target t;
-        t.pan = pan;
-        t.tilt = tilt;
-        camera.move(t);
-        return settle(pan, tilt);
-    };
+    auto go = [&](double pan, double tilt) { return go_and_settle(camera, hooks, pan, tilt); };
 
     ViewScale scale;
     double turns[2] = {0, 0};             // each axis's last turn
@@ -302,6 +488,54 @@ ViewScale measure_view(Camera &camera, const Hooks &hooks, const GreyDecoder &gr
     scale.zoom_available = start.zoom.available;
     scale.zoom = start.zoom.value;
     return scale;
+}
+
+int move_to_point(Camera &camera, const Hooks &hooks, const GreyDecoder &grey, const ViewScale &scale, double pan,
+                  double tilt) {
+    Position start = camera.position();
+    auto plain = [&] { go_and_settle(camera, hooks, pan, tilt); return 0; };
+    if (!start.pan.available || !start.tilt.available || !camera.pan_range.available || !camera.tilt_range.available)
+        return plain();
+    auto view_at = [&](const Position &at) {
+        ptz_view v{{scale.half_x, scale.half_y}, camera.degrees() ? 1 : 0, at.pan.value, at.tilt.value,
+                   {1, camera.pan_range.min, camera.pan_range.max}, {1, camera.tilt_range.min, camera.tilt_range.max}};
+        return v;
+    };
+    // Where the point shows now; a point off the picture can't be followed.
+    ptz_view was = view_at(start);
+    double x = 0, y = 0;
+    if (!ptz_view_locate(&was, pan, tilt, &x, &y) || std::fabs(x) > 0.95 || std::fabs(y) > 0.95) return plain();
+    Picture first = grey_picture(camera, grey, 640);  // twice as fine as for measuring: this is the last word
+    Grey before = normalised(first.pixels.data(), first.width, first.height);
+    Position at = go_and_settle(camera, hooks, pan, tilt);
+    // The point should now be at the centre. Wherever it shows instead, turn by that much more: three times at most,
+    // until it is within a fifth of a pixel of a 320-wide picture, or two fifths at this size (the last picture only checks).
+    int corrections = 0;
+    for (int round = 0; round < 4; ++round) {
+        if (!at.pan.available || !at.tilt.available) break;
+        Picture now = grey_picture(camera, grey, 640);
+        if (now.width != first.width || now.height != first.height) break;
+        Grey after = normalised(now.pixels.data(), now.width, now.height);
+        auto found = find_patch(before, x, y, after, 0, 0, 0.2);
+        if (!found) break;
+        auto [ox, oy] = *found;
+        if (camera.degrees()) {
+            ptz_view here = view_at(at);
+            std::tie(ox, oy) = through_lens(before, was, x, y, after, here, *found);
+        }
+        if (hooks.log)
+            hooks.log("The point landed " + format_number(ox) + ", " + format_number(oy) +
+                      " of the half picture from the centre");
+        if (round == 3 || (std::fabs(ox) < 0.00125 && std::fabs(oy) < 0.00125 * first.width / first.height)) break;
+        double to_pan, to_tilt;
+        ptz_view here = view_at(at);
+        ptz_view_point(&here, ox, oy, &to_pan, &to_tilt);
+        to_pan = std::clamp(to_pan, camera.pan_range.min, camera.pan_range.max);
+        to_tilt = std::clamp(to_tilt, camera.tilt_range.min, camera.tilt_range.max);
+        at = go_and_settle(camera, hooks, to_pan, to_tilt, true);
+        ++corrections;
+    }
+    return corrections;
 }
 
 }  // namespace ptz
