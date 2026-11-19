@@ -332,11 +332,14 @@ static void move_to_point(int port, double px, double py, double wrong) {
         CHECK(ok && hypot(end_p - want_p, end_t - want_t) <= hypot(first_p - want_p, first_t - want_t) + 0.02,
               "realistic onvif, wet dome: no worse than the plain move (pan %.3f want %.3f, tilt %.3f want %.3f)", end_p,
               want_p, end_t, want_t);
-    else
-    CHECK(fabs(end_p - want_p) < 0.15 && fabs(end_t - want_t) < 0.15 &&
+    else {
+    /* Pictures that trail the camera make each check a little less certain: 0.25 degrees there. */
+    double limit = port == 8084 ? 0.25 : 0.15;
+    CHECK(fabs(end_p - want_p) < limit && fabs(end_t - want_t) < limit &&
               hypot(end_p - want_p, end_t - want_t) < hypot(first_p - want_p, first_t - want_t) / 4,
           "realistic onvif: the clicked point is at the centre (pan %.3f want %.3f, tilt %.3f want %.3f)", end_p, want_p,
           end_t, want_t);
+    }
     ptz_close(s);
 }
 

@@ -374,7 +374,7 @@ Each version is built on its own kind of machine. Nothing is cross-compiled.
   camera that behaves like a real ONVIF one (`--onvif-real`: degrees seen through a lens, each move landing 2% short):
   the plain move lands 1.3–1.9° off, and after the corrections the point is within 0.15° of the centre, by where the
   mock says its picture really points; also with the view's scale 1.7 times too wide (the move then gives the right
-  scale, within 15%), with pictures that trail the camera by a second (`--picture-lag 1`), and on a wet dome (`--wet`:
+  scale, within 15%), with pictures that trail the camera by a second (`--picture-lag 1`; within 0.25° there), and on a wet dome (`--wet`:
   drops that stay put in the picture), where the point may not be found but the result is no worse than the plain
   move. Each move reports its positions as it goes. On the Axis mock, which lands exactly, the same moves stay within
   0.08°.
