@@ -558,13 +558,28 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate, Camer
         guard state == .connected else { return }
         let zoom = (try? parseTarget())?.zoom
         guard let scale = measured ?? plane.scale, zoom == nil || zoom == current?.zoom?.value else { sendMove(); return }
-        link.moveToPoint(scale, pan: pan, tilt: tilt) { [weak self] result in
+        link.moveToPoint(scale, pan: pan, tilt: tilt, reading: { [weak self] snapshot in
+            // The core holds the link while it moves and checks: show its readings, so the plane follows the camera.
+            guard let self, self.state == .connected else { return }
+            self.current = snapshot
+            self.lastRead = Date()
+            self.updateControls()
+        }) { [weak self] result in
             guard let self else { return }
             switch result {
-            case .success(let corrections):
-                self.eventLog.append("Moved to pan=\(format(pan)), tilt=\(format(tilt))" + (corrections == 0
-                    ? "; the point landed at the centre"
-                    : "; corrected \(corrections == 1 ? "once" : "\(corrections) times") from the picture so the point is at the centre"))
+            case .success(let move):
+                let at = self.current.map { "pan=\($0.pan?.text ?? "unknown"), tilt=\($0.tilt?.text ?? "unknown")" } ?? ""
+                self.eventLog.append("Moved to the point, now at \(at)" + (move.corrections == 0
+                    ? "; it landed at the centre"
+                    : "; corrected \(move.corrections == 1 ? "once" : "\(move.corrections) times") from the picture so the point is at the centre"))
+                if let learned = move.learned {
+                    self.eventLog.append("The move showed the view's scale: ±\(format(abs(learned.halfX))) pan × ±\(format(abs(learned.halfY))) tilt; the plane uses it now")
+                    self.measured = (self.current?.zoom?.value, learned)
+                    self.link.savedViews { [weak self] saved in
+                        guard let self, case .success(let text) = saved else { return }
+                        UserDefaults.standard.set(text, forKey: self.viewsKey(self.settings))
+                    }
+                }
                 self.nextRefresh = .distantPast
                 self.cameraMoved()
             case .failure(let error):

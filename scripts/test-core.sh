@@ -22,9 +22,13 @@ python3 "$ROOT/tools/mock-camera.py" --port 8081 --plain-png >"$OUT/mock-plain.l
 MOCK_PLAIN=$!
 python3 "$ROOT/tools/mock-camera.py" --port 8082 --plain-png --onvif-real >"$OUT/mock-real.log" 2>&1 &
 MOCK_REAL=$!
-trap 'kill $MOCK $MOCK_H265 $MOCK_PLAIN $MOCK_REAL 2>/dev/null' EXIT
+python3 "$ROOT/tools/mock-camera.py" --port 8083 --plain-png --onvif-real --wet >"$OUT/mock-wet.log" 2>&1 &
+MOCK_WET=$!
+python3 "$ROOT/tools/mock-camera.py" --port 8084 --plain-png --onvif-real --picture-lag 1 >"$OUT/mock-lag.log" 2>&1 &
+MOCK_LAG=$!
+trap 'kill $MOCK $MOCK_H265 $MOCK_PLAIN $MOCK_REAL $MOCK_WET $MOCK_LAG 2>/dev/null' EXIT
 # Wait until the mock cameras answer (up to 10 s): a fixed one-second pause was too short on a busy machine.
-for port in 8080 8090 8081 8082; do
+for port in 8080 8090 8081 8082 8083 8084; do
     for _ in $(seq 1 50); do nc -z 127.0.0.1 $port 2>/dev/null && break; sleep 0.2; done
 done
-MOCK_REAL_LOG="$OUT/mock-real.log" "$OUT/core-smoke"
+MOCK_REAL_LOG="$OUT/mock-real.log" MOCK_WET_LOG="$OUT/mock-wet.log" MOCK_LAG_LOG="$OUT/mock-lag.log" "$OUT/core-smoke"

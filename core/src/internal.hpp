@@ -191,8 +191,13 @@ std::optional<std::pair<double, double>> picture_shift(const unsigned char *befo
 ViewScale measure_view(Camera &camera, const Hooks &hooks, const GreyDecoder &grey);
 // Turns to (pan, tilt), a point of the current picture, then compares pictures to find where that point really
 // landed and corrects the turn until it is at the centre. Returns how many corrections it made.
-int move_to_point(Camera &camera, const Hooks &hooks, const GreyDecoder &grey, const ViewScale &scale, double pan,
-                  double tilt);
+struct MoveResult {
+    int corrections = 0;
+    std::optional<ViewScale> learned;  // the view's scale as the move showed it, when it told
+    Position landed;
+};
+MoveResult move_to_point(Camera &camera, const Hooks &hooks, const GreyDecoder &grey, const ViewScale &scale,
+                         double pan, double tilt, const std::function<void(const Position &)> &readings = {});
 
 std::unique_ptr<Camera> make_onvif(const CameraParams &params, const Hooks &hooks);
 std::unique_ptr<Camera> make_axis(const CameraParams &params, const Hooks &hooks);
