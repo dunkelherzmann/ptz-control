@@ -121,6 +121,15 @@ void link_live_stop(CameraLink *link, std::function<void()> done = nullptr);
 // Measures how wide the picture is at the current zoom: the camera turns a little on each axis and back, and the
 // core compares still pictures. Takes several seconds.
 void link_measure_view(CameraLink *link, std::function<void(LinkResult, ViewScale)> done);
+// A double-click's move: to (pan, tilt), a point of the current picture, then checked from the pictures and corrected
+// until the point is at the centre (several seconds). `reading` gets each position the core reads meanwhile, on the UI
+// thread; `done` gets how many corrections it made and the view's scale the move showed, when it told.
+struct PointMove {
+    int corrections = 0;
+    std::optional<ViewScale> learned;
+};
+void link_move_to_point(CameraLink *link, ViewScale scale, double pan, double tilt, std::function<void(Snapshot)> reading,
+                        std::function<void(LinkResult, PointMove)> done);
 // The measured views as text, to keep for this camera, and loading them back.
 void link_saved_views(CameraLink *link, std::function<void(QString)> done);
 void link_load_views(CameraLink *link, const QString &text);

@@ -19,10 +19,10 @@ Items marked *found in testing* were found while testing other work, not reporte
 - [x] **`scripts/test-core.sh` doesn't build on Linux** (*found in testing* 2026-11-18, Linux). `tests/core-smoke.c` calls `usleep`, which glibc hides under `-std=c11`, so clang stops with an implicit-declaration error. With `-D_DEFAULT_SOURCE` added (or `#define _DEFAULT_SOURCE` at the top of the test) every check passes. Fixed in #15 (`#define _DEFAULT_SOURCE` at the top of the file).
 - [ ] **ONVIF cameras drift a little off the double-clicked point** (reported 2026-11-19, ONVIF on the Mac). The camera's own positioning lands slightly off, and the plane's linear scale for ONVIF units ignores the lens, so the point doesn't quite reach the centre. The move is now checked from the pictures and corrected (spec I14): on a mock ONVIF camera that lands 2% short through a lens, the miss goes from 1.3–1.9° to under 0.15°.
   - [x] Mac (#12)
-  - [ ] Linux
+  - [x] Linux (#16)
   - [ ] Windows
 - [ ] **On a real ONVIF camera the corrections overshoot back and forth, and the readouts freeze meanwhile** (reported 2026-11-19 with a video, Bosch/Milesight ONVIF over SSH, at night in rain; 1.0.91). Each correction went about twice too far (the point landed −0.20, then +0.15 of the half picture from the centre), so the camera swung around and ended off; pan and tilt and the plane stayed frozen for the whole move. The view's scale was too wide: measured through raindrops on the dome, which stay put as the camera turns, or from pictures that trailed the camera. Corrections now measure each turn's real effect and scale the next by it, keep the best place, wait for a picture that has changed and settled, and teach the plane the scale they find; measuring the view waits for changed pictures too; the readings show while it works (spec I14).
   - [x] Mac (#14)
-  - [ ] Linux
+  - [x] Linux (#16)
   - [ ] Windows
 - [ ] **The Mac test's run 2 (saved login) failed once** (*found in testing* 2026-11-19, Mac): "run 2 connected with the saved login and moved" failed in one run and passed on the next with no change to that code.
