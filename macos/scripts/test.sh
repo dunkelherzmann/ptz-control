@@ -113,17 +113,18 @@ check "run 5 remembered the measured view for this camera" \
     "$(defaults read "$TEST_ID" "Views axis 127.0.0.1:$STILL_PORT" >/dev/null 2>&1; echo $?)"
 check "measured-view picture saved" "$([ -s "$OUT/macos-measured.png" ] && echo 0 || echo 1)"
 
-# Run 6: an ONVIF camera like a real one (its units are degrees seen through a lens, and each move lands 2% short).
+# Run 6: an ONVIF camera like a real one (its units are degrees seen through a lens, each move lands 2% short, and
+# its pictures trail it by a second).
 # Double-clicking a point measures the view, moves there, then corrects from the pictures until the point is at the
 # centre. The mock logs where each picture really points: the last must show what the picture before the move showed
 # at that point (0.6 of the way to the right edge, 0.4 to the bottom; 60 x 35 degrees), within 0.2 degrees.
 REAL_PORT=18084
-python3 -u "$ROOT/tools/mock-camera.py" --port "$REAL_PORT" --video none --onvif-real >"$WORK/mock-real.log" 2>&1 &
+python3 -u "$ROOT/tools/mock-camera.py" --port "$REAL_PORT" --video none --onvif-real --picture-lag 1 >"$WORK/mock-real.log" 2>&1 &
 REAL_MOCK=$!
 for _ in $(seq 1 50); do nc -z 127.0.0.1 "$REAL_PORT" 2>/dev/null && break; sleep 0.2; done
 defaults write "$TEST_ID" ConnectionSettings -data "$(settings admin "$REAL_PORT")"
 PTZ_VAULT_PATH="$VAULT" PTZ_PASSWORD=secret PTZ_SNAPSHOT_PICTURE=1 PTZ_SNAPSHOT_PATH="$OUT/macos-corrected.png" \
-    PTZ_SNAPSHOT_MEASURE_AT="0.6,-0.4" PTZ_SNAPSHOT_WAIT=60 "$BIN" >"$WORK/app6.log" 2>&1 || true
+    PTZ_SNAPSHOT_MEASURE_AT="0.6,-0.4" PTZ_SNAPSHOT_WAIT=90 "$BIN" >"$WORK/app6.log" 2>&1 || true
 kill "$REAL_MOCK" 2>/dev/null || true
 LANDED="$(awk '
     /^mock: onvif truth/ { split($4, a, "="); split($5, b, "="); tp = a[2]; tt = b[2]; if (click) { ep = tp; et = tt; n++ } }

@@ -40,6 +40,10 @@ parser.add_argument("--plain-png", action="store_true", help="uncompressed pictu
 parser.add_argument("--onvif-real", action="store_true",
                     help="the ONVIF camera behaves like a real one: its generic units are degrees (pan x 180, tilt x 90) "
                          "seen through a lens 60 degrees wide at zoom 0, and each move lands 2%% short of where it reports")
+parser.add_argument("--wet", action="store_true",
+                    help="drops of water on the dome: bright blurred blobs that stay put in the picture as it turns")
+parser.add_argument("--picture-lag", type=float, default=0.0,
+                    help="seconds the ONVIF pictures lag behind the camera, as some cameras' snapshots do")
 args = parser.parse_args()
 args.rtsp_port = args.rtsp_port or args.port + 100
 
@@ -103,6 +107,22 @@ def sphere_point(pan, tilt, tx, ty):
     return math.degrees(math.atan2(x, y)), math.degrees(math.atan2(z, math.hypot(x, y)))
 
 
+DROPS = [(0.30, 0.55, 0.12), (0.62, 0.25, 0.09), (0.15, 0.20, 0.07), (0.80, 0.70, 0.11), (0.48, 0.80, 0.08)]
+moves = []  # the ONVIF camera's moves: (time, start, target, miss) per axis, for --picture-lag
+
+
+def truth_at(t):
+    """Where the ONVIF camera really pointed at time t (degrees), from its moves (each glides over 2 seconds)."""
+    pan, tilt = onvif["pan"] - onvif["miss_pan"], onvif["tilt"] - onvif["miss_tilt"]
+    for since, start, target, miss in moves:
+        if since > t:
+            break
+        progress = min(1.0, (t - since) / 2.0)
+        pan = start[0] + (target[0] - start[0]) * progress - miss[0]
+        tilt = start[1] + (target[1] - start[1]) * progress - miss[1]
+    return pan * 180, tilt * 90
+
+
 def picture(pan, tilt, half_w, half_h, scale, sphere=False):
     """A PNG of the drawn scene around (pan, tilt); scale turns camera units into scene units. With sphere, half_w
     and half_h are tangents and the scene is projected as a lens sees it."""
@@ -139,6 +159,12 @@ def picture(pan, tilt, half_w, half_h, scale, sphere=False):
                 c = (240, 240, 240)
             else:
                 c = base
+            if args.wet:
+                for dx, dy, r in DROPS:
+                    d = math.hypot(px / PICTURE_W - dx, (py / PICTURE_H - dy) * PICTURE_H / PICTURE_W)
+                    if d < r:
+                        k = 0.75 * (1 - (d / r) ** 2)
+                        c = tuple(int(ch * (1 - k) + 230 * k) for ch in c)
             rows += bytes(c)
 
     def chunk(kind, data):
@@ -235,8 +261,10 @@ class Handler(BaseHTTPRequestHandler):
                 glide(onvif, ("pan", "tilt", "zoom"))
                 if args.onvif_real and pt:
                     # Lands a little short: the picture shows the camera 2% of the turn behind where it reports.
+                    begun = (onvif["pan"] - onvif["miss_pan"], onvif["tilt"] - onvif["miss_tilt"])
                     onvif["miss_pan"] = 0.02 * (target["pan"] - onvif["pan"])
                     onvif["miss_tilt"] = 0.02 * (target["tilt"] - onvif["tilt"])
+                    moves.append((time.time(), begun, (target["pan"], target["tilt"]), (onvif["miss_pan"], onvif["miss_tilt"])))
                 onvif.update(start=dict(onvif), target=target, since=time.time())
             if pt:
                 print(f"mock: onvif absolute move to pan={target['pan']:.4f} tilt={target['tilt']:.4f}")
@@ -291,8 +319,8 @@ class Handler(BaseHTTPRequestHandler):
                     glide(onvif, ("pan", "tilt", "zoom"))
                     if args.onvif_real:
                         half = math.tan(math.radians(30 * (1 - 0.8 * onvif["zoom"])))
-                        args_ = ((onvif["pan"] - onvif["miss_pan"]) * 180, (onvif["tilt"] - onvif["miss_tilt"]) * 90,
-                                 half, half * PICTURE_H / PICTURE_W, 1 / 180, True)
+                        tp, tt = truth_at(time.time() - args.picture_lag)
+                        args_ = (tp, tt, half, half * PICTURE_H / PICTURE_W, 1 / 180, True)
                     else:
                         half_w, half_h = onvif_view()
                         args_ = (onvif["pan"], onvif["tilt"], half_w, half_h, 1.0)

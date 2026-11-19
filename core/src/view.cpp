@@ -199,7 +199,10 @@ Picture grey_picture(Camera &camera, const GreyDecoder &grey, int width = 320) {
 // Moves pan and tilt, waits until the camera has stopped near the target (or stays put), then a little longer, so the
 // next picture shows where it is. `fine` waits for two still readings even when the first is already close: a small
 // correction can be inside the slack before the camera has started.
-Position go_and_settle(Camera &camera, const Hooks &hooks, double pan, double tilt, bool fine = false) {
+using Readings = std::function<void(const Position &)>;  // each position read while waiting, for the host to show
+
+Position go_and_settle(Camera &camera, const Hooks &hooks, double pan, double tilt, bool fine = false,
+                       const Readings &readings = {}) {
     Target t;
     t.pan = pan;
     t.tilt = tilt;
@@ -214,6 +217,7 @@ Position go_and_settle(Camera &camera, const Hooks &hooks, double pan, double ti
         if (hooks.cancelled()) throw Error("Cancelled");
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         Position now = camera.position();
+        if (readings) readings(now);
         if (!now.pan.available || !now.tilt.available) continue;
         bool arrived = std::fabs(now.pan.value - pan) <= pan_slack && std::fabs(now.tilt.value - tilt) <= tilt_slack;
         bool still = have_last && std::fabs(now.pan.value - last.pan.value) <= pan_slack / 4 &&
@@ -225,7 +229,37 @@ Position go_and_settle(Camera &camera, const Hooks &hooks, double pan, double ti
         have_last = true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(700));
-    return camera.position();
+    Position final = camera.position();
+    if (readings) readings(final);
+    return final;
+}
+
+// A picture once the camera has really stopped: some cameras report the new position before the picture shows it,
+// or send a picture taken a moment ago. With `reference` (the picture from before a turn that should show), it waits
+// until the picture differs from it (two pictures that agree may both still be the old view); then until two pictures
+// half a second apart show the same view. Five seconds at most. `waited` gets how long the picture took to change.
+Picture settled_picture(Camera &camera, const GreyDecoder &grey, int width, const Picture *reference = nullptr,
+                        double *waited = nullptr) {
+    auto started = std::chrono::steady_clock::now();
+    auto deadline = started + std::chrono::seconds(5);
+    auto same = [](const Picture &a, const Picture &b) {
+        if (a.width != b.width || a.height != b.height) return false;
+        auto shift = picture_shift(a.pixels.data(), b.pixels.data(), a.width, a.height, 0, 0, 0.05);
+        return shift && std::fabs(shift->first) < 2.0 / a.width && std::fabs(shift->second) < 2.0 / a.height;
+    };
+    Picture now = grey_picture(camera, grey, width);
+    bool changed = !reference || reference->width != width || !same(*reference, now);
+    auto changed_at = started;
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        Picture next = grey_picture(camera, grey, width);
+        bool still = changed && same(now, next);
+        if (!changed && !same(*reference, next)) changed = true, changed_at = std::chrono::steady_clock::now();
+        now = std::move(next);
+        if (still) break;
+    }
+    if (waited) *waited = std::chrono::duration<double>(changed_at - started).count();
+    return now;
 }
 
 // Where the patch of `before` around (x, y) shows in `after`, in view units (x right, y up), looking within `reach`
@@ -404,8 +438,11 @@ ViewScale measure_view(Camera &camera, const Hooks &hooks, const GreyDecoder &gr
     if (!start.pan.available || !start.tilt.available)
         throw Error("Measuring the view needs pan and tilt readings from the camera");
 
-    auto picture = [&] {
-        Picture p = grey_picture(camera, grey);
+    // After a turn the picture must show a change from the one before it (it may trail the camera).
+    Picture start_still;
+    auto picture = [&](bool turned) {
+        Picture p = settled_picture(camera, grey, 320, turned ? &start_still : nullptr);
+        if (!turned) start_still = p;
         return std::make_tuple(p.pixels, p.width, p.height);
     };
     auto go = [&](double pan, double tilt) { return go_and_settle(camera, hooks, pan, tilt); };
@@ -416,7 +453,7 @@ ViewScale measure_view(Camera &camera, const Hooks &hooks, const GreyDecoder &gr
     std::vector<unsigned char> start_picture, last_after;
     int picture_width = 0, picture_height = 0;
     try {
-        auto [before, width, height] = picture();
+        auto [before, width, height] = picture(false);
         start_picture = before, picture_width = width, picture_height = height;
         for (int axis = 0; axis < 2; ++axis) {
             const Range &range = axis == 0 ? camera.pan_range : camera.tilt_range;
@@ -425,7 +462,7 @@ ViewScale measure_view(Camera &camera, const Hooks &hooks, const GreyDecoder &gr
             auto trial = [&](double delta, double expect, double reach) -> std::optional<std::pair<double, double>> {
                 double to = origin + delta <= range.max ? origin + delta : origin - delta;
                 Position at = axis == 0 ? go(to, start.tilt.value) : go(start.pan.value, to);
-                auto [after, w, h] = picture();
+                auto [after, w, h] = picture(true);
                 last_after = after;
                 double turned = (axis == 0 ? at.pan.value : at.tilt.value) - origin;
                 if (w != width || h != height || turned == 0) return std::nullopt;
@@ -490,10 +527,12 @@ ViewScale measure_view(Camera &camera, const Hooks &hooks, const GreyDecoder &gr
     return scale;
 }
 
-int move_to_point(Camera &camera, const Hooks &hooks, const GreyDecoder &grey, const ViewScale &scale, double pan,
-                  double tilt) {
+MoveResult move_to_point(Camera &camera, const Hooks &hooks, const GreyDecoder &grey, const ViewScale &scale,
+                         double pan, double tilt, const Readings &readings) {
+    MoveResult result;
     Position start = camera.position();
-    auto plain = [&] { go_and_settle(camera, hooks, pan, tilt); return 0; };
+    if (readings) readings(start);
+    auto plain = [&] { go_and_settle(camera, hooks, pan, tilt, false, readings); return result; };
     if (!start.pan.available || !start.tilt.available || !camera.pan_range.available || !camera.tilt_range.available)
         return plain();
     auto view_at = [&](const Position &at) {
@@ -507,16 +546,32 @@ int move_to_point(Camera &camera, const Hooks &hooks, const GreyDecoder &grey, c
     if (!ptz_view_locate(&was, pan, tilt, &x, &y) || std::fabs(x) > 0.95 || std::fabs(y) > 0.95) return plain();
     Picture first = grey_picture(camera, grey, 640);  // twice as fine as for measuring: this is the last word
     Grey before = normalised(first.pixels.data(), first.width, first.height);
-    Position at = go_and_settle(camera, hooks, pan, tilt);
+    Position at = go_and_settle(camera, hooks, pan, tilt, false, readings);
     // The point should now be at the centre. Wherever it shows instead, turn by that much more: three times at most,
-    // until it is within a fifth of a pixel of a 320-wide picture, or two fifths at this size (the last picture only checks).
-    int corrections = 0;
+    // until it is within two fifths of a pixel of this 640-wide picture (the last picture only checks). Each turn's
+    // effect is measured: a camera that turns further (or less) than the view's scale says, or a scale measured
+    // through raindrops on the dome, would otherwise overshoot back and forth. The best place reached is kept.
+    double gain_x = 1, gain_y = 1;  // how far the point really moves for each view unit asked for
+    double asked_x = x, asked_y = y;  // how far the last turn was meant to move the point, in view units at gain 1
+    double last_x = x, last_y = y;    // where the point was before it
+    double best = INFINITY;
+    Position best_at = at;
+    double learned_x = 0, learned_y = 0;  // the first move's gains, when it was big enough to tell
+    const double tol_x = 0.00125, tol_y = 0.00125 * first.width / first.height;
+    double lag = 0;
     for (int round = 0; round < 4; ++round) {
         if (!at.pan.available || !at.tilt.available) break;
-        Picture now = grey_picture(camera, grey, 640);
+        // The first landing must show a change; how long that took is how far the pictures trail the camera, waited
+        // out (with a margin) before each later picture: a small correction changes the picture too little to tell.
+        double waited = 0;
+        if (round > 0 && lag > 0) std::this_thread::sleep_for(std::chrono::duration<double>(lag));
+        Picture now = settled_picture(camera, grey, 640, round == 0 ? &first : nullptr, &waited);
+        if (round == 0 && waited > 0) lag = waited * 1.25 + 0.5;  // it was seen in half-second steps: a margin
         if (now.width != first.width || now.height != first.height) break;
         Grey after = normalised(now.pixels.data(), now.width, now.height);
-        auto found = find_patch(before, x, y, after, 0, 0, 0.2);
+        // Near the centre only: further off, a scene with look-alikes (a fence, a row of windows) could match wrongly.
+        double reach = round == 0 ? 0.25 : std::clamp(3 * std::hypot(last_x, last_y), 0.06, 0.3);
+        auto found = find_patch(before, x, y, after, 0, 0, reach);
         if (!found) break;
         auto [ox, oy] = *found;
         if (camera.degrees()) {
@@ -526,16 +581,46 @@ int move_to_point(Camera &camera, const Hooks &hooks, const GreyDecoder &grey, c
         if (hooks.log)
             hooks.log("The point landed " + format_number(ox) + ", " + format_number(oy) +
                       " of the half picture from the centre");
-        if (round == 3 || (std::fabs(ox) < 0.00125 && std::fabs(oy) < 0.00125 * first.width / first.height)) break;
+        // The turn just made was meant to move the point by (asked_x, asked_y) at gain 1; it moved by (last - o).
+        // A turn big enough to measure well sets the axis's gain; the first move's (the biggest) is kept as its scale.
+        auto learn = [&](double asked, double moved, double &gain, double &learned, double big) {
+            if (std::fabs(asked) < big) return;
+            double g = moved / asked;
+            if (g > 0.3 && g < 3) {
+                gain = g;
+                if (round == 0 && std::fabs(asked) >= 0.25) learned = g;  // a quarter of the half picture or more
+            }
+        };
+        learn(asked_x, last_x - ox, gain_x, learned_x, round == 0 ? 0.15 : 0.03);
+        learn(asked_y, last_y - oy, gain_y, learned_y, round == 0 ? 0.15 : 0.03);
+        double size = std::hypot(ox / tol_x, oy / tol_y);
+        if (size < best) best = size, best_at = at;
+        if (round == 3 || size < 1) break;
+        asked_x = ox / gain_x, asked_y = oy / gain_y;
+        last_x = ox, last_y = oy;
         double to_pan, to_tilt;
         ptz_view here = view_at(at);
-        ptz_view_point(&here, ox, oy, &to_pan, &to_tilt);
+        ptz_view_point(&here, asked_x, asked_y, &to_pan, &to_tilt);
         to_pan = std::clamp(to_pan, camera.pan_range.min, camera.pan_range.max);
         to_tilt = std::clamp(to_tilt, camera.tilt_range.min, camera.tilt_range.max);
-        at = go_and_settle(camera, hooks, to_pan, to_tilt, true);
-        ++corrections;
+        at = go_and_settle(camera, hooks, to_pan, to_tilt, true, readings);
+        ++result.corrections;
     }
-    return corrections;
+    if (std::isfinite(best) && best >= 1 && best_at.pan.available &&
+        (std::fabs(best_at.pan.value - at.pan.value) > 0 || std::fabs(best_at.tilt.value - at.tilt.value) > 0)) {
+        // The last turns made it worse (a changing scene, rain): go back to the best place found.
+        at = go_and_settle(camera, hooks, best_at.pan.value, best_at.tilt.value, true, readings);
+        ++result.corrections;
+    }
+    // A turn big enough to measure tells that axis's true scale: keep it, so the plane and the next move agree with
+    // the camera.
+    if (best < 8 && (learned_x || learned_y)) {
+        result.learned = scale;
+        if (learned_x) result.learned->half_x = scale.half_x / learned_x;
+        if (learned_y) result.learned->half_y = scale.half_y / learned_y;
+    }
+    result.landed = at;
+    return result;
 }
 
 }  // namespace ptz
