@@ -78,3 +78,7 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [x] Mac (#10)
   - [x] Linux (#10)
   - [x] Windows (#10)
+- [x] **`scripts/check.sh`: build and test on all three machines before merging** (asked 2026-11-20, developer tooling): the Mac builds and runs the core and app tests on this checkout; Linux builds the Flatpak, runs the core tests and the app test on that build (through `flatpak build`, so the installed app stays); Windows builds (without replacing the desktop copy, new `-NoDesktopCopy`) and runs its test in the signed-in session. Host names come from an untracked `scripts/hosts.env` (`scripts/hosts.env.example`); one line per machine, logs in `.build/check/`. Shipped in #PR.
+  - [x] Mac (#PR)
+  - [x] Linux (#PR)
+  - [x] Windows (#PR)

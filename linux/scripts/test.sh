@@ -7,6 +7,9 @@
 # same on an ONVIF camera like a real one and checks the move is corrected from the pictures. It uses its own settings folder and vault file and never touches the user's PTZ
 # Control settings, saved logins or windows.
 # Usage: linux/scripts/test.sh [screenshot.png]   (default: .build/test/flatpak.png)
+# With PTZ_TEST_BUILD set to a finished build folder (linux/scripts/build.sh leaves one in .build/flatpak/build), it
+# drives that build through `flatpak build` instead, on the installed runtime, so the user's installed copy stays
+# as it is: scripts/check.sh tests a branch that way.
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ID=org.ptzcontrol.app
@@ -36,9 +39,15 @@ rm -rf "$SHOTS/observer"
 RUN_TIMEOUT=90
 run() {  # extra --env options...
     RUNS=$((RUNS + 1))
-    set -- flatpak run --filesystem="$WORK" --filesystem="$SHOTS" --command=sh \
-        --env=QT_QPA_PLATFORM=offscreen --env=PTZ_VAULT_PATH="$VAULT" "$@" \
-        "$ID" -c 'XDG_CONFIG_HOME="$1" exec ptz-control' sh "$WORK/config"
+    if [ -n "${PTZ_TEST_BUILD:-}" ]; then
+        set -- flatpak build --share=network --filesystem="$WORK" --filesystem="$SHOTS" \
+            --env=QT_QPA_PLATFORM=offscreen --env=PTZ_VAULT_PATH="$VAULT" "$@" \
+            "$PTZ_TEST_BUILD" sh -c 'XDG_CONFIG_HOME="$1" exec ptz-control' sh "$WORK/config"
+    else
+        set -- flatpak run --filesystem="$WORK" --filesystem="$SHOTS" --command=sh \
+            --env=QT_QPA_PLATFORM=offscreen --env=PTZ_VAULT_PATH="$VAULT" "$@" \
+            "$ID" -c 'XDG_CONFIG_HOME="$1" exec ptz-control' sh "$WORK/config"
+    fi
     # Flatpak sets XDG_CONFIG_HOME itself, so the test settings folder is chosen inside the sandbox.
     if [ -f "$OBSERVER" ] && [ -z "${PTZ_NO_OBSERVE:-}" ]; then
         python3 "$OBSERVER" run --out "$SHOTS/observer" --name "run $RUNS" --timeout "$RUN_TIMEOUT" --allow "$WORK/" \
@@ -182,7 +191,9 @@ check "corrected-move picture saved" "$([ -s "$CORRECTED" ] && echo 0 || echo 1)
 observed 6
 
 if [ "$FAIL" = 0 ]; then
-    printf 'PASS %s %s: pictures in %s\n' "$ID" "$(flatpak info "$ID" | sed -n 's/^ *Version: //p')" "$SHOTS"
+    if [ -n "${PTZ_TEST_BUILD:-}" ]; then TESTED="build in $PTZ_TEST_BUILD"
+    else TESTED="$(flatpak info "$ID" | sed -n 's/^ *Version: //p')"; fi
+    printf 'PASS %s %s: pictures in %s\n' "$ID" "$TESTED" "$SHOTS"
 else
     cat "$WORK/app.log" "$WORK/mock.log" "$WORK/mock-still.log" "$WORK/mock-real.log" "$WORK/config/PTZControl/PTZControl.conf"
     exit 1

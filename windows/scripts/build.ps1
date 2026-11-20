@@ -1,9 +1,10 @@
 # Builds dist\PTZControl.exe (Windows 10/11 x64) on Windows with the Visual Studio C++ Build Tools
 # (MSVC). Fully static (/MT): one portable .exe that imports only Windows system DLLs, no installer,
 # no administrator rights.
-# Every build is also copied to the desktop as "PTZ Control.exe", replacing the older copy.
-# Usage: powershell -ExecutionPolicy Bypass -File windows\scripts\build.ps1 [-Zip]
-param([switch]$Zip)
+# Every build is also copied to the desktop as "PTZ Control.exe", replacing the older copy, unless -NoDesktopCopy
+# (scripts/check.sh builds branches with it, so the desktop keeps the installed build).
+# Usage: powershell -ExecutionPolicy Bypass -File windows\scripts\build.ps1 [-Zip] [-NoDesktopCopy]
+param([switch]$Zip, [switch]$NoDesktopCopy)
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -71,7 +72,7 @@ Write-Output 'Built dist\PTZControl.exe'
 # A copy on the desktop, so the newest build is always easy to find. It replaces the older copy; if that one
 # is open, the copy is skipped with a warning (close PTZ Control and build again).
 $desktop = [Environment]::GetFolderPath('Desktop')
-if ($desktop) {
+if ($desktop -and -not $NoDesktopCopy) {
     $copy = Join-Path $desktop 'PTZ Control.exe'
     try {
         Copy-Item -Force $exe $copy
