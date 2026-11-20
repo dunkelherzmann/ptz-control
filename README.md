@@ -123,6 +123,7 @@ key file can be set. New host keys are accepted on first use. If a host key
 scripts/test-core.sh   # core C API vs. the mock camera, ONVIF and Axis; the login vault
 macos/scripts/test.sh  # a private test copy of the Mac app vs. the mock camera, off screen; saved logins
 scripts/test-ssh.sh    # SSH route via a throwaway user-level sshd on 127.0.0.1:2222
+scripts/check.sh       # builds and tests on the Mac, Linux and Windows (hosts in scripts/hosts.env); one line each
 python3 tools/mock-camera.py --port 8080 --user admin --password secret
 ```
 
