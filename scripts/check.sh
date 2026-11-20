@@ -19,16 +19,19 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
 # The ssh names of the Linux and Windows machines: from the environment, or from an untracked scripts/hosts.env
 # (see scripts/hosts.env.example) in this checkout or in the main one, so worktrees find it too.
+# A name set in the environment wins over the file's.
+ENV_LINUX="${PTZ_LINUX_HOST:-}" ENV_WINDOWS="${PTZ_WINDOWS_HOST:-}" ENV_MCTL="${PTZ_WINDOWS_MCTL:-}"
 for hosts in "$ROOT/scripts/hosts.env" "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/../scripts/hosts.env"; do
     if [ -f "$hosts" ]; then . "$hosts"; break; fi
 done
-LINUX_HOST="${PTZ_LINUX_HOST:-linux}"
-WINDOWS_HOST="${PTZ_WINDOWS_HOST:-windows}"
+LINUX_HOST="${ENV_LINUX:-${PTZ_LINUX_HOST:-linux}}"
+WINDOWS_HOST="${ENV_WINDOWS:-${PTZ_WINDOWS_HOST:-windows}}"
 # The Windows machine's name in Master Control (`mctl status` lists them).
-WINDOWS_MCTL="${PTZ_WINDOWS_MCTL:-windows}"
+WINDOWS_MCTL="${ENV_MCTL:-${PTZ_WINDOWS_MCTL:-windows}}"
 LOGS="$ROOT/.build/check"
 mkdir -p "$LOGS"
-rm -f "$LOGS"/*.status
+# Old logs go first: a machine that never got to run would otherwise be judged by the last run's log.
+rm -f "$LOGS"/*.status "$LOGS"/*.log "$LOGS"/*.where
 WORKTREE=0
 if [ "${1:-}" = "-w" ]; then
     WORKTREE=1
@@ -73,7 +76,7 @@ for machine in $MACHINES; do
             cmd /c "powershell -NoProfile -ExecutionPolicy Bypass -File windows\\scripts\\build.ps1 -NoDesktopCopy 2>&1 \
                 && powershell -NoProfile -ExecutionPolicy Bypass -File windows\\scripts\\test.ps1 2>&1 && echo PTZ_CHECK_PASSED" \
             >"$LOGS/windows.log" 2>&1
-         grep -q PTZ_CHECK_PASSED "$LOGS/windows.log"; echo $? >"$LOGS/windows.status"
+         grep -q PTZ_CHECK_PASSED "$LOGS/windows.log" 2>/dev/null; echo $? >"$LOGS/windows.status"
          ssh -o ConnectTimeout=15 "$WINDOWS_HOST" "cd /d %TEMP% & rmdir /s /q %TEMP%\\$DIR" >/dev/null 2>&1) &
         ;;
     *)
@@ -93,7 +96,7 @@ for machine in $MACHINES; do
     else
         failed=1
         echo "$machine: FAILED (exit $code) at $COMMIT; see .build/check/$machine.log"
-        grep -E '^FAIL|error|Error|failed' "$LOGS/$machine.log" | head -12 | sed 's/^/    /'
+        cat "$LOGS/$machine.where" "$LOGS/$machine.log" 2>/dev/null | grep -E '^FAIL|error|Error|failed|^ssh:|Could not' | head -12 | sed 's/^/    /'
     fi
 done
 exit $failed
