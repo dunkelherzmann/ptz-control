@@ -82,3 +82,4 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [x] Mac (#17)
   - [x] Linux (#17)
   - [x] Windows (#17)
+- [ ] **Scripts run commands on the Linux and Windows machines through Master Control (mc-exec) instead of SSH** (asked 2026-11-26, developer tooling): `scripts/check.sh` copies the files with `mc-exec --put` and builds and tests through `mc-exec`; the machine names default to the Master Control names (`linux`, `windows`), still overridable in `scripts/hosts.env`.
