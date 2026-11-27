@@ -91,3 +91,8 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [ ] Mac
   - [ ] Linux
   - [ ] Windows
+- [x] **Security checks in `scripts/check.sh`: gitleaks on the history** (asked 2026-11-27, developer tooling, Mac): before the machines, the Mac runs `gitleaks detect` on the whole git history, failing on any finding, and prints a `security:` line (no cargo audit: the core is C++). No findings. Shipped in #20.
+- [ ] **Local crash reports: when the app crashes it saves a report (what happened, the version, the stack) in its own data folder on that machine, never sent anywhere, and shows it at the next start so the agent can read it.** *Requested 2026-11-27 · Mac, Linux, Windows.*
+  - [ ] Mac
+  - [ ] Linux
+  - [ ] Windows

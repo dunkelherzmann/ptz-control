@@ -11,8 +11,13 @@
 #   build through `flatpak build` (PTZ_TEST_BUILD), so the installed PTZ Control stays as it is. The files go to
 #   ~/.cache/ptz-check/<commit>, not /tmp, which flatpak-builder's sandbox can't see.
 # - Windows, through Master Control in the signed-in desktop session, which the app test's windows need: windows\scripts\build.ps1 -NoDesktopCopy (the desktop keeps its copy), windows\scripts\test.ps1.
+# - Security, on the Mac only, before the machines and whenever the Mac is checked: `gitleaks detect` scans the
+#   whole git history for secrets and fails on any finding (a false positive goes in .gitleaksignore, with a comment).
+#   The core is C++, so there is no Cargo.lock for cargo audit. gitleaks is installed on the Mac from
+#   ~/.agents/config/tools.json (`python3 ~/.agents/sync/agents.py tools --install`).
 # Without -w, Linux and Windows test the last commit, sent as files (no clone needed there), so their builds say
-# version x.y.0. Prints one line per machine and exits non-zero if any failed. Logs go to .build/check/<machine>.log.
+# version x.y.0. Prints one line for security and one per machine and exits non-zero if any failed. Logs go to
+# .build/check/<machine>.log and security.log.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
@@ -55,6 +60,12 @@ DIR="ptz-check-$COMMIT"
 TAR="$LOGS/$DIR.tar"
 case " $MACHINES " in *" linux "* | *" windows "*) send >"$TAR" ;; esac
 
+# Security first, here on the Mac; its line is printed before the machines'.
+case " $MACHINES " in *" mac "*)
+    (PATH="$HOME/.local/bin:$PATH" gitleaks detect --no-banner --no-color --redact 2>&1
+     echo $? >"$LOGS/security.status") >"$LOGS/security.log" 2>&1 ;;
+esac
+
 for machine in $MACHINES; do
     case "$machine" in
     mac)
@@ -90,6 +101,16 @@ wait
 rm -f "$TAR"
 
 failed=0
+if [ -f "$LOGS/security.status" ]; then
+    code="$(cat "$LOGS/security.status")"
+    if [ "$code" = 0 ]; then
+        echo "security: passed (gitleaks) at $COMMIT"
+    else
+        failed=1
+        echo "security: FAILED (exit $code) at $COMMIT; see .build/check/security.log"
+        grep -E 'leaks found|^(RuleID|File|Commit):|not found' "$LOGS/security.log" | head -12 | sed 's/^/    /'
+    fi
+fi
 for machine in $MACHINES; do
     code="$(cat "$LOGS/$machine.status" 2>/dev/null || echo none)"
     oks="$(grep -c '^ok ' "$LOGS/$machine.log" 2>/dev/null)"
