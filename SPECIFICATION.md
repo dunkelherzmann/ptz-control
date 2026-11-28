@@ -6,20 +6,20 @@ only Move, Return to Start and Stop do.
 
 One shared C++20 core does all camera, HTTP and SSH work. Each platform has its own native window around it:
 
-| Version | Host | Folder | Its plan |
-| --- | --- | --- | --- |
-| macOS (the reference) | Swift and AppKit | `macos/` | [`macos/pending.md`](macos/pending.md) |
-| Windows 10 and 11, x64 | Win32 and GDI+, C++ | `windows/` | [`windows/pending.md`](windows/pending.md) |
-| Linux, as a Flatpak | Qt 6 Widgets, C++ | `linux/` | [`linux/pending.md`](linux/pending.md) |
+| Version | Host | Folder |
+| --- | --- | --- |
+| macOS (the reference) | Swift and AppKit | `macos/` |
+| Windows 10 and 11, x64 | Win32 and GDI+, C++ | `windows/` |
+| Linux, as a Flatpak | Qt 6 Widgets, C++ | `linux/` |
 
 Sections 1–13 and 17 describe the Mac app. Windows and Linux follow it unless section 14 says otherwise. Every feature has an
-id (for example **M3**), which the `pending.md` files use.
+id (for example **M3**), which `enhancements.md` and `bugs.md` use. What each platform still lacks is open entries there (`tracker-check.py --open`), and test results per platform are in `parity/results/`.
 
 **Shortcuts.** The Mac shortcuts are given here. Windows and Linux use Ctrl in place of ⌘ and Alt in place of ⌥. On
 every platform the menus sit under a ☰ button in the window, never only in a menu bar at the top of the screen.
 
-**Hover text.** Only the saved-login controls (§17) have hover text so far, on every platform. Each `pending.md` lists
-the rest as a gap.
+**Hover text.** Only the saved-login controls (§17) have hover text so far, on every platform. `enhancements.md` lists
+the rest as an open entry.
 
 ## 1. Core
 
@@ -286,7 +286,7 @@ the rest as a gap.
 
 ## 14. Windows and Linux
 
-What differs from the Mac version today. The `pending.md` in each folder says which of these are gaps to close.
+What differs from the Mac version today. The open entries in `enhancements.md` and `bugs.md` say which of these are gaps to close.
 
 **Both**
 
