@@ -99,3 +99,48 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [ ] Mac
   - [ ] Linux
   - [ ] Windows
+- [ ] 2026-11-28 (Mac, Linux, Windows): **Hover text on every control.** What it is, what it does and its shortcut, for the route and vendor choices, every field, Connect, the Advanced triangle, Move, Return to Start, Stop, Web Interface, the plane and the meters. (§3, §7, §8, §10) From `macos/pending.md`, `linux/pending.md` and `windows/pending.md`.
+  - [ ] Mac
+  - [ ] Linux
+  - [ ] Windows
+- [ ] 2026-11-28 (Mac, Linux, Windows): **Screen readers for the instruments.** Mac: the position plane and the three travel meters are drawn views with no accessibility label, value or actions, so VoiceOver can't read the position or aim with them (§7 I3–I6). Linux: the status chip, readouts, plane and meters are painted widgets without an accessible name or value, so Orca can't read the position or aim (§7 I2–I7). Windows: field labels, captions, header, status chip, status message, readouts and footer are painted, not controls, so Narrator reads fields without labels and can't read the position; plane and meters have no name or value (§3, §7). From each `pending.md`.
+  - [ ] Mac
+  - [ ] Linux
+  - [ ] Windows
+- [ ] 2026-11-28 (Mac, Linux): **Feature tests of the app.** Mac: a test that drives the app's own commands against the mock camera and checks each feature's result, with results per feature in `parity/results/macos.md`; today only the snapshot hook exists and no script runs it or checks what it saved (§16 T4). Linux: extend `linux/scripts/test.sh` (which checks that the Flatpak connects to the mock camera over the Local route with ONVIF, moves and returns, by counting requests and saving a picture) to Axis, the SSH route through a throwaway `sshd`, and a check of the values the app shows (§16 T4–T5). From `macos/pending.md` and `linux/pending.md`.
+  - [ ] Mac
+  - [ ] Linux
+- [ ] 2026-11-28 (Mac): **Check the app itself, not only the core, before a release.** The core tests (§16 T2, T3) cover the core against the mock camera and a local `sshd`; nothing checks the app, so these are tried by hand: window, layout and closing while connected (§2 K1–K4); link configuration, checks, remembered settings and keyboard (§3 F1–F9); connect, Cancel, Disconnect and link lost (§4 L1–L5); SSH prompts as dialogs, the changed host key question and the cipher fallback (§5 S2–S4; the SSH test answers prompts in code and never changes a host key or forces the fallback); a real ONVIF and a real Axis camera (§6 V1–V5); instruments, aiming and double-click moves (§7 I1–I8); moves, Return to Start, Stop and queueing (§8 M1–M5); refresh, pause and pause after failures (§9 R1–R5); the browser and fallback dialog (§10 W1–W2); event buffer (§11 E1–E2), phosphor themes and light/dark (§12 A1–A3), menus, help and About (§13 H1–H3). From `macos/pending.md`.
+  - [ ] Mac
+- [ ] 2026-11-28 (Mac, Linux, Windows): **Test the saved-login dialogs and Manage Logins actions** (§17 P3, P6, P7): unlocking, the first-save choice, the Administrator Password, New, Edit, Delete and Lock; on Windows also how the Login menus look in light and dark on a real desktop. The platform's test script covers saving from the window, filling the fields from a saved login and the Manage Logins list (P4, P5); on the Mac the core test covers the vault (P1, P2). From each `pending.md`.
+  - [ ] Mac
+  - [ ] Linux
+  - [ ] Windows
+- [ ] 2026-11-28 (Linux, Windows): **Remember the window's size and position.** (§2 K2) From `linux/pending.md` and `windows/pending.md`.
+  - [ ] Linux
+  - [ ] Windows
+- [ ] 2026-11-28 (Linux, Windows): **Advanced behind a disclosure, closed at first.** (§3 F5) From `linux/pending.md` and `windows/pending.md`.
+  - [ ] Linux
+  - [ ] Windows
+- [ ] 2026-11-28 (Linux, Windows): **Return in a connection field moves to the next field,** and connects only from the camera password or the Connect button. (§3 F8) From `linux/pending.md` and `windows/pending.md`.
+  - [ ] Linux
+  - [ ] Windows
+- [ ] 2026-11-28 (Linux, Windows): **The event buffer keeps its place when you've scrolled up;** it jumps to the newest line today. (§11 E2) From `linux/pending.md` and `windows/pending.md`.
+  - [ ] Linux
+  - [ ] Windows
+- [ ] 2026-11-28 (Linux): **Run the core tests on the Linux machine.** `test-core.sh` (§16 T2) should run there (clang and libcurl's headers are installed; the `usleep` build error is fixed in #15); `test-ssh.sh` (T3) hasn't been run there yet. From `linux/pending.md`.
+  - [ ] Linux
+- [ ] 2026-11-28 (Linux): **Check spec sections 2–13 on Linux beyond connect, move and return with ONVIF on the Local route,** in particular the SSH route inside the Flatpak sandbox (§5), on X11 and on native Wayland (§14). From `linux/pending.md`.
+  - [ ] Linux
+- [ ] 2026-11-28 (Windows): **Core tests on Windows.** `test-core.sh` and `test-ssh.sh` run only where clang and libcurl are; the WinHTTP client and the Windows SSH tunnel have no automatic test. A PowerShell runner for `tests/core-smoke.c` and `tests/ssh-smoke.c` with MSVC, against the mock camera and Windows' own `sshd`. (§1 C5, §5, §16 T2–T3) From `windows/pending.md`.
+  - [ ] Windows
+- [ ] 2026-11-28 (Windows): **Key file with `~`.** The field takes a full path; check whether Windows' `ssh` expands `~\.ssh\…`, and expand it in the app if not. (§3 F3) From `windows/pending.md`.
+  - [ ] Windows
+- [ ] 2026-11-28 (Windows): **Quit in the ☰ menu** (Ctrl+Q), as on Linux; today only closing the window quits. (§2 K4, §13 H1) From `windows/pending.md`.
+  - [ ] Windows
+- [ ] 2026-11-28 (Windows): **Check the Windows app by hand before a release.** Nothing tests the Windows app or its core build: try everything in spec sections 2–13 on Windows 11 and on Windows 10 (for the OpenSSH 8.1 limits in §14). From `windows/pending.md`.
+  - [ ] Windows
+- [x] 2026-11-28 (Mac, Linux, Windows): **One set of trackers for every platform.** His request: SPECIFICATION.md as the spec, no pending.md; open port items moved into the trackers. In #22.
+  - [x] Mac
+  - [x] Linux
+  - [x] Windows

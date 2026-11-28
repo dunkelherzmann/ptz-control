@@ -26,3 +26,11 @@ Items marked *found in testing* were found while testing other work, not reporte
   - [x] Linux (#16)
   - [x] Windows (#16)
 - [ ] **The Mac test's run 2 (saved login) failed once** (*found in testing* 2026-11-19, Mac): "run 2 connected with the saved login and moved" failed in one run and passed on the next with no change to that code.
+- [ ] **Mac: SSH questions default to Continue** (*found in testing*, Mac; from `macos/pending.md`). The "SSH host key changed" question and other SSH yes/no prompts make Continue the default button, so Return replaces a stored host key. They should default to Cancel, as on Windows and Linux. (§5 S2, S3)
+  - [ ] Mac
+- [ ] **Linux: the app doesn't follow a light/dark switch while it runs** (*found in testing*, Linux; from `linux/pending.md`). It reads the desktop's setting once, at launch; the Mac and Windows versions follow the switch. Listen for the portal's color-scheme change and reapply. (§12 A2)
+  - [ ] Linux
+- [ ] **Windows: the web interface fails through SSH when the camera redirects to another HTTPS port** (*found in testing*, Windows; from `windows/pending.md`). Windows OpenSSH has no connection sharing, so only the HTTPS port set under Advanced is forwarded, when the tunnel opens; the Mac forwards the port the camera redirects to, when it's needed. Forward on demand with a second `ssh` process, or say in the log which port to set. (§5 S6, §10 W1)
+  - [ ] Windows
+- [ ] **Windows: SSH dialogs need Win32-OpenSSH 8.6 or later** (*found in testing*, Windows; from `windows/pending.md`). The 8.1 client in Windows 10 can't relay password, passphrase or MFA prompts. Not checked what the app shows then; it should say so plainly in the status message and the log. (§5 S2)
+  - [ ] Windows
