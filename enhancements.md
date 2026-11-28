@@ -140,7 +140,7 @@ A box is ticked once the change has shipped. A request that covers several platf
   - [ ] Windows
 - [ ] 2026-11-28 (Windows): **Check the Windows app by hand before a release.** Nothing tests the Windows app or its core build: try everything in spec sections 2–13 on Windows 11 and on Windows 10 (for the OpenSSH 8.1 limits in §14). From `windows/pending.md`.
   - [ ] Windows
-- [x] 2026-11-28 (Mac, Linux, Windows): **One set of trackers for every platform.** His request: SPECIFICATION.md as the spec, no pending.md; open port items moved into the trackers. In docs/tracker-standard.
+- [x] 2026-11-28 (Mac, Linux, Windows): **One set of trackers for every platform.** His request: SPECIFICATION.md as the spec, no pending.md; open port items moved into the trackers. In #PR.
   - [x] Mac
   - [x] Linux
   - [x] Windows
