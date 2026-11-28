@@ -34,3 +34,5 @@ Items marked *found in testing* were found while testing other work, not reporte
   - [ ] Windows
 - [ ] **Windows: SSH dialogs need Win32-OpenSSH 8.6 or later** (*found in testing*, Windows; from `windows/pending.md`). The 8.1 client in Windows 10 can't relay password, passphrase or MFA prompts. Not checked what the app shows then; it should say so plainly in the status message and the log. (§5 S2)
   - [ ] Windows
+- [ ] 2026-11-28 (Mac): **Two core tests fail at random on the Mac CI runner.** *Found in testing* (PR #22's macOS check failed twice on a docs-only change, then passed): the video frame count and the "point at the centre" check are timing-sensitive.
+  - [ ] Mac
